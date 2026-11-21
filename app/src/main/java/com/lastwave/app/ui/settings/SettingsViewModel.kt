@@ -512,6 +512,8 @@ class SettingsViewModel @Inject constructor(
     fun setAmoled(enabled: Boolean) = launchSettingsAction("update AMOLED mode") { themeRepository.setAmoled(enabled) }
     fun setLegacyColors(enabled: Boolean) = launchSettingsAction("update legacy colors") { themeRepository.setLegacyColors(enabled) }
     fun setLiquidGlass(enabled: Boolean) = launchSettingsAction("update Liquid Glass") { themeRepository.setLiquidGlass(enabled) }
+    fun setGlassSurface(surface: com.lastwave.app.data.local.GlassSurface, enabled: Boolean) =
+        launchSettingsAction("update glass surface") { themeRepository.setGlassSurface(surface, enabled) }
     fun setMd3NavBar(enabled: Boolean) = launchSettingsAction("update MD3 Navigation Bar") { themeRepository.setMd3NavBar(enabled) }
     fun setHideNavTabs(enabled: Boolean) = launchSettingsAction("update Hide Navigation Tabs") { themeRepository.setHideNavTabs(enabled) }
     fun setUiHaptics(enabled: Boolean) = launchSettingsAction("update Haptic Feedback") { themeRepository.setUiHaptics(enabled) }
@@ -767,6 +769,69 @@ class SettingsViewModel @Inject constructor(
     fun setPreviousNavigationMode(mode: com.lastwave.app.data.local.PreviousNavigationMode) =
         launchSettingsAction("update previous navigation") {
             settingsPreferences.setPreviousNavigationMode(mode)
+        }
+
+    fun setEdgeGlowEnabled(enabled: Boolean) = launchSettingsAction("update ambient glow") {
+        settingsPreferences.setEdgeGlowEnabled(enabled)
+    }
+
+    /** Re-zeroes the head-tracked spatial stage at the listener's current facing. */
+    fun recenterHeadTracking() = musicPlayer.recenterHeadTracking()
+
+    fun setEdgeGlowMode(mode: com.lastwave.app.data.local.EdgeGlowMode) =
+        launchSettingsAction("update glow colour mode") {
+            settingsPreferences.setEdgeGlowMode(mode)
+        }
+
+    fun setEdgeGlowColor(index: Int, hex: String) = launchSettingsAction("update glow colour") {
+        settingsPreferences.setEdgeGlowColor(index, hex)
+    }
+
+    fun setEdgeGlowIntensity(value: Float) = launchSettingsAction("update glow intensity") {
+        settingsPreferences.setEdgeGlowIntensity(value)
+    }
+
+    fun setEdgeGlowThickness(value: Float) = launchSettingsAction("update glow thickness") {
+        settingsPreferences.setEdgeGlowThickness(value)
+    }
+
+    fun setEdgeGlowMotion(motion: com.lastwave.app.data.local.EdgeGlowMotion) =
+        launchSettingsAction("update glow motion") {
+            settingsPreferences.setEdgeGlowMotion(motion)
+        }
+
+    fun setAodShowLyrics(enabled: Boolean) = launchSettingsAction("update always-on lyrics") {
+        settingsPreferences.setAodShowLyrics(enabled)
+    }
+
+    fun setSeekbarMatchTrackColors(enabled: Boolean) = launchSettingsAction("update seekbar colours") {
+        settingsPreferences.setSeekbarMatchTrackColors(enabled)
+    }
+
+    fun setSeekbarCustomColor(index: Int, hex: String) = launchSettingsAction("update seekbar colour") {
+        settingsPreferences.setSeekbarCustomColor(index, hex)
+    }
+
+    fun setSpatialAudioMode(mode: com.lastwave.app.data.local.SpatialAudioMode) =
+        launchSettingsAction("update spatial audio") {
+            settingsPreferences.setSpatialAudioMode(mode)
+        }
+
+    fun setSpatialCrossfeed(value: Float) = launchSettingsAction("update crossfeed") {
+        settingsPreferences.setSpatialCrossfeed(value)
+    }
+
+    fun setSpatialWidth(value: Float) = launchSettingsAction("update stereo width") {
+        settingsPreferences.setSpatialWidth(value)
+    }
+
+    fun setSpatialBassMono(enabled: Boolean) = launchSettingsAction("update bass centring") {
+        settingsPreferences.setSpatialBassMono(enabled)
+    }
+
+    fun setAppBackgroundStyle(style: com.lastwave.app.data.local.AppBackgroundStyle) =
+        launchSettingsAction("update app background") {
+            settingsPreferences.setAppBackgroundStyle(style)
         }
 
     fun setCrossfadeEnabled(enabled: Boolean) = launchSettingsAction("update crossfade") {

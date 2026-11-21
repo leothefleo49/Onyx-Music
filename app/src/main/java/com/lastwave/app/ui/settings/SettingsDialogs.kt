@@ -572,11 +572,21 @@ internal fun SeekbarStyleDialog(
 
                 Spacer(Modifier.height(10.dp))
 
-                // Bottom row: 1 card centered (Waveform)
-                Box(
+                // Bottom row: layered Aurora waves + Waveform, side by side
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.Center,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    SeekbarStyleLiveCard(
+                        style = SeekbarStyle.AURORA,
+                        title = stringResource(R.string.settings_seekbar_style_aurora),
+                        selected = selectedStyle == SeekbarStyle.AURORA,
+                        onSelect = { selectedStyle = SeekbarStyle.AURORA },
+                        primaryColor = primaryColor,
+                        secondaryColor = secondaryColor,
+                        tertiaryColor = tertiaryColor,
+                        modifier = Modifier.weight(1f),
+                    )
                     SeekbarStyleLiveCard(
                         style = SeekbarStyle.WAVEFORM,
                         title = stringResource(R.string.settings_seekbar_style_waveform),
@@ -585,7 +595,7 @@ internal fun SeekbarStyleDialog(
                         primaryColor = primaryColor,
                         secondaryColor = secondaryColor,
                         tertiaryColor = tertiaryColor,
-                        modifier = Modifier.fillMaxWidth(0.70f),
+                        modifier = Modifier.weight(1f),
                     )
                 }
 
@@ -681,6 +691,19 @@ private fun SeekbarStyleLiveCard(
                 SeekbarStyle.WAVEFORM -> {
                     LiveWaveformSeekbarPreview(
                         onSelect = onSelect,
+                        primaryColor = primaryColor,
+                        secondaryColor = secondaryColor,
+                        tertiaryColor = tertiaryColor,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                    )
+                }
+                SeekbarStyle.AURORA -> {
+                    com.lastwave.app.ui.player.AuroraProgressTrack(
+                        fraction = { 0.55f },
+                        rhythm = { 0.35f },
+                        isPlaying = true,
+                        dragging = false,
+                        isTranslucent = false,
                         primaryColor = primaryColor,
                         secondaryColor = secondaryColor,
                         tertiaryColor = tertiaryColor,
@@ -882,6 +905,7 @@ private fun LiveWaveformSeekbarPreview(
  * Previous-button behavior for a played user-queued track: ask each time
  * (default), always replay the queued song, or always keep playlist order.
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun PreviousNavigationDialog(
     current: com.lastwave.app.data.local.PreviousNavigationMode,

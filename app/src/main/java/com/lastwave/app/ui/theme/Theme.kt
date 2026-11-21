@@ -23,6 +23,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -133,8 +134,22 @@ fun LastWaveTheme(
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background,
+            // The background colour is painted by the Box below so the glossy
+            // app-background layer can sit between it and the content.
+            color = Color.Transparent,
         ) {
+            androidx.compose.foundation.layout.Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(
+                        Modifier.background(MaterialTheme.colorScheme.background)
+                    ),
+            ) {
+                AppBackgroundGloss(
+                    style = themeState.appBackgroundStyle,
+                    accent = MaterialTheme.colorScheme.primary,
+                    accentSecondary = MaterialTheme.colorScheme.tertiary,
+                )
             // Settings > Haptic Feedback gates every LocalHapticFeedback call in
             // the app from this single point (the system "touch feedback"
             // setting still applies on top when it is on).
@@ -166,12 +181,14 @@ fun LastWaveTheme(
                 LocalFontFamilyResolver provides fontResolver,
                 LocalHapticFeedback provides appHaptics,
                 LocalLiquidGlass provides themeState.liquidGlass,
+                LocalGlassSurfaces provides themeState.glassSurfaces,
                 LocalMd3NavBar provides themeState.md3NavBar,
                 LocalHideNavTabs provides themeState.hideNavTabs,
                 LocalUseBoldFont provides themeState.useBoldFont,
                 LocalIsDarkTheme provides isDark,
             ) {
                 content()
+            }
             }
         }
     }

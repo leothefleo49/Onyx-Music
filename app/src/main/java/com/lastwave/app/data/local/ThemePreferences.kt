@@ -32,6 +32,20 @@ enum class ThemeMode(val storageValue: String) {
     }
 }
 
+/** Surfaces that can opt out of Liquid Glass individually. */
+enum class GlassSurface(val id: String) {
+    NAVIGATION("navigation"),
+    MINI_PLAYER("mini_player"),
+    PLAYER_CONTROLS("player_controls"),
+    FLOATING("floating"),
+    HEADER("header");
+
+    companion object {
+        fun fromId(id: String): GlassSurface? = entries.firstOrNull { it.id == id }
+        val allIds: Set<String> = entries.map { it.id }.toSet()
+    }
+}
+
 data class ThemePrefs(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val accentColor: String = "#E03030",
@@ -40,6 +54,8 @@ data class ThemePrefs(
     val amoled: Boolean = false,
     /** iOS-style liquid-glass materials. Enabled by default. */
     val liquidGlass: Boolean = true,
+    /** Which surfaces may use glass while [liquidGlass] is on. Empty = none. */
+    val glassSurfaces: Set<String> = GlassSurface.allIds,
     /** Optional compact Material 3 floating dock instead of the standard bottom tabs. */
     val md3NavBar: Boolean = false,
     /** Whether bottom navigation tabs are completely hidden. */
@@ -63,6 +79,7 @@ class ThemePreferences @Inject constructor(
         val ACCENT_MODE = stringPreferencesKey("lw_accentMode")
         val AMOLED = booleanPreferencesKey("lw_amoled")
         val LIQUID_GLASS = booleanPreferencesKey("lw_liquidGlass")
+        val GLASS_SURFACES = stringPreferencesKey("lw_glass_surfaces")
         val MD3_NAV_BAR = booleanPreferencesKey("lw_md3NavBar")
         val HIDE_NAV_TABS = booleanPreferencesKey("lw_hideNavTabs")
         val UI_HAPTICS = booleanPreferencesKey("lw_ui_haptics")
@@ -81,6 +98,9 @@ class ThemePreferences @Inject constructor(
                 accentMode = AccentMode.fromStorage(p.readSafely(Keys.ACCENT_MODE)),
                 amoled = p.readSafely(Keys.AMOLED) ?: false,
                 liquidGlass = p.readSafely(Keys.LIQUID_GLASS) ?: true,
+                glassSurfaces = p.readSafely(Keys.GLASS_SURFACES)
+                    ?.split(",")?.filter { it.isNotBlank() }?.toSet()
+                    ?: GlassSurface.allIds,
                 md3NavBar = p.readSafely(Keys.MD3_NAV_BAR) ?: false,
                 hideNavTabs = p.readSafely(Keys.HIDE_NAV_TABS) ?: false,
                 uiHaptics = p.readSafely(Keys.UI_HAPTICS) ?: true,
@@ -118,6 +138,16 @@ class ThemePreferences @Inject constructor(
 
     suspend fun setLiquidGlass(enabled: Boolean) {
         dataStore.edit { it[Keys.LIQUID_GLASS] = enabled }
+    }
+
+    suspend fun setGlassSurface(surface: GlassSurface, enabled: Boolean) {
+        dataStore.edit { prefs ->
+            val current = prefs[Keys.GLASS_SURFACES]
+                ?.split(",")?.filter { it.isNotBlank() }?.toSet()
+                ?: GlassSurface.allIds
+            val next = if (enabled) current + surface.id else current - surface.id
+            prefs[Keys.GLASS_SURFACES] = next.joinToString(",")
+        }
     }
 
     suspend fun setMd3NavBar(enabled: Boolean) {

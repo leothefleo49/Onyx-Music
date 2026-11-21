@@ -21,8 +21,44 @@ object FluidRhythmEngine : HapticPulseListener {
     var currentRhythmValue: Float = 0f
         private set
 
+    /**
+     * Reference count of active beat consumers (fluid background, edge glow,
+     * aurora seekbar). The analyser only runs while at least one wants beats.
+     */
+    private var consumers = 0
+
     @Volatile
     var isEnabled: Boolean = false
+        private set
+
+    fun acquire() {
+        synchronized(this) {
+            consumers++
+            isEnabled = true
+        }
+    }
+
+    fun release() {
+        synchronized(this) {
+            consumers = (consumers - 1).coerceAtLeast(0)
+            if (consumers == 0) {
+                isEnabled = false
+                onAnalysisFlushed()
+                target = 0f
+                currentRhythmValue = 0f
+            }
+        }
+    }
+
+    /** Legacy setter kept for the fluid background's on/off preference. */
+    fun setPreferenceEnabled(enabled: Boolean) {
+        synchronized(this) {
+            if (enabled) consumers++ else consumers = (consumers - 1).coerceAtLeast(0)
+            isEnabled = consumers > 0
+        }
+    }
+
+    private var lastTickUptimeMs = 0L
 
     // Only the playing deck's sink may feed levels: the crossfade standby sent
     // zeros 8x a second that cut swells short mid-beat.
@@ -49,8 +85,15 @@ object FluidRhythmEngine : HapticPulseListener {
 
     override fun onAnalysisFlushed() = synchronized(pendingLevels) { pendingLevels.clear() }
 
-    /** Advanced every animation frame by the UI. */
+    /**
+     * Advanced every animation frame by the UI. Several consumers can tick
+     * concurrently (fluid background + glow + seekbar); calls closer than
+     * 8 ms apart are dropped so the envelope never advances twice a frame.
+     */
     fun tick(dtSeconds: Float, isPlaying: Boolean): Float {
+        val nowMs = SystemClock.uptimeMillis()
+        if (nowMs - lastTickUptimeMs < 8L) return currentRhythmValue
+        lastTickUptimeMs = nowMs
         val dtMs = (dtSeconds * 1000f).coerceIn(1f, 100f)
         if (!isEnabled || !isPlaying) {
             onAnalysisFlushed()

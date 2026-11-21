@@ -322,10 +322,14 @@ fun FluidArtworkBackground(
     artworkViewModel: ArtworkViewModel = com.lastwave.app.ui.common.LocalArtworkViewModel.current ?: hiltViewModel(),
     fallback: @Composable () -> Unit,
 ) {
-    // Also switches the analyser off when the setting is turned off: the
+    // Also switches this consumer off when the setting is turned off: the
     // beat-sync background that would reset it has left composition by then.
-    LaunchedEffect(fluidBeatSyncEnabled) {
-        com.lastwave.app.playback.rhythm.FluidRhythmEngine.isEnabled = fluidBeatSyncEnabled
+    // Reference-counted so the edge glow and aurora seekbar keep beats flowing.
+    androidx.compose.runtime.DisposableEffect(fluidBeatSyncEnabled) {
+        if (fluidBeatSyncEnabled) com.lastwave.app.playback.rhythm.FluidRhythmEngine.acquire()
+        onDispose {
+            if (fluidBeatSyncEnabled) com.lastwave.app.playback.rhythm.FluidRhythmEngine.release()
+        }
     }
     val fluidSupported = isFluidSupported()
     val isEnabled = if (extraBlur) lyricsRotatingBackgroundEnabled && rotatingBackgroundEnabled else rotatingBackgroundEnabled

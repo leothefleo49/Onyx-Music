@@ -252,7 +252,7 @@ internal fun MusicPlayer.replaceMediaItemPreservingShuffle(index: Int, mediaItem
  * and never reached the rest of the playlist.
  */
 internal fun MusicPlayer.shuffledUnplayedFirst(indices: List<Int>, keyAt: (Int) -> String?): List<Int> {
-        val played = synchronized(playHistory) { playHistory.toHashSet() }
+        val played = playJournal.keys().toHashSet()
         return indices.shuffled().sortedBy { keyAt(it) in played }
     }
 
@@ -263,7 +263,7 @@ internal fun MusicPlayer.nextQueueIndex(state: MusicPlayerState, wrap: Boolean =
         if (queue.isEmpty()) return C.INDEX_UNSET
         val start = (state.currentIndex + 1).coerceAtLeast(0)
         val ordered = if (state.shuffleEnabled) {
-            val played = if (wrap) emptySet() else synchronized(playHistory) { playHistory.toHashSet() }
+            val played = if (wrap) emptySet() else playJournal.keys().toHashSet()
             shuffledUnplayedFirst(queue.indices.toList()) { queue[it].mediaIdKey() }
                 .filter { queue[it].mediaIdKey() !in played }
         } else {

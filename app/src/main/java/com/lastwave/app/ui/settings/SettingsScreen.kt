@@ -102,6 +102,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.SignalCellularAlt
@@ -451,6 +452,7 @@ fun SettingsScreen(
     var showAutoEq by remember { mutableStateOf(false) }
     var showSeekbarStyleDialog by remember { mutableStateOf(false) }
     var showPreviousNavDialog by remember { mutableStateOf(false) }
+    var showAmbienceDialog by remember { mutableStateOf(false) }
     var showLyricsProviderDialog by remember { mutableStateOf(false) }
     var showLyricsSettingsSheet by remember { mutableStateOf(false) }
     var showLyricsOffsetDialog by remember { mutableStateOf(false) }
@@ -971,6 +973,30 @@ fun SettingsScreen(
                             )
                         }
                         add { position ->
+                            SettingsActionCard(
+                                icon = Icons.Filled.AutoAwesome,
+                                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                title = "Ambience & spatial audio",
+                                subtitle = buildString {
+                                    if (misc.edgeGlowEnabled) append("Ambient glow on")
+                                    else append("Glow, progress colours, always-on player")
+                                    if (misc.spatialAudioMode != com.lastwave.app.data.local.SpatialAudioMode.OFF) {
+                                        append(" \u2022 Spatial ")
+                                        append(
+                                            when (misc.spatialAudioMode) {
+                                                com.lastwave.app.data.local.SpatialAudioMode.HEAD_TRACKED -> "head-tracked"
+                                                com.lastwave.app.data.local.SpatialAudioMode.STATIC -> "fixed stage"
+                                                else -> "off"
+                                            }
+                                        )
+                                    }
+                                },
+                                onClick = { showAmbienceDialog = true },
+                                position = position,
+                            )
+                        }
+                        add { position ->
                             SettingsToggleCard(
                                 icon = QualityGlyphs.Crossfade,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
@@ -1485,6 +1511,7 @@ fun SettingsScreen(
                                     SeekbarStyle.DEFAULT -> stringResource(R.string.settings_seekbar_style_default)
                                     SeekbarStyle.WAVY -> stringResource(R.string.settings_seekbar_style_wavy)
                                     SeekbarStyle.WAVEFORM -> stringResource(R.string.settings_seekbar_style_waveform)
+                                    SeekbarStyle.AURORA -> stringResource(R.string.settings_seekbar_style_aurora)
                                 },
                                 onClick = { showSeekbarStyleDialog = true },
                                 position = position,
@@ -2859,6 +2886,31 @@ fun SettingsScreen(
                 showSeekbarStyleDialog = false
             },
             onDismiss = { showSeekbarStyleDialog = false },
+        )
+    }
+
+    // -- Ambience & spatial audio: glow, progress colours, AOD, head tracking --
+    if (showAmbienceDialog) {
+        AmbienceSettingsDialog(
+            settings = misc,
+            onEdgeGlowEnabled = viewModel::setEdgeGlowEnabled,
+            onEdgeGlowMode = viewModel::setEdgeGlowMode,
+            onEdgeGlowMotion = viewModel::setEdgeGlowMotion,
+            onEdgeGlowIntensity = viewModel::setEdgeGlowIntensity,
+            onEdgeGlowThickness = viewModel::setEdgeGlowThickness,
+            onEdgeGlowColor = viewModel::setEdgeGlowColor,
+            onAodLyrics = viewModel::setAodShowLyrics,
+            onSeekbarMatch = viewModel::setSeekbarMatchTrackColors,
+            onSeekbarColor = viewModel::setSeekbarCustomColor,
+            onSpatialMode = viewModel::setSpatialAudioMode,
+            onCrossfeed = viewModel::setSpatialCrossfeed,
+            onWidth = viewModel::setSpatialWidth,
+            onBassMono = viewModel::setSpatialBassMono,
+            onRecenter = viewModel::recenterHeadTracking,
+            onBackground = viewModel::setAppBackgroundStyle,
+            glassSurfaces = theme?.glassSurfaces ?: com.lastwave.app.data.local.GlassSurface.allIds,
+            onGlassSurface = viewModel::setGlassSurface,
+            onDismiss = { showAmbienceDialog = false },
         )
     }
 
