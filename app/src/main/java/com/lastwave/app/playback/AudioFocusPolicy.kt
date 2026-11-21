@@ -37,6 +37,25 @@ enum class AudioFocusAction {
     KeepPlaying,
 }
 
+/** Audio output route transitions that require explicit sink or focus recovery. */
+enum class AudioRouteEvent {
+    /** Headphones unplugged or Bluetooth output disconnected (ACTION_AUDIO_BECOMING_NOISY). */
+    BecomingNoisy,
+    /** New audio output device (Bluetooth, wired headset, USB DAC) connected. */
+    DeviceConnected,
+    /** Active audio output device disconnected without becoming noisy (e.g. DAC fallback). */
+    DeviceDisconnected,
+    /** Focus regained after a transient duck or interruption. */
+    FocusRegained,
+}
+
+/** Deterministic recovery action for an [AudioRouteEvent]. */
+enum class AudioRouteAction {
+    PauseAndFlushSink,
+    FlushAndReconfigureSink,
+    RestoreVolume,
+}
+
 /** Platform focus events mapped to those decisions. */
 object AudioFocusPolicy {
     /** Quiet level used while an [AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK] is held. */
@@ -52,4 +71,23 @@ object AudioFocusPolicy {
         // every SDK level, so it lands here and playback continues.
         else -> AudioFocusAction.KeepPlaying
     }
+
+    fun routeActionFor(event: AudioRouteEvent): AudioRouteAction = when (event) {
+        AudioRouteEvent.BecomingNoisy -> AudioRouteAction.PauseAndFlushSink
+        AudioRouteEvent.DeviceConnected,
+        AudioRouteEvent.DeviceDisconnected -> AudioRouteAction.FlushAndReconfigureSink
+        AudioRouteEvent.FocusRegained -> AudioRouteAction.RestoreVolume
+    }
+
+    /**
+     * Guards volume restoration and gain staging against NaN/Inf or accidental
+     * zero-volume lockups after focus ducking or route transitions.
+     */
+    fun sanitizedVolume(volume: Float, fallback: Float = 1f): Float {
+        val safeFallback = if (fallback.isFinite()) fallback.coerceIn(0f, 1f) else 1f
+        return if (volume.isFinite()) volume.coerceIn(0f, 1f) else safeFallback
+    }
+
+    fun duckedVolumeFor(appVolume: Float): Float =
+        sanitizedVolume(DUCK_VOLUME * sanitizedVolume(appVolume), fallback = DUCK_VOLUME)
 }

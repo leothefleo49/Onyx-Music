@@ -18,6 +18,7 @@ import com.lastwave.app.data.music.potoken.BotGuardTokenGenerator
 import com.lastwave.app.data.music.potoken.PoTokenResult
 import com.lastwave.app.data.ytmusic.YtMusicAuthManager
 import com.lastwave.app.data.ytmusic.YtConnection
+import com.lastwave.app.playback.resolve.ParallelProbe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -119,7 +120,7 @@ internal suspend fun InnerTubeMusicApi.resolveAudioStreamImpl(
         val shared = activeStreamRequests.computeIfAbsent(requestKey) {
             lateinit var request: SharedStreamRequest
             val deferred = apiScope.async(start = CoroutineStart.LAZY) {
-                kotlinx.coroutines.withTimeout(STREAM_RESOLVE_TOTAL_TIMEOUT_MS) {
+                kotlinx.coroutines.withTimeout(FAST_STREAM_RESOLVE_TOTAL_TIMEOUT_MS) {
                     resolveAudioStreamInternal(videoId, authScope, startedAt, maxBitrateBps)
                 }
             }
@@ -133,9 +134,9 @@ internal suspend fun InnerTubeMusicApi.resolveAudioStreamImpl(
         shared.deferred.start()
         try {
             // Hard cap on one full resolution: without it a bad network could
-            // chain every fallback stage into a 60-90s wait before the caller
+            // chain every fallback stage into a 15-30s wait before the caller
             // ever got a chance to retry with fresh state.
-            shared.deferred.awaitSharedStream(STREAM_RESOLVE_TOTAL_TIMEOUT_MS, videoId)
+            shared.deferred.awaitSharedStream(FAST_STREAM_RESOLVE_TOTAL_TIMEOUT_MS, videoId)
         } finally {
             shared.waiters.decrementAndGet()
             // Do not cancel the shared deferred when the last waiter leaves.
@@ -383,11 +384,12 @@ internal suspend fun InnerTubeMusicApi.resolveVideoBundleFromClient(
                     ?: (System.currentTimeMillis() + UNKNOWN_STREAM_EXPIRY_TTL_MS),
             )
         }
-        val playable = selectProbedCandidate(
+        val playable = ParallelProbe.selectFirstPlayable(
             candidates = rankedForAutoPlayback(available),
             urlOf = { it.url },
-            probe = streamExtractor::probePlayableVideo,
+            probe = streamExtractor::probePlayableVideoSuspend,
             limit = MAX_VIDEO_PROBES_PER_CLIENT,
+            perProbeTimeoutMs = FAST_STREAM_PROBE_TIMEOUT_MS,
         )
         if (playable == null) {
             android.util.Log.w(VIDEO_LOG_TAG, "Video client ${client.name} had no playable URL for $videoId (${available.size} candidates)")
@@ -476,18 +478,12 @@ internal suspend fun InnerTubeMusicApi.resolveDirectUrlFastPath(
 
         val signedIn = ytAuth.connection.value.isConnected
         val deadline = SystemClock.elapsedRealtime() +
-            if (signedIn) AUTHENTICATED_CIPHER_PATH_BUDGET_MS else DIRECT_FAST_PATH_BUDGET_MS
-        for (client in ordered) {
-            val remaining = deadline - SystemClock.elapsedRealtime()
-            if (remaining <= 0L) {
-                noteAttempt("direct-fast=budget-exhausted")
-                return null
-            }
+            if (signedIn) FAST_SIGNED_IN_CIPHER_PATH_BUDGET_MS else FAST_DIRECT_PATH_BUDGET_MS
+
+        suspend fun resolveOneClient(client: PlayerClient, remainingBudgetMs: Long): YouTubeAudioStream? {
+            if (remainingBudgetMs <= 0L) return null
             var failed = false
             val usesCipherContext = signedIn && client.name == "WEB_REMIX"
-            // The player script and its signature timestamp are not per-video:
-            // reuse a recent pair instead of a ~1 s watch-page fetch per track.
-            // A reused pair that fails gets one retry with a fresh fetch.
             suspend fun attempt(allowCipherReuse: Boolean, budgetMs: Long): YouTubeAudioStream? =
                 kotlinx.coroutines.withTimeoutOrNull(budgetMs) {
                     val cipherContext = if (usesCipherContext) {
@@ -515,19 +511,19 @@ internal suspend fun InnerTubeMusicApi.resolveDirectUrlFastPath(
                     )
                 }
             val clientBudget = if (usesCipherContext) {
-                AUTHENTICATED_CIPHER_CLIENT_BUDGET_MS
-            } else DIRECT_FAST_CLIENT_TIMEOUT_MS
+                FAST_SIGNED_IN_CIPHER_CLIENT_BUDGET_MS
+            } else {
+                FAST_DIRECT_CLIENT_TIMEOUT_MS
+            }
             val reusedContext = usesCipherContext && hasReusableCipherContext()
             val stream = try {
                 try {
-                    attempt(allowCipherReuse = true, budgetMs = minOf(clientBudget, remaining))
+                    attempt(allowCipherReuse = true, budgetMs = minOf(clientBudget, remainingBudgetMs))
                 } catch (error: Exception) {
                     if (error is kotlinx.coroutines.CancellationException || !reusedContext) throw error
                     noteAttempt("client=${client.name} reused-cipher failed ${resolutionFailureDetail(error)}")
                     null
                 } ?: if (reusedContext) {
-                    // A rotated player script makes the reused pair produce
-                    // rejected URLs. Drop it and fetch a fresh one once.
                     cachedVideoCipherContext = null
                     val left = deadline - SystemClock.elapsedRealtime()
                     if (left > 0L) attempt(allowCipherReuse = false, budgetMs = minOf(clientBudget, left)) else null
@@ -545,6 +541,25 @@ internal suspend fun InnerTubeMusicApi.resolveDirectUrlFastPath(
                 return stream
             }
             if (!failed) noteAttempt("client=${client.name} outcome=timeout")
+            return null
+        }
+
+        // Race clients in bounded parallel waves (top 2 fast clients first, then
+        // remaining clients) so one slow/blocked client never stalls startup for
+        // 4-8 seconds before the next healthy client is tried.
+        for (wave in ordered.chunked(PARALLEL_CLIENT_WAVE_SIZE)) {
+            val remaining = deadline - SystemClock.elapsedRealtime()
+            if (remaining <= 0L) {
+                noteAttempt("direct-fast=budget-exhausted")
+                return null
+            }
+            val winner = racePlaybackCandidates(
+                contenders = wave.map { client ->
+                    suspend { resolveOneClient(client, remaining) }
+                },
+                totalTimeoutMs = remaining,
+            )
+            if (winner != null) return winner
         }
         noteAttempt("direct-fast=exhausted")
         return null
@@ -598,10 +613,11 @@ internal suspend fun InnerTubeMusicApi.racePlayableFallback(
         // — more round trips than 7s allows. The race returns on the first
         // success, so ordinary songs are no slower.
         val innerTubeXBudgetMs = if (ytAuth.connection.value.isConnected) {
-            SIGNED_IN_INNERTUBEX_STAGE_TIMEOUT_MS
+            FAST_SIGNED_IN_INNERTUBEX_TIMEOUT_MS
         } else {
-            INNERTUBEX_STAGE_TIMEOUT_MS
+            FAST_INNERTUBEX_TIMEOUT_MS
         }
+        val newPipeBudgetMs = FAST_NEWPIPE_TIMEOUT_MS
         val channel = kotlinx.coroutines.channels.Channel<YouTubeAudioStream>(2)
         val jobs = listOf(
             launch(Dispatchers.IO) {
@@ -609,7 +625,9 @@ internal suspend fun InnerTubeMusicApi.racePlayableFallback(
                 val candidate = try {
                     kotlinx.coroutines.withTimeoutOrNull(innerTubeXBudgetMs) {
                         val visitorData = try {
-                            getWebConfig().visitorData
+                            kotlinx.coroutines.withTimeoutOrNull(FAST_VISITOR_LOOKUP_MS) {
+                                getWebConfig().visitorData
+                            }
                         } catch (cancellation: kotlinx.coroutines.CancellationException) {
                             throw cancellation
                         } catch (_: Exception) {
@@ -645,7 +663,7 @@ internal suspend fun InnerTubeMusicApi.racePlayableFallback(
             launch(Dispatchers.IO) {
                 var failed = false
                 val stream = try {
-                    kotlinx.coroutines.withTimeoutOrNull(NEWPIPE_FALLBACK_TIMEOUT_MS) {
+                    kotlinx.coroutines.withTimeoutOrNull(newPipeBudgetMs) {
                         streamExtractor.resolveAudioStream(videoId, maxBitrateBps = maxBitrateBps)
                     }
                 } catch (cancellation: kotlinx.coroutines.CancellationException) {
@@ -672,7 +690,7 @@ internal suspend fun InnerTubeMusicApi.racePlayableFallback(
             }
         }
         try {
-            val winner = kotlinx.coroutines.withTimeoutOrNull(maxOf(NEWPIPE_FALLBACK_TIMEOUT_MS, innerTubeXBudgetMs)) {
+            val winner = kotlinx.coroutines.withTimeoutOrNull(maxOf(newPipeBudgetMs, innerTubeXBudgetMs)) {
                 channel.receiveCatching().getOrNull()
             } ?: return@coroutineScope null
             cacheResolvedStream(winner, now, authScope, maxBitrateBps)
@@ -767,10 +785,13 @@ internal suspend fun InnerTubeMusicApi.resolveDirectClientStream(
             referer = client.referer,
             visitorData = visitorData,
             maxAttempts = maxAttempts,
-            // Whole-call cap (connect + read + body): the injected client's
-            // 15s socket timeouts otherwise let one hung POST stall a hedged
-            // racer for 30s+ across its two attempts.
-            callTimeoutMs = PLAYER_REQUEST_CALL_TIMEOUT_MS,
+            // Whole-call cap (connect + read + body): tight budget for direct
+            // clients so a hung POST fails fast instead of blocking startup.
+            callTimeoutMs = if (client.name == "WEB_REMIX" && ytAuth.connection.value.isConnected) {
+                FAST_SIGNED_IN_CALL_TIMEOUT_MS
+            } else {
+                FAST_PLAYER_REQUEST_CALL_TIMEOUT_MS
+            },
         )
         noteAttempt("client=${client.name} response ${youtubePlayerResponseSummary(root)} " +
             "signedIn=${client.name == "WEB_REMIX" && ytAuth.connection.value.isConnected} " +
@@ -892,10 +913,13 @@ internal suspend fun InnerTubeMusicApi.resolveDirectClientStream(
             return candidates.firstOrNull()
                 ?: throw IOException("${client.key} returned no usable audio URL")
         }
-        for (candidate in candidates.take(MAX_FORMAT_PROBES_PER_CLIENT)) {
-            if (probeStream(candidate, "client-probe")) return candidate
-        }
-        throw IOException("${client.key} returned no usable audio URL")
+        return ParallelProbe.selectFirstPlayable(
+            candidates = candidates,
+            urlOf = { it.url },
+            probe = { candidate -> probeStream(candidate, "client-probe") },
+            limit = MAX_FORMAT_PROBES_PER_CLIENT,
+            perProbeTimeoutMs = FAST_STREAM_PROBE_TIMEOUT_MS,
+        ) ?: throw IOException("${client.key} returned no usable audio URL")
     }
 
 internal fun InnerTubeMusicApi.cacheResolvedStream(
@@ -932,7 +956,7 @@ internal suspend fun InnerTubeMusicApi.probeStream(
             playbackProbeRequest(stream.url, stream.requestHeaders)
         }
         val call = innerTubeClient.newCall(request)
-        call.timeout().timeout(STREAM_PROBE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        call.timeout().timeout(FAST_STREAM_PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         return try {
             val (status, contentType, valid) = call.readResponse { response ->
                 val contentType = response.header("Content-Type").orEmpty().lowercase()
@@ -1268,4 +1292,17 @@ internal suspend fun InnerTubeMusicApi.preWarmPlaybackImpl() {
     }
 
 private const val BOTGUARD_PREWARM_DELAY_MS = 4_000L
+private const val PARALLEL_CLIENT_WAVE_SIZE = 2
+private const val FAST_STREAM_PROBE_TIMEOUT_MS = 2_200L
+private const val FAST_PLAYER_REQUEST_CALL_TIMEOUT_MS = 3_500L
+private const val FAST_SIGNED_IN_CALL_TIMEOUT_MS = 6_000L
+private const val FAST_DIRECT_CLIENT_TIMEOUT_MS = 3_000L
+private const val FAST_DIRECT_PATH_BUDGET_MS = 5_000L
+private const val FAST_SIGNED_IN_CIPHER_CLIENT_BUDGET_MS = 7_500L
+private const val FAST_SIGNED_IN_CIPHER_PATH_BUDGET_MS = 9_500L
+private const val FAST_INNERTUBEX_TIMEOUT_MS = 4_500L
+private const val FAST_SIGNED_IN_INNERTUBEX_TIMEOUT_MS = 8_500L
+private const val FAST_NEWPIPE_TIMEOUT_MS = 5_500L
+private const val FAST_VISITOR_LOOKUP_MS = 1_500L
+private const val FAST_STREAM_RESOLVE_TOTAL_TIMEOUT_MS = 12_000L
 

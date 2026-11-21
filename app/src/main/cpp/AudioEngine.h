@@ -154,6 +154,10 @@ private:
     std::atomic<std::uint64_t> streamRestartCount_{0};
     std::atomic<std::uint64_t> rateAdaptationCount_{0};
     std::atomic<std::int32_t> requestedOutputSampleRate_{0};
+    // Incremented by flushOutput() while activeRingBuffer_ is unpublished;
+    // observed on the Oboe callback thread to reset callback-only state and
+    // oboeDsp_ without a cross-thread data race.
+    std::atomic<std::uint64_t> flushGeneration_{0};
 
     // libsoxr is kept opaque in the public header.
     void* resampler_{nullptr};
@@ -188,6 +192,7 @@ private:
     float outputVolumeRampStep_{1.0F};
     std::size_t cleanFrames_{0};
     std::size_t underrunDecayIntervalFrames_{0};
+    std::uint64_t observedFlushGeneration_{0};
 };
 
 }  // namespace lastwave::audio

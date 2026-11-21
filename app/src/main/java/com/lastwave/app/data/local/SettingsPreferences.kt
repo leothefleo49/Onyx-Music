@@ -124,12 +124,12 @@ enum class SeekbarStyle(val id: String) {
 /** How a track reaches the selected streaming quality. Downgrades are always seamless. */
 enum class HiResStart(val id: String, val title: String, val subtitle: String) {
     FAST("fast", "Fast start", "Start on Opus, then switch to your quality when ready"),
-    DIRECT("direct", "Best quality first", "Wait up to 8 s for your quality, then Opus"),
+    DIRECT("direct", "Best quality first", "Wait up to 2.5 s for your quality, then Opus"),
     NEVER("never", "Never upgrade", "Keep the stream a song starts with");
 
     companion object {
         fun fromId(id: String?, legacyAutoUpgrade: Boolean?): HiResStart =
-            entries.firstOrNull { it.id == id } ?: if (legacyAutoUpgrade == false) NEVER else DIRECT
+            entries.firstOrNull { it.id == id } ?: if (legacyAutoUpgrade == false) NEVER else FAST
     }
 }
 
@@ -159,7 +159,7 @@ data class MiscSettings(
     /** When true, the player attempts to resolve and stream lossless / Hi-Res audio
      *  directly from lossless CDN when a high-confidence match exists. Falls back to YouTube Music. */
     val preferLosslessStreaming: Boolean = true,
-    val hiResStart: HiResStart = HiResStart.DIRECT,
+    val hiResStart: HiResStart = HiResStart.FAST,
     /** When true, the player also queries installed provider modules in
      *  parallel with the addon; a module hit plays instantly on miss. */
     val preferProviderModules: Boolean = true,

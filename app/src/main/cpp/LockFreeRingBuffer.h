@@ -27,22 +27,21 @@ public:
     [[nodiscard]] std::size_t availableToRead() const noexcept {
         const auto read = readIndex_.load(std::memory_order_relaxed);
         const auto write = writeIndex_.load(std::memory_order_acquire);
-        return static_cast<std::size_t>(write - read);
+        return usedCount(write, read);
     }
 
     [[nodiscard]] std::size_t availableToWrite() const noexcept {
         const auto write = writeIndex_.load(std::memory_order_relaxed);
         const auto read = readIndex_.load(std::memory_order_acquire);
-        return capacity_ - static_cast<std::size_t>(write - read);
+        return capacity_ - usedCount(write, read);
     }
 
     std::size_t write(const T* source, std::size_t count) noexcept {
         if (source == nullptr || count == 0) return 0;
         const auto write = writeIndex_.load(std::memory_order_relaxed);
         const auto read = readIndex_.load(std::memory_order_acquire);
-        const auto writable = std::min(
-            count,
-            capacity_ - static_cast<std::size_t>(write - read));
+        const auto writable = std::min(count, capacity_ - usedCount(write, read));
+        if (writable == 0) return 0;
         copyIntoRing(source, writable, static_cast<std::size_t>(write % capacity_));
         writeIndex_.store(write + writable, std::memory_order_release);
         return writable;
@@ -52,7 +51,8 @@ public:
         if (destination == nullptr || count == 0) return 0;
         const auto read = readIndex_.load(std::memory_order_relaxed);
         const auto write = writeIndex_.load(std::memory_order_acquire);
-        const auto readable = std::min(count, static_cast<std::size_t>(write - read));
+        const auto readable = std::min(count, usedCount(write, read));
+        if (readable == 0) return 0;
         copyFromRing(destination, readable, static_cast<std::size_t>(read % capacity_));
         readIndex_.store(read + readable, std::memory_order_release);
         return readable;
@@ -62,7 +62,8 @@ public:
         if (destination == nullptr || count == 0) return 0;
         const auto read = readIndex_.load(std::memory_order_relaxed);
         const auto write = writeIndex_.load(std::memory_order_acquire);
-        const auto readable = std::min(count, static_cast<std::size_t>(write - read));
+        const auto readable = std::min(count, usedCount(write, read));
+        if (readable == 0) return 0;
         const auto offset = static_cast<std::size_t>(read % capacity_);
         const auto first = std::min(readable, capacity_ - offset);
         std::memcpy(destination, data_.get() + offset, first * sizeof(T));
@@ -74,7 +75,8 @@ public:
         if (count == 0) return 0;
         const auto read = readIndex_.load(std::memory_order_relaxed);
         const auto write = writeIndex_.load(std::memory_order_acquire);
-        const auto readable = std::min(count, static_cast<std::size_t>(write - read));
+        const auto readable = std::min(count, usedCount(write, read));
+        if (readable == 0) return 0;
         readIndex_.store(read + readable, std::memory_order_release);
         return readable;
     }
@@ -85,10 +87,29 @@ public:
     // copying from untouched memory.
     void clear() noexcept {
         const auto write = writeIndex_.load(std::memory_order_acquire);
+        const auto read = readIndex_.load(std::memory_order_acquire);
+        if (write > read) {
+            readIndex_.store(write, std::memory_order_release);
+        }
+    }
+
+    // Hard reset while both producer and consumer are quiesced (activeRingBuffer_
+    // unpublished and producerMutex_ held): zeroes backing storage so stale PCM
+    // from a prior track or sample rate cannot bleed through.
+    void clearAndZero() noexcept {
+        const auto write = writeIndex_.load(std::memory_order_acquire);
         readIndex_.store(write, std::memory_order_release);
+        std::memset(data_.get(), 0, capacity_ * sizeof(T));
     }
 
 private:
+    // Guards against unsigned wraparound if a concurrent reset briefly leaves
+    // read ahead of write; clamps used slots to [0, capacity_].
+    [[nodiscard]] std::size_t usedCount(std::uint64_t write, std::uint64_t read) const noexcept {
+        if (write <= read) return 0;
+        const auto diff = write - read;
+        return diff >= capacity_ ? capacity_ : static_cast<std::size_t>(diff);
+    }
     void copyIntoRing(const T* source, std::size_t count, std::size_t offset) noexcept {
         const auto first = std::min(count, capacity_ - offset);
         std::memcpy(data_.get() + offset, source, first * sizeof(T));

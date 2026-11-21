@@ -2,8 +2,12 @@ package com.lastwave.app.data.music
 
 import android.net.Uri
 import android.util.Log
+import com.lastwave.app.playback.resolve.ParallelProbe
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.MediaType.Companion.toMediaType
@@ -17,8 +21,10 @@ import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.services.youtube.YoutubeJavaScriptPlayerManager
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
 
 /**
  * Resolves the signed/ciphered YouTube media URLs that raw InnerTube player
@@ -63,11 +69,12 @@ class YouTubeStreamExtractor @Inject constructor(
             it.meetsBitrateLimit(maxBitrateBps)
         }
         if (candidates.isEmpty()) throw IOException("YouTube returned no audio within the requested bitrate for $videoId")
-        val playable = selectProbedCandidate(
+        val playable = ParallelProbe.selectFirstPlayable(
             candidates = candidates,
             urlOf = { it.url },
-            probe = ::probePlayable,
+            probe = ::probePlayableSuspend,
             limit = MAX_PROBED_AUDIO_STREAMS,
+            perProbeTimeoutMs = PROBE_TIMEOUT_MS,
         )
         if (playable != null) return@withContext playable
         invalidatePlayerState(videoId)
@@ -130,11 +137,12 @@ class YouTubeStreamExtractor @Inject constructor(
         }
 
         // For default (Auto), prefer 720p or 1080p for instant playback without buffer stalls
-        val playableDefault = selectProbedCandidate(
+        val playableDefault = ParallelProbe.selectFirstPlayable(
             candidates = rankedForAutoPlayback(availableStreams),
             urlOf = { it.url },
-            probe = ::probePlayableVideo,
+            probe = ::probePlayableVideoSuspend,
             limit = MAX_PROBED_AUDIO_STREAMS,
+            perProbeTimeoutMs = PROBE_TIMEOUT_MS,
         ) ?: throw IOException("YouTube video URLs were rejected for $videoId")
 
         val pairedAudioUrl = info.audioStreams.maxByOrNull { it.bitrate }?.content
@@ -285,7 +293,7 @@ class YouTubeStreamExtractor @Inject constructor(
     internal fun probePlayableVideo(stream: YouTubeVideoStream): Boolean {
         val request = playbackProbeRequest(stream.url, stream.requestHeaders)
         val call = http.newCall(request)
-        call.timeout().timeout(PROBE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        call.timeout().timeout(PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         return try {
             call.execute().use { response ->
                 acceptsPlaybackProbe(response.code, response.header("Content-Type").orEmpty())
@@ -296,6 +304,9 @@ class YouTubeStreamExtractor @Inject constructor(
             false
         }
     }
+
+    internal suspend fun probePlayableVideoSuspend(stream: YouTubeVideoStream): Boolean =
+        executeProbeAsync(stream.url, stream.requestHeaders)
 
     private fun org.schabi.newpipe.extractor.stream.VideoStream.toYouTubeVideoStream(
         videoId: String,
@@ -386,19 +397,32 @@ class YouTubeStreamExtractor @Inject constructor(
      * `bytes=0-1` is not evidence the player can read the stream. The body
      * is closed as soon as the status line is known.
      */
-    private fun probePlayable(stream: YouTubeAudioStream): Boolean {
-        val request = playbackProbeRequest(stream.url, stream.requestHeaders)
-        val call = http.newCall(request)
-        call.timeout().timeout(PROBE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-        return try {
-            call.execute().use { response ->
-                acceptsPlaybackProbe(response.code, response.header("Content-Type").orEmpty())
+    private suspend fun probePlayableSuspend(stream: YouTubeAudioStream): Boolean =
+        executeProbeAsync(stream.url, stream.requestHeaders)
+
+    private suspend fun executeProbeAsync(
+        url: String,
+        headers: Map<String, String>,
+    ): Boolean = suspendCancellableCoroutine { continuation ->
+        val call = http.newCall(playbackProbeRequest(url, headers))
+        call.timeout().timeout(PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) continuation.resume(false)
             }
-        } catch (cancellation: kotlinx.coroutines.CancellationException) {
-            throw cancellation
-        } catch (_: Exception) {
-            false
-        }
+
+            override fun onResponse(call: Call, response: okhttp3.Response) {
+                val ok = try {
+                    response.use { res ->
+                        acceptsPlaybackProbe(res.code, res.header("Content-Type").orEmpty())
+                    }
+                } catch (_: Exception) {
+                    false
+                }
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        })
     }
 
     suspend fun getSignatureTimestamp(videoId: String): Int? = withContext(Dispatchers.IO) {
@@ -482,7 +506,8 @@ class YouTubeStreamExtractor @Inject constructor(
     companion object {
         private const val UNKNOWN_EXPIRY_TTL_MS = 5 * 60 * 1000L
         private const val MAX_PROBED_AUDIO_STREAMS = 4
-        private const val PROBE_TIMEOUT_MS = 1_500L
+        private const val PROBE_TIMEOUT_MS = 2_000L
+        internal const val DOWNLOADER_CALL_TIMEOUT_MS = 5_000L
         private const val NEWPIPE_CLIENT_PROFILE = "NEWPIPE"
         private const val ANONYMOUS_AUTH_SCOPE = "anonymous"
     }
@@ -584,7 +609,9 @@ private class OkHttpNewPipeDownloader(
             requestBuilder.header("Referer", "$origin/")
         }
 
-        return http.newCall(requestBuilder.build()).execute().use { response ->
+        val call = http.newCall(requestBuilder.build())
+        call.timeout().timeout(YouTubeStreamExtractor.DOWNLOADER_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        return call.execute().use { response ->
             Response(
                 response.code,
                 response.message,
