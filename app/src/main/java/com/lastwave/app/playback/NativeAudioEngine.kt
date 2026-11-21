@@ -107,7 +107,8 @@ class NativeAudioEngine @Inject constructor(
     }
 
     internal fun setOutputVolume(volume: Float) {
-        withHandle(Unit) { nativeSetOutputVolume(it, volume.coerceIn(0f, 1f)) }
+        val safe = if (volume.isFinite()) volume.coerceIn(0f, 1f) else 1f
+        withHandle(Unit) { nativeSetOutputVolume(it, safe) }
     }
 
     /** Thread-safe; native DSP crossfades wet/dry over exactly 50 ms.
@@ -149,7 +150,8 @@ class NativeAudioEngine @Inject constructor(
      */
     fun setClarityWet(wet: Float) {
         if (systemFlattened) return
-        withHandle(Unit) { nativeSetClarityWet(it, wet.coerceIn(0f, 1f)) }
+        val safe = if (wet.isFinite()) wet.coerceIn(0f, 1f) else 1f
+        withHandle(Unit) { nativeSetClarityWet(it, safe) }
     }
 
     /** Per-stage clarity trims in dB ([ClarityPresets.TRIM_COUNT] stages, +-12 dB). */
@@ -183,8 +185,16 @@ class NativeAudioEngine @Inject constructor(
         outputSampleRate: Int,
         channelCount: Int,
     ): Boolean {
-        require(inputSampleRate > 0 && outputSampleRate > 0)
-        require(channelCount in 1..2)
+        if (inputSampleRate !in MIN_SAMPLE_RATE_HZ..MAX_SAMPLE_RATE_HZ ||
+            outputSampleRate !in MIN_SAMPLE_RATE_HZ..MAX_SAMPLE_RATE_HZ ||
+            channelCount !in 1..2
+        ) {
+            Log.w(
+                TAG,
+                "Rejected invalid media processor config: in=$inputSampleRate out=$outputSampleRate ch=$channelCount",
+            )
+            return false
+        }
         return withHandle(false) {
             nativeConfigureMediaProcessor(it, inputSampleRate, outputSampleRate, channelCount)
         }
@@ -435,6 +445,8 @@ class NativeAudioEngine @Inject constructor(
         const val TAG = "NativeAudioEngine"
         const val EQUALIZER_BAND_COUNT = 15
         const val CLARITY_TRIM_MAX_DB = 12f
+        const val MIN_SAMPLE_RATE_HZ = 8_000
+        const val MAX_SAMPLE_RATE_HZ = 384_000
 
         val libraryLoaded = try {
             System.loadLibrary("lastwave_audio")

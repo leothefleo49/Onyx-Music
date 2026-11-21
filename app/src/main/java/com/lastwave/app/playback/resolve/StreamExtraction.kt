@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -20,6 +21,7 @@ class StreamExtraction(
     parent: CoroutineScope,
     private val cache: PlaybackStreamCache,
     private val extract: suspend (youtubeVideoId: String) -> YouTubeAudioStream,
+    private val flightTimeoutMs: Long = DEFAULT_FLIGHT_TIMEOUT_MS,
 ) {
     // Independent of the caller's job. Cancelling prefetch or playback
     // must not cancel an extract that is about to write the URL.
@@ -40,7 +42,7 @@ class StreamExtraction(
         val flight = synchronized(lock) {
             val current = flights[youtubeVideoId]
             if (current != null && current.isActive) {
-                Log.i(TAG, "[EXTRACT_JOIN] youtubeVideoId=$youtubeVideoId")
+                safeLogInfo("[EXTRACT_JOIN] youtubeVideoId=$youtubeVideoId")
                 current
             } else {
                 val created = scope.async { execute(youtubeVideoId) }
@@ -54,28 +56,29 @@ class StreamExtraction(
 
     private suspend fun execute(youtubeVideoId: String): YouTubeAudioStream {
         val started = System.nanoTime()
-        Log.i(TAG, "[EXTRACT_START] youtubeVideoId=$youtubeVideoId")
+        safeLogInfo("[EXTRACT_START] youtubeVideoId=$youtubeVideoId")
         try {
             cache.get(TrackIdentity(youtubeVideoId, youtubeVideoId))?.let { hit ->
-                Log.i(
-                    TAG,
+                safeLogInfo(
                     "[EXTRACT_END] youtubeVideoId=$youtubeVideoId elapsedMs=${elapsedSince(started)} cached=true",
                 )
                 return hit.toYouTubeAudioStream()
             }
-            val stream = extract(youtubeVideoId)
+            val stream = if (flightTimeoutMs > 0L) {
+                withTimeout(flightTimeoutMs) { extract(youtubeVideoId) }
+            } else {
+                extract(youtubeVideoId)
+            }
             if (stream.videoId == youtubeVideoId && stream.url.isNotBlank()) {
                 cache.putIfAbsent(stream.toStreamCache(TrackIdentity(youtubeVideoId, youtubeVideoId)))
             }
-            Log.i(
-                TAG,
+            safeLogInfo(
                 "[EXTRACT_END] youtubeVideoId=$youtubeVideoId elapsedMs=${elapsedSince(started)} " +
                     "cached=${stream.videoId == youtubeVideoId && stream.url.isNotBlank()}",
             )
             return stream
         } catch (error: Throwable) {
-            Log.i(
-                TAG,
+            safeLogInfo(
                 "[EXTRACT_END] youtubeVideoId=$youtubeVideoId elapsedMs=${elapsedSince(started)} " +
                     "cached=false error=${error::class.java.simpleName}",
             )
@@ -83,7 +86,12 @@ class StreamExtraction(
         }
     }
 
-    private companion object {
-        const val TAG = "LastWaveResolver"
+    private fun safeLogInfo(message: String) {
+        runCatching { Log.i(TAG, message) }
+    }
+
+    companion object {
+        private const val TAG = "LastWaveResolver"
+        const val DEFAULT_FLIGHT_TIMEOUT_MS = 15_000L
     }
 }

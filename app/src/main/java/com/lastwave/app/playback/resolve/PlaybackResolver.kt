@@ -86,7 +86,7 @@ class PlaybackResolver(
         logger.event(ResolveEvent.START, identity, 0L, durationMs, "playback")
         ensureCurrent(token, identity, started, durationMs)
         cache.get(identity)?.let { hit ->
-            if (!hit.matches(identity)) {
+            if (!hit.matches(identity) || hit.streamUrl.isBlank()) {
                 cache.invalidate(identity)
             } else {
                 logger.event(

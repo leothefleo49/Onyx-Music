@@ -99,6 +99,8 @@ import com.lastwave.app.data.recommend.RecommendationRepository
 import com.lastwave.app.data.ytmusic.YtMusicAuthManager
 import com.lastwave.app.playback.resolve.MetadataLog
 import com.lastwave.app.playback.resolve.PlaybackStartupLog
+import com.lastwave.app.playback.resolve.PrefetchItem
+import com.lastwave.app.playback.resolve.PrefetchResolver
 import com.lastwave.app.playback.resolve.StreamCache
 import com.lastwave.app.playback.resolve.StreamResolveCoordinator
 import com.lastwave.app.playback.resolve.TrackIdentity
@@ -126,6 +128,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.isActive
+import java.io.EOFException
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -621,6 +624,12 @@ class MusicPlayer @Inject constructor(
     /** Every ExoPlayer audio sink, so DAC routing/rate follow player rebuilds. */
     internal val audioSinks = CopyOnWriteArrayList<NativeProcessingAudioSink>()
     internal val playerToSink = java.util.Collections.synchronizedMap(java.util.WeakHashMap<Player, NativeProcessingAudioSink>())
+    /**
+     * Automatically engaged when FFmpeg or AudioSink fails to initialize/decode
+     * on the current device/stream so the player transparently rebuilds onto
+     * Android's platform MediaCodecAudioRenderer without skipping the track.
+     */
+    @Volatile private var forcePlatformDecoderFallback = false
     /** True while the usbdevfs exclusive session owns output. */
     @Volatile internal var usbExclusiveSinkActive = false
     val isUsbExclusiveActive: Boolean get() = usbExclusiveSinkActive || exclusiveUsbOutput.isActive()
@@ -757,8 +766,8 @@ class MusicPlayer @Inject constructor(
                 interceptors().clear()
                 networkInterceptors().clear()
             }
-            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .build()
@@ -1274,6 +1283,31 @@ class MusicPlayer @Inject constructor(
                 )
             } ?: currentTrack?.let { logResolutionFailure(it, "player-error", errorRetryCount, error) }
 
+            if (isDecoderOrAudioSinkFailure(error) &&
+                !forcePlatformDecoderFallback &&
+                FfmpegCompat.isUsable &&
+                errorRetryCount < MAX_PLAYBACK_RETRIES &&
+                failedIndex in 0 until player.mediaItemCount
+            ) {
+                errorRetryCount++
+                android.util.Log.w(
+                    "MusicPlayer",
+                    "Decoder/AudioSink failure (${error.errorCodeName}) on '${currentTrack?.title}'; falling back to platform MediaCodecAudioRenderer at ${currentPos}ms",
+                )
+                rebuildPlayerWithPlatformDecoderFallback(
+                    failedIndex = failedIndex,
+                    resumePosMs = currentPos,
+                    shouldPlay = player.playWhenReady || _state.value.isPlaying,
+                )
+                return
+            }
+
+            if (error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
+                error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
+            ) {
+                runCatching { playerToSink[player]?.flush() }
+            }
+
             val isTransientIo = error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
                 error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
                 error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
@@ -1284,6 +1318,7 @@ class MusicPlayer @Inject constructor(
             ) {
                 errorRetryCount = 1
                 android.util.Log.i("MusicPlayer", "Transient network glitch for '${currentTrack?.title}', retrying same stream at ${currentPos}ms")
+                runCatching { playerToSink[player]?.flush() }
                 player.prepare()
                 player.seekTo(failedIndex, currentPos)
                 player.play()
@@ -1380,6 +1415,7 @@ class MusicPlayer @Inject constructor(
                                 logStreamEvent("player-retry", stream, retry = retry)
                                 cacheCurrentTrackStream(stream)
                                 learnQueueVideoId(failedIndex, updated, stream.youtubeCandidate?.videoId, stream.rematchedFromVideoId)
+                                runCatching { playerToSink[player]?.flush() }
                                 replaceMediaItemPreservingShuffle(failedIndex, updated.toMediaItem(stream))
                                 lastSeekTargetMs = currentPos
                                 lastSeekAtElapsedMs = SystemClock.elapsedRealtime()
@@ -1665,13 +1701,13 @@ class MusicPlayer @Inject constructor(
         // dry on any network dip and stalled songs mid-way.
         val baseLoadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 45_000,
-                /* maxBufferMs = */ 120_000,
-                /* bufferForPlaybackMs = */ 250,
-                /* bufferForPlaybackAfterRebufferMs = */ 1_500,
+                /* minBufferMs = */ 50_000,
+                /* maxBufferMs = */ 150_000,
+                /* bufferForPlaybackMs = */ 500,
+                /* bufferForPlaybackAfterRebufferMs = */ 2_500,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
-            .setBackBuffer(15_000, true)
+            .setBackBuffer(20_000, true)
             .build()
         var builtSink: NativeProcessingAudioSink? = null
         // One haptics analyser per player sink. It is fed from
@@ -1823,8 +1859,10 @@ class MusicPlayer @Inject constructor(
                     eventListener,
                     out,
                 )
-                // Explicit software decoder fallback for MediaTek / ColorOS
-                if (FfmpegCompat.isUsable) try {
+                // Explicit software decoder fallback for MediaTek / ColorOS,
+                // bypassed when automatic platform decoder fallback is engaged.
+                val useFfmpeg = FfmpegCompat.isUsable && !forcePlatformDecoderFallback
+                if (useFfmpeg) try {
                     // Direct dependency (org.jellyfin.media3:media3-ffmpeg-decoder):
                     // construct it typed instead of via reflection.
                     out.add(
@@ -1834,15 +1872,14 @@ class MusicPlayer @Inject constructor(
                 }
             }
         }.apply {
-            // FFmpeg-first decoding, the Poweramp/VLC model: every codec the
-            // bundled GPL build supports (FLAC 24/96-192, Opus, AAC, MP3,
-            // Vorbis) decodes through the same battle-tested software path on
-            // every device, eliminating per-OEM platform codec bugs that
-            // surface as noise/distortion. setEnableDecoderFallback keeps the
-            // platform decoder for anything FFmpeg rejects.
+            // FFmpeg-first decoding unless runtime fallback switched to the
+            // platform MediaCodecAudioRenderer after an FFmpeg/sink error.
             setExtensionRendererMode(
-                if (FfmpegCompat.isUsable) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-                else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF,
+                if (FfmpegCompat.isUsable && !forcePlatformDecoderFallback) {
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                } else {
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
+                },
             )
             setEnableDecoderFallback(true)
             setEnableAudioTrackPlaybackParams(false)
@@ -2613,13 +2650,24 @@ class MusicPlayer @Inject constructor(
         }
 
         applicationScope.launch {
-            // Route changes (jack, Bluetooth, USB): re-decide which path is wanted.
+            // Route changes (jack, Bluetooth, USB): re-decide which path is wanted
+            // and flush audio sinks cleanly so no stale buffer plays into the new route.
             var lastRoute: InternalRoute? = null
             internalDirectOutput.availability.collect { availability ->
                 if (availability.route == lastRoute) return@collect
                 lastRoute = availability.route
-                audioSinks.forEach { sink -> runCatching { sink.retryInternalDirect() } }
+                val routeAction = AudioFocusPolicy.routeActionFor(AudioRouteEvent.DeviceConnected)
+                audioSinks.forEach { sink ->
+                    runCatching {
+                        if (routeAction == AudioRouteAction.FlushAndReconfigureSink) sink.flush()
+                        sink.retryInternalDirect()
+                    }
+                }
                 onMain {
+                    if (playerDelegate.isInitialized() && unduckedVolume == null) {
+                        val safeVol = AudioFocusPolicy.sanitizedVolume(appVolume)
+                        runCatching { player.volume = safeVol }
+                    }
                     applyDacRoutingFor(currentSourceRateHz())
                     updateSignalPath()
                 }
@@ -3370,14 +3418,15 @@ class MusicPlayer @Inject constructor(
     private fun restoreAfterAudioFocus() {
         unduckedVolume?.let { level ->
             unduckedVolume = null
-            if (playerDelegate.isInitialized()) runCatching { player.volume = level }
+            val safeLevel = AudioFocusPolicy.sanitizedVolume(level, AudioFocusPolicy.sanitizedVolume(appVolume))
+            if (playerDelegate.isInitialized()) runCatching { player.volume = safeLevel }
         }
         if (!focusPauseAwaitingRecovery) return
         focusPauseAwaitingRecovery = false
         // The user paused by hand during the interruption: respect it.
         if (_state.value.isPlaying) return
         if (playerDelegate.isInitialized() && player.playWhenReady) return
-        android.util.Log.i("MusicPlayer", "Audio focus regained â€” resuming interrupted playback")
+        android.util.Log.i("MusicPlayer", "Audio focus regained — resuming interrupted playback")
         resume()
     }
 
@@ -3386,20 +3435,26 @@ class MusicPlayer @Inject constructor(
         if (isCasting || !playerDelegate.isInitialized()) return
         if (ducked) {
             if (unduckedVolume != null) return
-            val current = runCatching { player.volume }.getOrDefault(appVolume)
-            val duckTarget = (AudioFocusPolicy.DUCK_VOLUME * appVolume).coerceIn(0f, 1f)
+            val current = AudioFocusPolicy.sanitizedVolume(
+                runCatching { player.volume }.getOrDefault(appVolume),
+                AudioFocusPolicy.sanitizedVolume(appVolume),
+            )
+            val duckTarget = AudioFocusPolicy.duckedVolumeFor(appVolume)
             if (current <= duckTarget) return
             unduckedVolume = current
             runCatching { player.volume = duckTarget }
         } else {
-            val level = unduckedVolume ?: appVolume
+            val level = AudioFocusPolicy.sanitizedVolume(
+                unduckedVolume ?: appVolume,
+                AudioFocusPolicy.sanitizedVolume(appVolume),
+            )
             unduckedVolume = null
             runCatching { player.volume = level }
         }
     }
 
     fun setAppVolume(volume: Float) = onMain {
-        val clamped = volume.coerceIn(0f, 1f)
+        val clamped = AudioFocusPolicy.sanitizedVolume(volume, appVolume)
         if (isCasting) {
             // Slider / volume keys drive the receiver only; local playback
             // volume and its saved value stay untouched.
@@ -4254,8 +4309,8 @@ class MusicPlayer @Inject constructor(
     }
 
     /**
-     * Pre-resolves only the next track. The track after that stays unresolved
-     * until it becomes the next selection.
+     * Pre-resolves the next track into the active timeline and keeps a bounded
+     * 3-track lookahead window warm in [streamResolver] so rapid skips hit cached URLs.
      */
     @MainThread
     internal fun preloadNextQueueItem(currentIndex: Int) {
@@ -4263,8 +4318,34 @@ class MusicPlayer @Inject constructor(
         val nextIndex = if (player.shuffleModeEnabled) player.nextMediaItemIndex else currentIndex + 1
         if (nextIndex == C.INDEX_UNSET || nextIndex !in 0 until player.mediaItemCount || nextIndex == currentIndex) return
         val nextItem = player.getMediaItemAt(nextIndex)
-        if (nextItem.localConfiguration?.uri?.scheme != "lastwave") return
-        preloadNextTrack(nextIndex, nextItem.toPlayableTrack())
+        if (nextItem.localConfiguration?.uri?.scheme == "lastwave") {
+            preloadNextTrack(nextIndex, nextItem.toPlayableTrack())
+        }
+        scheduleLookaheadPrefetchWindow(currentIndex)
+    }
+
+    @MainThread
+    private fun scheduleLookaheadPrefetchWindow(currentIndex: Int) {
+        val timeline = player.currentTimeline
+        if (timeline.isEmpty || currentIndex !in 0 until timeline.windowCount) return
+        val shuffle = player.shuffleModeEnabled
+        val lookahead = ArrayList<PrefetchItem>(PrefetchResolver.DEFAULT_LOOKAHEAD)
+        var idx = currentIndex
+        var steps = 0
+        while (lookahead.size < PrefetchResolver.DEFAULT_LOOKAHEAD && steps < PrefetchResolver.DEFAULT_LOOKAHEAD * 3) {
+            steps++
+            idx = timeline.getNextWindowIndex(idx, Player.REPEAT_MODE_OFF, shuffle)
+            if (idx == C.INDEX_UNSET || idx == currentIndex || idx !in 0 until player.mediaItemCount) break
+            val item = player.getMediaItemAt(idx)
+            if (item.localConfiguration?.uri?.scheme != "lastwave") continue
+            val track = item.toPlayableTrack()
+            if (track.playbackUrl != null || track.isLocalTrack()) continue
+            val identity = track.playbackIdentity() ?: continue
+            lookahead += PrefetchItem(identity = identity, durationMs = track.durationMs)
+        }
+        if (lookahead.isNotEmpty()) {
+            streamResolver.prefetchWindow(lookahead)
+        }
     }
 
     /**
@@ -5597,6 +5678,7 @@ class MusicPlayer @Inject constructor(
                         applyDacRoutingFor(dacRateFor(stream))
                         cacheCurrentTrackStream(stream)
                         logStreamEvent("playback-recovery", stream, retry = attempt)
+                        runCatching { playerToSink[player]?.flush() }
                         replaceMediaItemPreservingShuffle(failedIndex, updated.toMediaItem(stream))
                         lastSeekTargetMs = resumePositionMs
                         lastSeekAtElapsedMs = SystemClock.elapsedRealtime()
@@ -7798,7 +7880,10 @@ class MusicPlayer @Inject constructor(
                     stagePendingQuality(updatedMediaItem.mediaId, swapCandidate)
                     stagePendingQuality(track.mediaIdKey(), swapCandidate)
                     track.videoId?.let { stagePendingQuality(it, swapCandidate) }
-                    val prevVolume = runCatching { player.volume }.getOrDefault(1f)
+                    val prevVolume = AudioFocusPolicy.sanitizedVolume(
+                        runCatching { player.volume }.getOrDefault(appVolume),
+                        AudioFocusPolicy.sanitizedVolume(appVolume),
+                    )
                     // The output reopens for the new stream; a ramp makes that a dip, not a click.
                     for (i in HOT_SWAP_INPLACE_FADE_STEPS - 1 downTo 0) {
                         player.volume = prevVolume * i / HOT_SWAP_INPLACE_FADE_STEPS
@@ -7809,6 +7894,7 @@ class MusicPlayer @Inject constructor(
                         switchOutcome = "aborted"
                         return@withContext
                     }
+                    runCatching { playerToSink[player]?.flush() }
                     replaceMediaItemPreservingShuffle(currentIndex, updatedMediaItem)
                     lastSeekTargetMs = swapTargetMs
                     lastSeekAtElapsedMs = SystemClock.elapsedRealtime()
@@ -7939,8 +8025,11 @@ class MusicPlayer @Inject constructor(
             }
         }.apply {
             setExtensionRendererMode(
-                if (FfmpegCompat.isUsable) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-                else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF,
+                if (FfmpegCompat.isUsable && !forcePlatformDecoderFallback) {
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                } else {
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
+                },
             )
             setEnableDecoderFallback(true)
             setMediaCodecSelector(accurateAudioMediaCodecSelector)
@@ -8776,15 +8865,82 @@ class MusicPlayer @Inject constructor(
         return exponential + Random.nextLong(PLAYBACK_RETRY_JITTER_MS + 1L)
     }
 
+    private fun isDecoderOrAudioSinkFailure(error: PlaybackException): Boolean {
+        return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> true
+            else -> false
+        }
+    }
+
+    @MainThread
+    private fun rebuildPlayerWithPlatformDecoderFallback(
+        failedIndex: Int,
+        resumePosMs: Long,
+        shouldPlay: Boolean,
+    ) {
+        val oldPlayer = player
+        val items = (0 until oldPlayer.mediaItemCount).map { oldPlayer.getMediaItemAt(it) }
+        val shuffleEnabled = oldPlayer.shuffleModeEnabled
+        val repeatMode = oldPlayer.repeatMode
+        val params = oldPlayer.playbackParameters
+        val shuffleOrder = currentPlayOrder(oldPlayer)
+
+        runCatching { playerToSink[oldPlayer]?.flush() }
+        forcePlatformDecoderFallback = true
+
+        cancelCrossfade()
+        oldPlayer.removeListener(listener)
+        if (activePlayer === oldPlayer) {
+            activePlayer = null
+        }
+        runCatching { oldPlayer.release() }
+        playerDelegate.reset()
+
+        val rebuilt = playerDelegate.value
+        rebuilt.repeatMode = repeatMode
+        rebuilt.shuffleModeEnabled = shuffleEnabled
+        rebuilt.playbackParameters = params
+        if (items.isNotEmpty()) {
+            val safeIndex = failedIndex.coerceIn(0, items.lastIndex)
+            rebuilt.setMediaItems(items, safeIndex, resumePosMs.coerceAtLeast(0L))
+            if (shuffleOrder.size == items.size) {
+                runCatching {
+                    rebuilt.setShuffleOrder(DefaultShuffleOrder(shuffleOrder.toIntArray(), Random.nextLong()))
+                }
+            }
+            lastSeekTargetMs = resumePosMs.coerceAtLeast(0L)
+            lastSeekAtElapsedMs = SystemClock.elapsedRealtime()
+            rebuilt.prepare()
+            if (shouldPlay) rebuilt.play()
+        }
+    }
+
+    private fun hasEofCause(error: Throwable?): Boolean {
+        var cursor = error
+        var depth = 0
+        while (cursor != null && depth++ < 8) {
+            if (cursor is EOFException) return true
+            cursor = cursor.cause
+        }
+        return false
+    }
+
     /** Network/HTTP failure of the transport, as opposed to the bytes being undecodable. */
     private fun isTransportFailure(error: PlaybackException): Boolean {
         if (isUnsupportedMediaFailure(error)) return false
         val status = error.httpStatusCodeOrNull()
         if (status == 401 || status == 403 || status == 408 || status == 410 ||
-            status == 429 || (status != null && status in 500..599)
+            status == 416 || status == 429 || (status != null && status in 500..599)
         ) return true
+        if (hasEofCause(error)) return true
         return error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
     }
 
@@ -8794,6 +8950,7 @@ class MusicPlayer @Inject constructor(
         if (status == 401 || status == 403 || status == 404 || status == 410 ||
             status == 408 || status == 416 || status == 429 || (status != null && status in 500..599)
         ) return true
+        if (hasEofCause(error)) return true
         return error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE ||
@@ -8805,7 +8962,9 @@ class MusicPlayer @Inject constructor(
             error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
             error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
             error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
-            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+            error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
     }
 
     /**
@@ -9054,12 +9213,12 @@ class MusicPlayer @Inject constructor(
         /** Signal-path report + stream-health sampling cadence while playing. */
         const val SIGNAL_PATH_TICK_MS = 1_000L
         const val MAX_PLAYBACK_RETRIES = 3
-        const val STARTUP_PROVIDER_RESOLVE_MS = 8_000L
+        const val STARTUP_PROVIDER_RESOLVE_MS = 2_500L
         const val STARTUP_PROVIDER_PROBE_MS = 1_000L
-        /** "Best quality first": how long the addon gets before YouTube plays. */
-        const val BEST_QUALITY_WAIT_MS = 5_000L
+        /** "Best quality first": bounded <=2.5s budget before Opus plays immediately. */
+        const val BEST_QUALITY_WAIT_MS = 2_000L
         /** ...stretched to this, probe included, if the addon has found the song by then. */
-        const val BEST_QUALITY_RESOLVING_WAIT_MS = 8_000L
+        const val BEST_QUALITY_RESOLVING_WAIT_MS = 2_500L
         const val STARTUP_PROBE_BYTES = 16 * 1024L
         /** Fallback resolve kept alive after a provider wins, for instant failover. */
         const val STARTUP_FALLBACK_KEEPALIVE_MS = 15_000L

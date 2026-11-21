@@ -39,6 +39,31 @@ constexpr double kClarityPresenceGainDb = 3.8;
 constexpr double kClarityAirGainDb = 4.8;
 constexpr float kClarityTrimMinDb = -12.0F;
 constexpr float kClarityTrimMaxDb = 12.0F;
+// Floor for dynamic limiter / preamp gain so a single corrupt peak can never
+// pin playback to near-silence until release completes.
+constexpr float kMinSafeLinearGain = 0.05F;
+// Monotonic peak of x - 0.25*x^3 is at |x| = 2/sqrt(3) ~= 1.1547; clamping
+// prevents cubic inversion/runaway distortion on boosted highs.
+constexpr float kExciterInputClamp = 1.1547F;
+// Caps corrupt decoder spikes before they enter IIR delay lines.
+constexpr float kMaxSafeInputSample = 16.0F;
+constexpr float kDenormalThreshold = 1.0e-20F;
+
+inline float sanitizeInputSample(float value) noexcept {
+    if (!std::isfinite(value) || std::abs(value) < kDenormalThreshold) return 0.0F;
+    return std::clamp(value, -kMaxSafeInputSample, kMaxSafeInputSample);
+}
+
+inline void scrubNonFiniteSamples(float* samples, std::size_t count, bool clampUnit) noexcept {
+    for (std::size_t i = 0; i < count; ++i) {
+        const float value = samples[i];
+        if (!std::isfinite(value) || std::abs(value) < kDenormalThreshold) {
+            samples[i] = 0.0F;
+        } else if (clampUnit) {
+            samples[i] = std::clamp(value, -1.0F, 1.0F);
+        }
+    }
+}
 // Native preset trim vectors in header-documented stage order 0..7.
 // Mirrored as data in ClarityPresets.kt; REFERENCE is all zeros.
 constexpr std::array<float, DspProcessor::kClarityTrimCount> kClarityPresetReferenceTrims{
@@ -100,7 +125,9 @@ DspProcessor::~DspProcessor() {
 }
 
 void DspProcessor::configure(double sampleRate) noexcept {
-    sampleRate_ = std::max(sampleRate, 8000.0);
+    sampleRate_ = std::isfinite(sampleRate)
+        ? std::clamp(sampleRate, 8000.0, 384000.0)
+        : 48000.0;
     // Snap clarity parameterization set before the stream opened. Neutral
     // trims add exactly 0.0 to the design gains below, so the default
     // coefficients are unchanged from the previous fixed chain.
@@ -352,18 +379,23 @@ void DspProcessor::process(
     std::int32_t frameCount,
     std::int32_t channelCount) noexcept {
     if (samples == nullptr || frameCount <= 0 || (channelCount != 1 && channelCount != 2)) return;
-    const bool parametricApplied = parametricEq_.process(samples, frameCount, channelCount);
-    const auto clampParametricOutput = [&]() noexcept {
-        if (!parametricApplied) return;
-        const std::size_t count = static_cast<std::size_t>(frameCount) *
-            static_cast<std::size_t>(channelCount);
-        for (std::size_t i = 0; i < count; ++i) {
-            const float value = samples[i];
-            samples[i] = std::isfinite(value) ? std::clamp(value, -1.0F, 1.0F) : 0.0F;
+    const std::size_t totalSamples = static_cast<std::size_t>(frameCount) *
+        static_cast<std::size_t>(channelCount);
+    const bool bitPerfect = bitPerfectEnabled_.load(std::memory_order_acquire);
+    // Scrub non-finite samples before parametric EQ so a corrupt decoder frame
+    // cannot poison filter delay lines. Valid bit-perfect PCM stays untouched.
+    if (!bitPerfect) {
+        for (std::size_t i = 0; i < totalSamples; ++i) {
+            samples[i] = sanitizeInputSample(samples[i]);
         }
-    };
-    if (bitPerfectEnabled_.load(std::memory_order_acquire)) {
-        clampParametricOutput();
+    } else {
+        for (std::size_t i = 0; i < totalSamples; ++i) {
+            if (!std::isfinite(samples[i])) samples[i] = 0.0F;
+        }
+    }
+    const bool parametricApplied = parametricEq_.process(samples, frameCount, channelCount);
+    if (bitPerfect) {
+        scrubNonFiniteSamples(samples, totalSamples, /*clampUnit=*/parametricApplied);
         return;
     }
     // Atmos-aware bypass forces the clarity chain off independent of the
@@ -411,7 +443,7 @@ void DspProcessor::process(
     // With every enhancement disabled, decoded PCM stays transparent. This
     // avoids the old unconditional -1 dB attenuation and limiter/clamp pass.
     if (controlsBypassed && stateBypassed) {
-        clampParametricOutput();
+        scrubNonFiniteSamples(samples, totalSamples, /*clampUnit=*/parametricApplied);
         return;
     }
 
@@ -528,22 +560,37 @@ void DspProcessor::process(
 
         const std::size_t offset = static_cast<std::size_t>(frame) *
             static_cast<std::size_t>(channelCount);
+        const float safePreamp = std::isfinite(currentPreampGain_)
+            ? std::clamp(currentPreampGain_, kMinSafeLinearGain, 1.0F)
+            : 1.0F;
         // One-pole DC blocker ahead of all gain staging: a stream DC offset
         // asymmetrically consumes peak headroom and clicks at boundaries.
-        const double dcInputLeft = samples[offset];
-        const double dcOutputLeft =
+        const double dcInputLeft = static_cast<double>(sanitizeInputSample(samples[offset]));
+        double dcOutputLeft =
             dcInputLeft - dcXPrev_[0] + dcBlockerR_ * dcYPrev_[0];
-        dcXPrev_[0] = dcInputLeft;
-        dcYPrev_[0] = dcOutputLeft;
-        float equalizedLeft = static_cast<float>(dcOutputLeft) * currentPreampGain_;
+        if (!std::isfinite(dcOutputLeft)) {
+            dcXPrev_[0] = 0.0;
+            dcYPrev_[0] = 0.0;
+            dcOutputLeft = 0.0;
+        } else {
+            dcXPrev_[0] = dcInputLeft;
+            dcYPrev_[0] = dcOutputLeft;
+        }
+        float equalizedLeft = static_cast<float>(dcOutputLeft) * safePreamp;
         float equalizedRight;
         if (channelCount == 2) {
-            const double dcInputRight = samples[offset + 1U];
-            const double dcOutputRight =
+            const double dcInputRight = static_cast<double>(sanitizeInputSample(samples[offset + 1U]));
+            double dcOutputRight =
                 dcInputRight - dcXPrev_[1] + dcBlockerR_ * dcYPrev_[1];
-            dcXPrev_[1] = dcInputRight;
-            dcYPrev_[1] = dcOutputRight;
-            equalizedRight = static_cast<float>(dcOutputRight) * currentPreampGain_;
+            if (!std::isfinite(dcOutputRight)) {
+                dcXPrev_[1] = 0.0;
+                dcYPrev_[1] = 0.0;
+                dcOutputRight = 0.0;
+            } else {
+                dcXPrev_[1] = dcInputRight;
+                dcYPrev_[1] = dcOutputRight;
+            }
+            equalizedRight = static_cast<float>(dcOutputRight) * safePreamp;
         } else {
             equalizedRight = equalizedLeft;
         }
@@ -595,9 +642,15 @@ void DspProcessor::process(
                 : wetLeft;
 
             // Harmonic Air Exciter: extracts highs above 6 kHz and generates silky tape-style sheen
-            const float exciterInLeft = airExciterFilter_.tick(dryLeft, 0);
+            const float exciterInLeft = std::clamp(
+                sanitizeInputSample(airExciterFilter_.tick(dryLeft, 0)),
+                -kExciterInputClamp,
+                kExciterInputClamp);
             const float exciterInRight = channelCount == 2
-                ? airExciterFilter_.tick(dryRight, 1)
+                ? std::clamp(
+                    sanitizeInputSample(airExciterFilter_.tick(dryRight, 1)),
+                    -kExciterInputClamp,
+                    kExciterInputClamp)
                 : exciterInLeft;
             const float excitedLeft = exciterInLeft - (exciterInLeft * exciterInLeft * exciterInLeft * 0.25F);
             const float excitedRight = exciterInRight - (exciterInRight * exciterInRight * exciterInRight * 0.25F);
@@ -633,12 +686,17 @@ void DspProcessor::process(
             return x >= 0.0F ? saturated : -saturated;
         };
 
+        if (!std::isfinite(outputLeft)) outputLeft = 0.0F;
+        if (!std::isfinite(outputRight)) outputRight = 0.0F;
         const float peak = std::max(std::abs(outputLeft), std::abs(outputRight));
         // Envelope limiter for extreme overloads (> 1.25 peak), preserving dynamic punch
         constexpr float kLimiterEngageThreshold = 1.25F;
         const float requiredLimiterGain = protectionRequired && peak > kLimiterEngageThreshold
-            ? kLimiterEngageThreshold / peak
+            ? std::max(kMinSafeLinearGain, kLimiterEngageThreshold / peak)
             : 1.0F;
+        if (!std::isfinite(limiterGain_) || limiterGain_ < kMinSafeLinearGain) {
+            limiterGain_ = 1.0F;
+        }
         if (requiredLimiterGain < limiterGain_) {
             limiterGain_ = requiredLimiterGain;
         } else {
@@ -658,14 +716,18 @@ void DspProcessor::process(
             outputLeft = softSaturate(outputLeft);
             outputRight = softSaturate(outputRight);
         }
-        outputLeft = std::isfinite(outputLeft)
+        outputLeft = (std::isfinite(outputLeft) && std::abs(outputLeft) >= kDenormalThreshold)
             ? std::clamp(outputLeft, -kOutputCeiling, kOutputCeiling)
             : 0.0F;
-        outputRight = std::isfinite(outputRight)
+        outputRight = (std::isfinite(outputRight) && std::abs(outputRight) >= kDenormalThreshold)
             ? std::clamp(outputRight, -kOutputCeiling, kOutputCeiling)
             : 0.0F;
         samples[offset] = outputLeft;
         if (channelCount == 2) samples[offset + 1U] = outputRight;
+    }
+    for (std::size_t ch = 0; ch < dcXPrev_.size(); ++ch) {
+        if (!std::isfinite(dcXPrev_[ch]) || std::abs(dcXPrev_[ch]) < 1.0e-20) dcXPrev_[ch] = 0.0;
+        if (!std::isfinite(dcYPrev_[ch]) || std::abs(dcYPrev_[ch]) < 1.0e-20) dcYPrev_[ch] = 0.0;
     }
     for (auto& band : equalizerBands_) band.settle();
     for (Biquad* filter : {&subBassHighPass_, &bassFoundation_, &lowMidSeparation_, &boxinessControl_,
@@ -682,6 +744,8 @@ void DspProcessor::process(
         boxinessControl_.clear();
         presenceDetail_.clear();
         airDetail_.clear();
+        monoBassFilter_.clear();
+        airExciterFilter_.clear();
         crossfeed_.clear();
         clarityChainActive_ = false;
     }

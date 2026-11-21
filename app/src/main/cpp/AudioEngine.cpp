@@ -11,9 +11,23 @@ namespace lastwave::audio {
 namespace {
 
 constexpr double kPi = 3.1415926535897932384626433832795;
+constexpr std::int32_t kMinSampleRateHz = 8000;
+constexpr std::int32_t kMaxSampleRateHz = 384000;
+constexpr float kDenormalThreshold = 1.0e-20F;
 
 soxr_t asSoxr(void* handle) noexcept {
     return static_cast<soxr_t>(handle);
+}
+
+inline float sanitizePcmFloat(float value) noexcept {
+    if (!std::isfinite(value) || std::abs(value) < kDenormalThreshold) return 0.0F;
+    return value;
+}
+
+inline void sanitizePcmBuffer(float* samples, std::size_t count) noexcept {
+    for (std::size_t i = 0; i < count; ++i) {
+        samples[i] = sanitizePcmFloat(samples[i]);
+    }
 }
 
 }  // namespace
@@ -141,6 +155,7 @@ bool AudioEngine::startLocked(std::int32_t preferredOutputSampleRate) {
     underrunDecayIntervalFrames_ =
         static_cast<std::size_t>(sampleRate) * kUnderrunDecaySeconds;
     cleanFrames_ = 0;
+    observedFlushGeneration_ = flushGeneration_.load(std::memory_order_acquire);
     underrunAnchor_.fill(0.0F);
     lastOutput_.fill(0.0F);
     currentOutputVolume_ = std::clamp(
@@ -191,23 +206,21 @@ void AudioEngine::flushOutput() noexcept {
     auto* ring = activeRingBuffer_.load(std::memory_order_acquire);
     if (ring == nullptr || stream_ == nullptr) return;
     // Park the consumer on silence first so the callback stops touching the
-    // ring while its contents are dropped. The stream itself stays open:
-    // reopening AAudio per track/seek is what produced pops on OEM stacks.
+    // ring while its contents and resampler taps are cleared. Callback-owned
+    // state (prebuffer/fade/oboeDsp_) resets on the audio thread via
+    // flushGeneration_ to avoid cross-thread races.
     activeRingBuffer_.store(nullptr, std::memory_order_release);
     {
         std::lock_guard<std::mutex> producerLock(producerMutex_);
-        ring->clear();
+        ring->clearAndZero();
+        if (resampler_ != nullptr) {
+            soxr_delete(asSoxr(resampler_));
+            resampler_ = nullptr;
+        }
+        resamplerInputRate_ = 0;
         resamplerFlushing_ = false;
     }
-    underrunActive_ = false;
-    recoveryFading_ = false;
-    underrunFadePosition_ = fadeInCurve_.size();
-    recoveryFadePosition_ = 0;
-    prebuffering_ = true;
-    prebufferWaitCallbacks_ = kPrebufferMaxCallbacks;
-    lastOutput_.fill(0.0F);
-    underrunAnchor_.fill(0.0F);
-    cleanFrames_ = 0;
+    flushGeneration_.fetch_add(1, std::memory_order_release);
     activeRingBuffer_.store(ring, std::memory_order_release);
 }
 
@@ -257,14 +270,15 @@ std::size_t AudioEngine::writePcm(
 
         if (inputChannelCount == 1) {
             for (std::size_t frame = 0; frame < chunkFrames; ++frame) {
-                stereoScratch_[frame * 2U] = rawScratch_[frame];
-                stereoScratch_[frame * 2U + 1U] = rawScratch_[frame];
+                const float sample = sanitizePcmFloat(rawScratch_[frame]);
+                stereoScratch_[frame * 2U] = sample;
+                stereoScratch_[frame * 2U + 1U] = sample;
             }
         } else {
-            std::memcpy(
-                stereoScratch_.data(),
-                rawScratch_.data(),
-                chunkFrames * kOutputChannels * sizeof(float));
+            const std::size_t sampleCount = chunkFrames * kOutputChannels;
+            for (std::size_t i = 0; i < sampleCount; ++i) {
+                stereoScratch_[i] = sanitizePcmFloat(rawScratch_[i]);
+            }
         }
 
         if (resampler_ == nullptr) {
@@ -324,19 +338,24 @@ std::size_t AudioEngine::writeProcessedPcm(
         frameCount,
         ring->availableToWrite() / kOutputChannels);
     if (writableFrames == 0) return 0;
-    if (inputChannelCount == kOutputChannels) {
-        return ring->write(pcm, writableFrames * kOutputChannels) / kOutputChannels;
-    }
 
     std::size_t writtenFrames = 0;
     while (writtenFrames < writableFrames) {
         const std::size_t chunkFrames = std::min(
             writableFrames - writtenFrames,
             kProducerChunkFrames);
-        for (std::size_t frame = 0; frame < chunkFrames; ++frame) {
-            const float sample = pcm[writtenFrames + frame];
-            stereoScratch_[frame * kOutputChannels] = sample;
-            stereoScratch_[frame * kOutputChannels + 1U] = sample;
+        if (inputChannelCount == kOutputChannels) {
+            const std::size_t base = writtenFrames * kOutputChannels;
+            const std::size_t count = chunkFrames * kOutputChannels;
+            for (std::size_t i = 0; i < count; ++i) {
+                stereoScratch_[i] = sanitizePcmFloat(pcm[base + i]);
+            }
+        } else {
+            for (std::size_t frame = 0; frame < chunkFrames; ++frame) {
+                const float sample = sanitizePcmFloat(pcm[writtenFrames + frame]);
+                stereoScratch_[frame * kOutputChannels] = sample;
+                stereoScratch_[frame * kOutputChannels + 1U] = sample;
+            }
         }
         const std::size_t writtenSamples = ring->write(
             stereoScratch_.data(),
@@ -417,7 +436,8 @@ bool AudioEngine::configureMediaProcessor(
     std::int32_t inputSampleRate,
     std::int32_t outputSampleRate,
     std::int32_t channelCount) {
-    if (inputSampleRate <= 0 || outputSampleRate <= 0 ||
+    if (inputSampleRate < kMinSampleRateHz || inputSampleRate > kMaxSampleRateHz ||
+        outputSampleRate < kMinSampleRateHz || outputSampleRate > kMaxSampleRateHz ||
         (channelCount != 1 && channelCount != 2)) {
         return false;
     }
@@ -482,6 +502,7 @@ bool AudioEngine::processMediaPcm(
                 mediaScratch_.data())) {
             return false;
         }
+        sanitizePcmBuffer(mediaScratch_.data(), chunkFrames * channels);
         std::size_t chunkConsumed = 0;
         while (chunkConsumed < chunkFrames) {
             std::size_t inputDone = 0;
@@ -611,6 +632,22 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         return oboe::DataCallbackResult::Continue;
     }
 
+    const auto currentFlushGen = flushGeneration_.load(std::memory_order_acquire);
+    if (currentFlushGen != observedFlushGeneration_) {
+        observedFlushGeneration_ = currentFlushGen;
+        oboeDsp_.reset();
+        underrunActive_ = false;
+        recoveryFading_ = false;
+        underrunFadePosition_ = fadeInCurve_.size();
+        recoveryFadePosition_ = 0;
+        prebuffering_ = true;
+        prebufferFrames_ = prebufferBaseFrames_;
+        prebufferWaitCallbacks_ = kPrebufferMaxCallbacks;
+        lastOutput_.fill(0.0F);
+        underrunAnchor_.fill(0.0F);
+        cleanFrames_ = 0;
+    }
+
     const bool playingNow = playbackEnabled_.load(std::memory_order_acquire);
     // While paused, keep draining any queued tail under the 5 ms output
     // volume ramp instead of hard-cutting to silence â€” a mid-sample gate is
@@ -669,32 +706,41 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             const std::size_t offset = frame * kOutputChannels;
             // Pausing fades toward zero through the same ramp; resuming fades
             // back up â€” both click-free.
-            const float volumeTarget = playingNow
+            const float rawVolumeTarget = playingNow
                 ? targetOutputVolume_.load(std::memory_order_relaxed)
                 : 0.0F;
+            const float volumeTarget = std::isfinite(rawVolumeTarget)
+                ? std::clamp(rawVolumeTarget, 0.0F, 1.0F)
+                : 1.0F;
+            if (!std::isfinite(currentOutputVolume_)) {
+                currentOutputVolume_ = volumeTarget;
+            }
             const float volumeDelta = volumeTarget - currentOutputVolume_;
-            currentOutputVolume_ += std::clamp(
-                volumeDelta,
-                -outputVolumeRampStep_,
-                outputVolumeRampStep_);
+            currentOutputVolume_ = std::clamp(
+                currentOutputVolume_ + std::clamp(
+                    volumeDelta,
+                    -outputVolumeRampStep_,
+                    outputVolumeRampStep_),
+                0.0F,
+                1.0F);
             const float gain = outputBitPerfect
                 ? 1.0F
                 : recoveryGain * currentOutputVolume_;
-            output[offset] *= gain;
-            output[offset + 1U] *= gain;
+            float s0 = sanitizePcmFloat(output[offset]) * gain;
+            float s1 = sanitizePcmFloat(output[offset + 1U]) * gain;
 
             if (!outputBitPerfect) {
-                float s0 = output[offset];
                 if (std::abs(s0) > 0.85F) s0 = std::tanh(s0);
-                output[offset] = std::clamp(s0, -0.98F, 0.98F);
+                s0 = std::isfinite(s0) ? std::clamp(s0, -0.98F, 0.98F) : 0.0F;
 
-                float s1 = output[offset + 1U];
                 if (std::abs(s1) > 0.85F) s1 = std::tanh(s1);
-                output[offset + 1U] = std::clamp(s1, -0.98F, 0.98F);
+                s1 = std::isfinite(s1) ? std::clamp(s1, -0.98F, 0.98F) : 0.0F;
             }
+            output[offset] = s0;
+            output[offset + 1U] = s1;
         }
-        lastOutput_[0] = output[(validFrames - 1U) * kOutputChannels];
-        lastOutput_[1] = output[(validFrames - 1U) * kOutputChannels + 1U];
+        lastOutput_[0] = sanitizePcmFloat(output[(validFrames - 1U) * kOutputChannels]);
+        lastOutput_[1] = sanitizePcmFloat(output[(validFrames - 1U) * kOutputChannels + 1U]);
         renderedFrames_.fetch_add(validFrames, std::memory_order_release);
     }
 

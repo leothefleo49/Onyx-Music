@@ -113,6 +113,9 @@ class NativeProcessingAudioSink(
     private var configuredOutputChannels: IntArray? = null
     private var processedFormat: Format? = null
     private var outputChannelCount = 2
+    @Volatile
+    internal var formatResetCount: Int = 0
+        private set
 
     private var pendingInputLimit = 0
     private var pendingOutput: ByteBuffer? = null
@@ -265,10 +268,27 @@ class NativeProcessingAudioSink(
             return
         }
 
-        pendingOutput?.let { pending ->
-            if (pending.hasRemaining()) {
-                runCatching {
-                    activeDelegate.handleBuffer(pending, pendingPresentationTimeUs, pendingAccessUnitCount)
+        val previousFormat = configuredFormat
+        val formatChanged = previousFormat != null && !isSameCoreFormat(previousFormat, format)
+        if (formatChanged) {
+            // Sample rate, bit depth, or channel layout changed (e.g. Opus 48 kHz ->
+            // FLAC 44.1/96 kHz 24-bit). Flush old delegate audio, DSP/EQ delay lines,
+            // and pending buffers atomically before configuring the new format so
+            // mismatched PCM never smears across the boundary.
+            clearPending()
+            clearEndOfStream()
+            directEq.reset()
+            directEqBuffer = null
+            eqCopySource = null
+            safeResetProcessor()
+            safeFlush(activeDelegate)
+            formatResetCount++
+        } else {
+            pendingOutput?.let { pending ->
+                if (pending.hasRemaining()) {
+                    runCatching {
+                        activeDelegate.handleBuffer(pending, pendingPresentationTimeUs, pendingAccessUnitCount)
+                    }
                 }
             }
         }
@@ -848,7 +868,13 @@ class NativeProcessingAudioSink(
                 C.ENCODING_PCM_FLOAT -> {
                     var pos = startPos
                     while (pos + 3 < endPos) {
-                        buffer.putFloat(pos, (buffer.getFloat(pos) * gain).coerceIn(-1f, 1f))
+                        val raw = buffer.getFloat(pos)
+                        val clean = if (raw.isFinite() && kotlin.math.abs(raw) >= DENORMAL_THRESHOLD) {
+                            (raw * gain).coerceIn(-1f, 1f)
+                        } else {
+                            0f
+                        }
+                        buffer.putFloat(pos, clean)
                         pos += 4
                     }
                 }
@@ -864,12 +890,17 @@ class NativeProcessingAudioSink(
         presentationTimeUs: Long,
         encodedAccessUnitCount: Int,
     ): Boolean {
+        val sampleRate = processor.nativeOutputSampleRate
+        if (sampleRate <= 0 || outputChannelCount !in 1..2) {
+            throw IllegalStateException("Invalid native processed format: rate=$sampleRate ch=$outputChannelCount")
+        }
         if (pendingOutput == null) {
             if (!buffer.hasRemaining()) return true
             processor.queueInput(buffer.duplicate())
             pendingInputLimit = buffer.limit()
             val output = processor.getOutput()
             applyLoudness(output)
+            sanitizeFloatPcmBuffer(output)
             pendingOutput = output
             pendingPresentationTimeUs = presentationTimeUs
             pendingAccessUnitCount = encodedAccessUnitCount
@@ -884,7 +915,7 @@ class NativeProcessingAudioSink(
         if (output.hasRemaining()) return false
 
         nextOutputPresentationTimeUs = pendingPresentationTimeUs +
-            pendingOutputFrameCount * MICROS_PER_SECOND / processor.nativeOutputSampleRate
+            pendingOutputFrameCount * MICROS_PER_SECOND / sampleRate
         if (buffer.position() < pendingInputLimit) {
             buffer.position(pendingInputLimit)
         }
@@ -916,7 +947,10 @@ class NativeProcessingAudioSink(
         try {
             if (!endOfStreamQueued) {
                 processor.queueEndOfStream()
-                endOfStreamOutput = processor.getOutput().also(this::applyLoudness)
+                endOfStreamOutput = processor.getOutput().also { tail ->
+                    applyLoudness(tail)
+                    sanitizeFloatPcmBuffer(tail)
+                }
                 endOfStreamQueued = true
             }
             val tail = endOfStreamOutput
@@ -1628,15 +1662,16 @@ class NativeProcessingAudioSink(
         // Recorded: Media3's audio-focus manager scales this on transient
         // duck, bypassing ExoPlayer.getVolume. Bit-perfect verification must
         // observe the gain that actually reaches AudioTrack, not the request.
-        lastVolume = volume
-        exclusiveUsb?.setVolume(volume)
+        val safeVolume = AudioFocusPolicy.sanitizedVolume(volume, fallback = 1f)
+        lastVolume = safeVolume
+        exclusiveUsb?.setVolume(safeVolume)
         // Exclusive usbdevfs never uses AudioTrack volume. Feature Unit
         // volume (when present) keeps PCM untouched. Mixer BIT_PERFECT
         // ignores AudioTrack volume, so the direct path pins platform gain
         // at unity and scales in software only when exclusive is off.
         val forwarded = if (usbExclusive || internalActive ||
             (bitPerfectRequested && bitPerfectAtConfigure && mixerIgnoresVolume && !processingActive)
-        ) 1f else volume
+        ) 1f else safeVolume
         enhancedDelegate.setVolume(forwarded)
         fallbackDelegate.setVolume(forwarded)
     }
@@ -1725,6 +1760,8 @@ class NativeProcessingAudioSink(
         eqCopySource = null
         eqCopy = null
         hapticsBuffer = null
+        pendingSkipUs.set(0L)
+        skipCheckedBuffer = null
         runCatching { hapticsAnalyzer?.reset() }
         runCatching { rhythmAnalyzer.reset() }
         usbOutput?.setFormat(null)
@@ -1916,9 +1953,15 @@ class NativeProcessingAudioSink(
         }
     }
 
+    private fun isSameCoreFormat(a: Format, b: Format): Boolean =
+        a.sampleRate == b.sampleRate &&
+            a.channelCount == b.channelCount &&
+            a.pcmEncoding == b.pcmEncoding &&
+            a.sampleMimeType == b.sampleMimeType
+
     private fun canProcess(format: Format): Boolean =
         format.sampleMimeType == MimeTypes.AUDIO_RAW &&
-            format.sampleRate > 0 &&
+            format.sampleRate in MIN_SAMPLE_RATE_HZ..MAX_SAMPLE_RATE_HZ &&
             format.channelCount in 1..2 &&
             format.pcmEncoding in SUPPORTED_ENCODINGS
 
@@ -1958,14 +2001,50 @@ class NativeProcessingAudioSink(
         nextOutputPresentationTimeUs = 0L
     }
 
-    private companion object {
+    internal companion object {
         const val TAG = "NativeAudioSink"
         const val MICROS_PER_SECOND = 1_000_000L
+        const val MIN_SAMPLE_RATE_HZ = 8_000
+        const val MAX_SAMPLE_RATE_HZ = 384_000
+        const val DENORMAL_THRESHOLD = 1.0e-20f
         val SUPPORTED_ENCODINGS = setOf(
             C.ENCODING_PCM_16BIT,
             C.ENCODING_PCM_24BIT,
             C.ENCODING_PCM_32BIT,
             C.ENCODING_PCM_FLOAT,
         )
+
+        /**
+         * Scrubs NaN, Inf, denormal, and wildly out-of-range Float32 samples
+         * in place so corrupt decoder or DSP output cannot poison AudioTrack
+         * or cause quiet/garbled lockups. Returns the number of scrubbed samples.
+         */
+        internal fun sanitizeFloatPcmBuffer(buffer: ByteBuffer): Int {
+            if (!buffer.hasRemaining() || buffer.isReadOnly) return 0
+            val start = buffer.position()
+            val end = buffer.limit()
+            val originalOrder = buffer.order()
+            var scrubbed = 0
+            try {
+                buffer.order(ByteOrder.nativeOrder())
+                var pos = start
+                while (pos + 3 < end) {
+                    val sample = buffer.getFloat(pos)
+                    if (!sample.isFinite() || kotlin.math.abs(sample) < DENORMAL_THRESHOLD) {
+                        if (sample != 0f) {
+                            buffer.putFloat(pos, 0f)
+                            scrubbed++
+                        }
+                    } else if (sample > 1f || sample < -1f) {
+                        buffer.putFloat(pos, sample.coerceIn(-1f, 1f))
+                        scrubbed++
+                    }
+                    pos += Float.SIZE_BYTES
+                }
+            } finally {
+                buffer.order(originalOrder)
+            }
+            return scrubbed
+        }
     }
 }

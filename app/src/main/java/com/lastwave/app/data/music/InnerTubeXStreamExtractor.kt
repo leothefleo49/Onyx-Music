@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import com.lastwave.app.data.ytmusic.YtMusicAuthManager
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -85,17 +86,24 @@ class InnerTubeXStreamExtractor @Inject constructor(
             val extractMethod = stack.extractor.javaClass.methods.firstOrNull {
                 it.name == "extract" && it.parameterCount == 6
             } ?: return@withContext null
-            val extracted = invokeSuspend(
-                receiver = stack.extractor,
-                method = extractMethod,
-                arguments = arrayOf(
-                    videoId,
-                    constrainedHints,
-                    excludedProfiles,
-                    audioQuality,
-                    UUID.randomUUID().toString().replace("-", ""),
-                ),
-            ) ?: return@withContext null
+            val extractBudgetMs = if (connection.isConnected) {
+                SIGNED_IN_EXTRACT_TIMEOUT_MS
+            } else {
+                ANONYMOUS_EXTRACT_TIMEOUT_MS
+            }
+            val extracted = withTimeoutOrNull(extractBudgetMs) {
+                invokeSuspend(
+                    receiver = stack.extractor,
+                    method = extractMethod,
+                    arguments = arrayOf(
+                        videoId,
+                        constrainedHints,
+                        excludedProfiles,
+                        audioQuality,
+                        UUID.randomUUID().toString().replace("-", ""),
+                    ),
+                )
+            } ?: return@withContext null
             extracted.toAudioStream(videoId, authScope)?.takeIf { it.meetsBitrateLimit(maxBitrateBps) }
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
@@ -647,6 +655,8 @@ class InnerTubeXStreamExtractor @Inject constructor(
     private companion object {
         const val TAG = "InnerTubeXStreamExtractor"
         const val UNKNOWN_STREAM_EXPIRY_TTL_MS = 5 * 60 * 1_000L
+        const val ANONYMOUS_EXTRACT_TIMEOUT_MS = 4_500L
+        const val SIGNED_IN_EXTRACT_TIMEOUT_MS = 8_500L
         /** Long enough to outlast the song it failed on: at 60 s a client that
          *  died a minute in was allowed straight back for the retry. */
         const val CLIENT_FAILURE_COOLDOWN_MS = 5 * 60_000L

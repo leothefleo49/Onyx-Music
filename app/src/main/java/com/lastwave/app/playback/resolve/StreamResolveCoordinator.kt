@@ -5,19 +5,28 @@ import kotlinx.coroutines.CoroutineScope
 import java.io.File
 
 /**
- * Playback resolver always wins. Prefetch is cancelled when the user selects
- * a track and is limited to a single next-track job.
+ * Playback resolver always wins. Prefetch maintains a bounded multi-track
+ * lookahead window (up to 3 tracks) and cancels non-matching jobs without
+ * blocking when the user selects or skips tracks.
  */
 class StreamResolveCoordinator(
     cacheDir: File,
     private val scope: CoroutineScope,
     private val extract: suspend (youtubeVideoId: String) -> YouTubeAudioStream,
     private val logger: ResolverLogger = AndroidResolverLogger,
+    negativeCacheTtlMs: Long = PrefetchResolver.DEFAULT_NEGATIVE_CACHE_TTL_MS,
+    nowMs: () -> Long = System::currentTimeMillis,
+    extractionTimeoutMs: Long = StreamExtraction.DEFAULT_FLIGHT_TIMEOUT_MS,
 ) {
-    val cache = PlaybackStreamCache(cacheDir)
+    val cache = PlaybackStreamCache(cacheDir, nowMs = nowMs)
     val playback = PlaybackResolver(cache, logger)
-    val prefetch = PrefetchResolver(cache, logger)
-    private val extraction = StreamExtraction(scope, cache, extract)
+    val prefetch = PrefetchResolver(
+        cache = cache,
+        logger = logger,
+        negativeCacheTtlMs = negativeCacheTtlMs,
+        nowMs = nowMs,
+    )
+    private val extraction = StreamExtraction(scope, cache, extract, extractionTimeoutMs)
 
     fun cancelAll(reason: String) {
         val previous = playback.requested
@@ -31,6 +40,7 @@ class StreamResolveCoordinator(
      * Joins an in-flight resolve of the same identity. Any other identity is stale.
      */
     suspend fun resolvePlayback(identity: TrackIdentity, durationMs: Long?): StreamCache {
+        prefetch.clearNegativeCache(identity.youtubeVideoId)
         val active = playback.requested
         val token = playback.claim(identity)
         if (active == null) prefetch.cancel()
@@ -64,6 +74,23 @@ class StreamResolveCoordinator(
             activePlayback = playback::requested,
             extract = extraction::await,
             onReady = onReady,
+        )
+    }
+
+    /**
+     * Schedules a bounded 2-3 track lookahead prefetch window. Any previously
+     * queued prefetch outside [items] is cancelled non-blockingly.
+     */
+    fun prefetchWindow(items: List<PrefetchItem>) {
+        if (items.isEmpty()) {
+            prefetch.cancel()
+            return
+        }
+        prefetch.enqueueWindow(
+            scope = scope,
+            items = items,
+            activePlayback = playback::requested,
+            extract = extraction::await,
         )
     }
 }
