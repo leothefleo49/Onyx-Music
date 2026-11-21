@@ -557,3 +557,42 @@ internal fun MusicPlayer.updateSystemEffectsState() {
             "effective=$effective pref=$systemEffectsModePref bypassRoute=$bypassRoute",
         )
     }
+
+/**
+ * Arms the standby deck on demand (even before the 25% look-ahead threshold) and triggers
+ * a live Manual DJ Remix Studio transition preview with [override].
+ */
+@MainThread
+fun MusicPlayer.previewManualDjTransition(
+    override: com.lastwave.app.playback.automix.data.TransitionOverrideEntity,
+): Boolean {
+    if (!playerDelegate.isInitialized()) return false
+    val nextIndex = player.nextMediaItemIndex
+    if (nextIndex == C.INDEX_UNSET || nextIndex !in 0 until player.mediaItemCount) {
+        return false
+    }
+    val nextItem = player.getMediaItemAt(nextIndex)
+    val isNextPlaceholder = nextItem.localConfiguration?.uri?.scheme == "lastwave"
+    if (isNextPlaceholder) {
+        preloadNextTrack(nextIndex, nextItem.toPlayableTrack())
+    } else if (!hotSwapActive) {
+        armCrossfadeStandby(nextIndex, nextItem)
+    }
+    val outDuration = player.duration.takeIf { it > 0L } ?: _state.value.durationMs
+    val inDuration = currentStandby()?.duration?.takeIf { it > 0L }
+        ?: _state.value.queue.getOrNull(nextIndex)?.durationMs
+    autoMixCoordinator.get().triggerPreviewTransition(
+        override = override,
+        outgoingDurationMs = outDuration,
+        incomingDurationMs = inDuration,
+    )
+    return true
+}
+
+/**
+ * Convenience accessor to switch between Classic, Improved Smart, and Deep Curated AutoMix tiers.
+ */
+fun MusicPlayer.setAutoMixTier(tier: com.lastwave.app.playback.automix.api.AutoMixTier) {
+    autoMixCoordinator.get().setActiveTier(tier)
+}
+

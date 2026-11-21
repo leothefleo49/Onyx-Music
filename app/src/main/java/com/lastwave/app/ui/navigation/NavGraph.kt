@@ -446,6 +446,17 @@ fun LastWaveNavHost(
             }
         }
 
+        composable(Screen.DeepMixBuilder.route) { backStackEntry ->
+            PredictiveBackScreen(onBack = { navController.safePopBackStack(backStackEntry) }) {
+                com.lastwave.app.ui.player.automix.DeepMixBuilderScreen(
+                    onBack = { navController.safePopBackStack(backStackEntry) },
+                    onOpenPlaylist = { playlistId ->
+                        navController.navigate(Screen.PlaylistDetail.createRoute(playlistId))
+                    },
+                )
+            }
+        }
+
         composable(Screen.Settings.route) { backStackEntry ->
             PredictiveBackScreen(onBack = { navController.safePopBackStack(backStackEntry) }) {
                 SettingsScreen(

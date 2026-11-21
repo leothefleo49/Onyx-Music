@@ -42,12 +42,16 @@ data class DeckBlendTelemetry(
     val blendProgress: Float = 0.0f, // 0.0f..1.0f clamped strictly to Material 3 range
     val activeTransitionStyle: TransitionStyle = TransitionStyle.PERCEPTUAL_FADE,
     val syncedBpm: Float? = null,
-    val harmonicKeyPair: String? = null, // e.g. "8A â†’ 9A"
+    val harmonicKeyPair: String? = null, // e.g. "8A -> 9A"
     val spliceStartPositionMs: Long = 0L,
-    val spliceDurationMs: Long = 5_000L, // 1,000ms up to 30,000ms
+    val spliceDurationMs: Long = 5_000L, // 1,000ms up to 32,000ms
     val incomingTrackPreview: TrackChromeSummary? = null,
     val loopBarsActive: Int? = null,
     val isVocalProtected: Boolean = true,
+    val activeTier: AutoMixTier = AutoMixTier.CLASSIC,
+    val activeCurveType: CrossfadeCurveType = CrossfadeCurveType.EQUAL_POWER,
+    val activeTempoRatio: Float = 1.0f,
+    val isManualOverrideActive: Boolean = false,
 ) {
     val isBlendingActive: Boolean
         get() = phase == BlendPhase.BLENDING || phase == BlendPhase.LOOP_LOCKED

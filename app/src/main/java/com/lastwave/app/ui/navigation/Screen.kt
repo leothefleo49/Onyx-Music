@@ -19,6 +19,7 @@ sealed class Screen(val route: String) {
     // Pushed screens, slide-in from the right (matches PAGE_TRANSITIONS in nav.js)
     data object Discover : Screen("discover")
     data object Genres : Screen("genres")
+    data object DeepMixBuilder : Screen("deep_mix_builder")
     data object ListeningStats : Screen("listening_stats")
     data object Search : Screen("search?q={q}") {
         fun createRoute(query: String = "") = if (query.isBlank()) "search" else "search?q=${encodeArg(query)}"

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 3-Tier AutoMix Selector -->
+    <string name="automix_tier_section_title">AutoMix Engine</string>
+    <string name="automix_tier_classic_title">Classic</string>
+    <string name="automix_tier_classic_desc">Original dual-deck AutoMix behavior</string>
+    <string name="automix_tier_smart_title">Smart Beat</string>
+    <string name="automix_tier_smart_desc">Beat-aligned, LUFS-matched, vocal-safe blends with +-6% tempo bridge</string>
+    <string name="automix_tier_deep_title">Deep Curated</string>
+    <string name="automix_tier_deep_desc">Harmonic and BPM sequenced playlists with per-edge transition recipes</string>
+
+    <!-- Manual DJ Remix Studio -->
+    <string name="dj_studio_title">Manual DJ Remix Studio</string>
+    <string name="dj_studio_subtitle">Tune live transitions and per-song mix recipes</string>
+    <string name="dj_studio_open_deep_builder">Build Deep Transition Mix</string>
+    <string name="dj_studio_no_next_track">Queue another song to customize and preview a transition</string>
+    <string name="dj_studio_tempo_match">Tempo &amp; BPM Match</string>
+    <string name="dj_studio_tempo_ratio">Tempo Ratio</string>
+    <string name="dj_studio_transition_duration">Transition Duration</string>
+    <string name="dj_studio_crossfade_curve">Crossfade Curve</string>
+    <string name="dj_studio_curve_linear">Linear</string>
+    <string name="dj_studio_curve_equal_power">Equal Power</string>
+    <string name="dj_studio_curve_exponential">Exponential</string>
+    <string name="dj_studio_curve_s_curve">S-Curve</string>
+    <string name="dj_studio_curve_cut_in">Cut-In</string>
+    <string name="dj_studio_eq_swap_title">3-Band EQ Swap</string>
+    <string name="dj_studio_eq_low">Low (120 Hz)</string>
+    <string name="dj_studio_eq_mid">Mid</string>
+    <string name="dj_studio_eq_high">High (3.8 kHz)</string>
+    <string name="dj_studio_filter_sweep">Spectral Filter Sweep</string>
+    <string name="dj_studio_cue_points">Cue Trimmers</string>
+    <string name="dj_studio_cue_out">Cue-Out Start</string>
+    <string name="dj_studio_cue_in">Cue-In Trim</string>
+    <string name="dj_studio_preview_button">Preview Transition</string>
+    <string name="dj_studio_save_button">Save Recipe</string>
+    <string name="dj_studio_reset_button">Reset</string>
+    <string name="dj_studio_saved_feedback">Transition recipe saved</string>
+    <string name="dj_studio_preview_started">Previewing transition live</string>
+    <string name="dj_studio_preview_unavailable">Play a track with a next song in queue to preview</string>
+
+    <!-- Deep Transition Mix Builder -->
+    <string name="deep_mix_title">Deep Transition Mix</string>
+    <string name="deep_mix_subtitle">Insanely Good Transitions</string>
+    <string name="deep_mix_back_cd">Navigate back</string>
+    <string name="deep_mix_playlist_name_label">Playlist Title</string>
+    <string name="deep_mix_source_section">Track Source Policy</string>
+    <string name="deep_mix_source_lean_title">Lean Liked &amp; Listened</string>
+    <string name="deep_mix_source_lean_desc">Prioritizes your liked and most-played songs blended with seamless matches</string>
+    <string name="deep_mix_source_neutral_title">Neutral / Discover</string>
+    <string name="deep_mix_source_neutral_desc">Explores fresh tracks that transition cleanly together</string>
+    <string name="deep_mix_source_strict_title">Strictly Liked &amp; Playlists</string>
+    <string name="deep_mix_source_strict_desc">Uses only songs already in your Liked Songs or saved playlists</string>
+    <string name="deep_mix_genre_section">Genre Focus</string>
+    <string name="deep_mix_genre_auto">Auto from Taste</string>
+    <string name="deep_mix_genre_none">No Preference</string>
+    <string name="deep_mix_genre_selected">Select Genres</string>
+    <string name="deep_mix_custom_genre_hint">Add custom genre</string>
+    <string name="deep_mix_track_count_section">Mix Length</string>
+    <string name="deep_mix_build_button">Build Deep Transition Mix</string>
+    <string name="deep_mix_cancel_button">Cancel</string>
+    <string name="deep_mix_play_now">Play Mix Now</string>
+    <string name="deep_mix_open_playlist">Open Playlist</string>
+    <string name="deep_mix_edges_header">Sequenced Transition Map</string>
+</resources>
