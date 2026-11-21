@@ -450,6 +450,7 @@ fun SettingsScreen(
     var showEqSheet by remember { mutableStateOf(false) }
     var showAutoEq by remember { mutableStateOf(false) }
     var showSeekbarStyleDialog by remember { mutableStateOf(false) }
+    var showPreviousNavDialog by remember { mutableStateOf(false) }
     var showLyricsProviderDialog by remember { mutableStateOf(false) }
     var showLyricsSettingsSheet by remember { mutableStateOf(false) }
     var showLyricsOffsetDialog by remember { mutableStateOf(false) }
@@ -948,6 +949,24 @@ fun SettingsScreen(
                                 } ,
                                 checked = misc.autoplaySimilarEnabled,
                                 onCheckedChange = viewModel::setAutoplaySimilarEnabled,
+                                position = position,
+                            )
+                        }
+                        add { position ->
+                            SettingsActionCard(
+                                icon = Icons.Filled.Replay,
+                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                title = stringResource(R.string.settings_previous_navigation),
+                                subtitle = when (misc.previousNavigationMode) {
+                                    com.lastwave.app.data.local.PreviousNavigationMode.ASK ->
+                                        stringResource(R.string.settings_previous_navigation_ask)
+                                    com.lastwave.app.data.local.PreviousNavigationMode.QUEUE ->
+                                        stringResource(R.string.settings_previous_navigation_queue)
+                                    com.lastwave.app.data.local.PreviousNavigationMode.CONTEXT ->
+                                        stringResource(R.string.settings_previous_navigation_context)
+                                },
+                                onClick = { showPreviousNavDialog = true },
                                 position = position,
                             )
                         }
@@ -2840,6 +2859,18 @@ fun SettingsScreen(
                 showSeekbarStyleDialog = false
             },
             onDismiss = { showSeekbarStyleDialog = false },
+        )
+    }
+
+    // -- Previous button: how a played user-queued song is resolved --
+    if (showPreviousNavDialog) {
+        PreviousNavigationDialog(
+            current = misc.previousNavigationMode,
+            onSelect = {
+                viewModel.setPreviousNavigationMode(it)
+                showPreviousNavDialog = false
+            },
+            onDismiss = { showPreviousNavDialog = false },
         )
     }
 

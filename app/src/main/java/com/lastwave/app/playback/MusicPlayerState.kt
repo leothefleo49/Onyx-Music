@@ -214,6 +214,8 @@ data class MusicPlayerState(
     val bitDepth: Int? = null,
     val samplingRateKHz: Double? = null,
     val sleepTimerRemainingMs: Long? = null,
+    /** Sleep timer is armed for the end of the queue instead of a clock deadline. */
+    val sleepTimerEndOfQueue: Boolean = false,
     val error: String? = null,
     val isJamActive: Boolean = false,
     val deckBlendTelemetry: com.lastwave.app.playback.automix.api.DeckBlendTelemetry = com.lastwave.app.playback.automix.api.DeckBlendTelemetry.IDLE,

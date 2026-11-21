@@ -553,6 +553,18 @@ fun TrackContextMenuSheet(
                         }
                     }
                     Spacer(Modifier.height(16.dp))
+                    val endOfQueueStats = remember(showTimerDialog) {
+                        val s = musicPlayer.state.value
+                        com.lastwave.app.ui.player.QueueStatsFormatter
+                            .formatQueueStats(s.queue.drop((s.currentIndex + 1).coerceAtLeast(0)))
+                    }
+                    TextButton(
+                        onClick = {
+                            musicPlayer.setSleepTimerEndOfQueue()
+                            showTimerDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.menu_timer_end_of_queue, endOfQueueStats)) }
                     listOf(0, 15, 30, 60).forEach { minutes ->
                         TextButton(
                             onClick = {

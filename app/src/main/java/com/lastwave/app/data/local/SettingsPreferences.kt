@@ -121,6 +121,21 @@ enum class SeekbarStyle(val id: String) {
     }
 }
 
+/**
+ * How Previous resolves a played user-queued track in linear order:
+ * ask each time (default), always replay the queued song, or always keep
+ * original context order.
+ */
+enum class PreviousNavigationMode(val id: String) {
+    ASK("ask"),
+    QUEUE("queue"),
+    CONTEXT("context");
+
+    companion object {
+        fun fromId(id: String?): PreviousNavigationMode = entries.firstOrNull { it.id == id } ?: ASK
+    }
+}
+
 /** How a track reaches the selected streaming quality. Downgrades are always seamless. */
 enum class HiResStart(val id: String, val title: String, val subtitle: String) {
     FAST("fast", "Fast start", "Start on Opus, then switch to your quality when ready"),
@@ -209,6 +224,8 @@ data class MiscSettings(
     val crossfadeEnabled: Boolean = false,
     /** When the queue runs out, keep playing similar songs (radio). Off = stop at the end. */
     val autoplaySimilarEnabled: Boolean = true,
+    /** How Previous resolves a played user-queued track (ask / queue / context). */
+    val previousNavigationMode: PreviousNavigationMode = PreviousNavigationMode.ASK,
     /** Crossfade length in seconds; kept within the native settings slider range. */
     val crossfadeSeconds: Int = 5,
     /** Player seekbar visual style (Default, Wavy, Waveform). */
@@ -473,6 +490,7 @@ class SettingsPreferences @Inject constructor(
         val APP_VOLUME_CAST_FIX_DONE = booleanPreferencesKey("lw_app_volume_cast_fix_done")
         val CROSSFADE_ENABLED = booleanPreferencesKey("lw_crossfade_enabled")
         val AUTOPLAY_SIMILAR_ENABLED = booleanPreferencesKey("lw_autoplay_similar_enabled")
+        val PREVIOUS_NAVIGATION_MODE = stringPreferencesKey("lw_previous_navigation_mode")
         val CROSSFADE_SECONDS = intPreferencesKey("lw_crossfade_seconds")
         val LYRICS_STYLE = stringPreferencesKey("lw_lyrics_style")
         val SEEKBAR_STYLE = stringPreferencesKey("lw_seekbar_style")
@@ -597,6 +615,7 @@ class SettingsPreferences @Inject constructor(
                 lyricsCentered = p.readSafely(Keys.LYRICS_CENTERED) ?: false,
                 crossfadeEnabled = p.readSafely(Keys.CROSSFADE_ENABLED) ?: false,
                 autoplaySimilarEnabled = p.readSafely(Keys.AUTOPLAY_SIMILAR_ENABLED) ?: true,
+                previousNavigationMode = PreviousNavigationMode.fromId(p.readSafely(Keys.PREVIOUS_NAVIGATION_MODE)),
                 crossfadeSeconds = (p.readSafely(Keys.CROSSFADE_SECONDS) ?: 5).coerceIn(1, 12),
                 lyricsStyle = LyricsStyle.fromId(p.readSafely(Keys.LYRICS_STYLE)),
                 seekbarStyle = SeekbarStyle.fromId(p.readSafely(Keys.SEEKBAR_STYLE), p.readSafely(Keys.WAVY_SEEKBAR_ENABLED)),
@@ -1034,6 +1053,10 @@ class SettingsPreferences @Inject constructor(
 
     suspend fun setAutoplaySimilarEnabled(enabled: Boolean) {
         dataStore.edit { it[Keys.AUTOPLAY_SIMILAR_ENABLED] = enabled }
+    }
+
+    suspend fun setPreviousNavigationMode(mode: PreviousNavigationMode) {
+        dataStore.edit { it[Keys.PREVIOUS_NAVIGATION_MODE] = mode.id }
     }
 
     suspend fun setCrossfadeEnabled(enabled: Boolean) {
