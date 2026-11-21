@@ -100,3 +100,13 @@ This file is an append-only record of every user message sent across every sessi
 - Requests starting as a private GitHub repository (`leothefleo49/Onyx-Music`) with full GPL-3.0 compliance preserved so it can be made public later.
 - Adds requirement for Spotify silent device mirroring / Connect integration so tracks played in Onyx Music (regardless of source) match Spotify catalog tracks and play silently on Spotify for accurate Spotify Wrapped & history, falling back gracefully to local-only tracking for non-catalog tracks.
 - Reiterates preserving all audiophile/lossless features, sound customization, Apple Music-style and alternative lyrics, Liquid Glass UI, and high-craft layout alongside all requested upgrades.
+
+---
+
+### Message 4
+> Also make sure it has an app version I can get on my VR my quest three. Um Yeah
+
+#### Summary — Message 4
+- Add Meta Quest 3 VR support with a Horizon OS 2D resizable panel layout and controller/hand-tracking friendly navigation and controls.
+- Ensure zero hard Google Play Services dependencies and reliable background audio playback on Quest 3.
+- Produce a dedicated sideloadable Quest 3 APK build.

@@ -15,6 +15,7 @@ import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import com.lastwave.app.data.local.ScrobblerPreferences
 import com.lastwave.app.data.local.ScrobblerSettings
+import com.lastwave.app.data.spotify.mirror.SpotifySilentMirrorManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +42,7 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
     @Inject lateinit var syncEngine: ScrobbleSyncEngine
     @Inject lateinit var scrobblerPreferences: ScrobblerPreferences
     @Inject lateinit var appFilterDao: ScrobbleAppFilterDao
+    @Inject lateinit var spotifySilentMirrorManager: SpotifySilentMirrorManager
 
     private val serviceScope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default +
@@ -197,6 +199,10 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
 
     private fun isPackageAllowed(pkg: String): Boolean {
         if (pkg == packageName || pkg.isBlank()) return false
+        // Avoid double-scrobbling Spotify while Onyx is silently mirroring playback to it.
+        if (pkg in SPOTIFY_PACKAGES && spotifySilentMirrorManager.isMirroringActive.value) {
+            return false
+        }
         val current = settings
         if (!current.enabled) return false
         if (pkg in current.blockedPackages) return false
@@ -214,7 +220,9 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
     private fun inspectController(controller: MediaController) {
         val pkg = controller.packageName
         if (!isPackageAllowed(pkg)) {
-            activeTracked.remove(pkg)
+            if (activeTracked.remove(pkg) != null) {
+                syncEngine.clearNowPlaying(pkg)
+            }
             return
         }
 
@@ -373,6 +381,7 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
         private const val TAG = "OnyxScrobblerService"
         private const val TICK_INTERVAL_MS = 1_500L
         private const val MAX_TICK_DELTA_MS = 5_000L
+        private val SPOTIFY_PACKAGES = setOf("com.spotify.music", "com.spotify.lite")
 
         @Volatile
         var isConnectedFlag: Boolean = false
