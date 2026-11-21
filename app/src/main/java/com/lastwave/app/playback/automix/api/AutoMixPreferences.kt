@@ -17,6 +17,12 @@ enum class TransitionDurationMode {
     MANUAL,
 }
 
+enum class AutoMixTier {
+    CLASSIC,
+    IMPROVED_SMART,
+    DEEP_CURATED_MIX,
+}
+
 enum class ThermalProfile {
     ECO,
     BALANCED,
@@ -25,8 +31,9 @@ enum class ThermalProfile {
 
 data class AutoMixSettings(
     val autoMixEnabled: Boolean = false,
+    val tier: AutoMixTier = AutoMixTier.CLASSIC,
     val durationMode: TransitionDurationMode = TransitionDurationMode.AUTO,
-    val targetDurationSeconds: Int = 12, // 12s..30s, default 12s
+    val targetDurationSeconds: Int = 12, // 4s..32s, default 12s
     val spectralFilterSweepsEnabled: Boolean = true,
     val thermalProfile: ThermalProfile = ThermalProfile.BALANCED,
 )
@@ -40,6 +47,7 @@ class AutoMixPreferences @Inject constructor(
     private object Keys {
         val ENABLED = booleanPreferencesKey("automix_enabled")
         val LEGACY_ENABLED = booleanPreferencesKey("harmonic_flow_enabled")
+        val TIER = stringPreferencesKey("automix_tier")
         val DURATION_MODE = stringPreferencesKey("automix_duration_mode")
         val TARGET_SECONDS = intPreferencesKey("automix_target_seconds")
         val SPECTRAL_SWEEPS = booleanPreferencesKey("automix_spectral_sweeps")
@@ -47,6 +55,10 @@ class AutoMixPreferences @Inject constructor(
     }
 
     val settings: Flow<AutoMixSettings> = context.autoMixDataStore.data.map { prefs ->
+        val tier = runCatching {
+            AutoMixTier.valueOf(prefs[Keys.TIER] ?: AutoMixTier.CLASSIC.name)
+        }.getOrDefault(AutoMixTier.CLASSIC)
+
         val mode = runCatching {
             TransitionDurationMode.valueOf(prefs[Keys.DURATION_MODE] ?: TransitionDurationMode.AUTO.name)
         }.getOrDefault(TransitionDurationMode.AUTO)
@@ -59,8 +71,9 @@ class AutoMixPreferences @Inject constructor(
 
         AutoMixSettings(
             autoMixEnabled = isEnabled,
+            tier = tier,
             durationMode = mode,
-            targetDurationSeconds = (prefs[Keys.TARGET_SECONDS] ?: 12).coerceIn(12, 30),
+            targetDurationSeconds = (prefs[Keys.TARGET_SECONDS] ?: 12).coerceIn(4, 32),
             spectralFilterSweepsEnabled = prefs[Keys.SPECTRAL_SWEEPS] ?: true,
             thermalProfile = profile,
         )
@@ -73,12 +86,16 @@ class AutoMixPreferences @Inject constructor(
         }
     }
 
+    suspend fun setAutoMixTier(tier: AutoMixTier) {
+        context.autoMixDataStore.edit { it[Keys.TIER] = tier.name }
+    }
+
     suspend fun setDurationMode(mode: TransitionDurationMode) {
         context.autoMixDataStore.edit { it[Keys.DURATION_MODE] = mode.name }
     }
 
     suspend fun setTargetDurationSeconds(seconds: Int) {
-        context.autoMixDataStore.edit { it[Keys.TARGET_SECONDS] = seconds.coerceIn(12, 30) }
+        context.autoMixDataStore.edit { it[Keys.TARGET_SECONDS] = seconds.coerceIn(4, 32) }
     }
 
     suspend fun setSpectralFilterSweepsEnabled(enabled: Boolean) {

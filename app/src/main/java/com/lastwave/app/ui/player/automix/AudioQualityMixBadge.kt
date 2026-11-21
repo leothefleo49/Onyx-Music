@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lastwave.app.playback.automix.api.AutoMixTier
 import com.lastwave.app.playback.automix.api.BlendPhase
 import com.lastwave.app.playback.automix.api.DeckBlendTelemetry
 
@@ -55,8 +56,14 @@ fun AudioQualityMixBadge(
         when (phase) {
             BlendPhase.BLENDING, BlendPhase.LOOP_LOCKED -> {
                 val bpmText = telemetry.syncedBpm?.let { "${it.toInt()} BPM" } ?: ""
+                val modeLabel = when {
+                    telemetry.isManualOverrideActive -> "DJ Mix"
+                    telemetry.activeTier == AutoMixTier.DEEP_CURATED_MIX -> "DeepMix"
+                    telemetry.activeTier == AutoMixTier.IMPROVED_SMART -> "SmartMix"
+                    else -> "AutoMix"
+                }
                 val mixingText = buildString {
-                    append("AutoMix")
+                    append(modeLabel)
                     if (bpmText.isNotEmpty()) append(" \u2022 ").append(bpmText)
                 }
 
