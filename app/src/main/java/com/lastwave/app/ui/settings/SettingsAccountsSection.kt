@@ -337,6 +337,11 @@ internal fun SpotifyAccountRow(
     position: GroupPosition,
     isHighlighted: Boolean = false,
 ) {
+    val mirrorViewModel: SpotifyMirrorViewModel = hiltViewModel()
+    val mirrorState by mirrorViewModel.mirrorState.collectAsStateWithLifecycle()
+    val mirrorSettings by mirrorViewModel.settings.collectAsStateWithLifecycle()
+    var showMirrorSheet by remember { mutableStateOf(false) }
+
     val shape = groupShape(position)
     Card(
         onClick = onClick,
@@ -350,46 +355,169 @@ internal fun SpotifyAccountRow(
             .animateContentSize()
             .settingHighlightGlow(isHighlighted = isHighlighted, shape = shape),
     ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconBadge(
+                    QualityGlyphs.Spotify,
+                    MaterialTheme.colorScheme.primaryContainer,
+                    MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Spotify Account",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "Connected (sp_dc)",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "Tap to manage session",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                FilledTonalIconButton(
+                    onClick = onDisconnect,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
+                ) {
+                    Icon(Icons.Filled.Logout, contentDescription = stringResource(R.string.set_disconnect_cd))
+                }
+            }
+
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showMirrorSheet = true }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.SpeakerPhone,
+                    contentDescription = null,
+                    tint = if (mirrorSettings.enabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.spotify_mirror_title),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = mirrorStatusHeadline(mirrorState),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    imageVector = Icons.Filled.ChevronRight,
+                    contentDescription = stringResource(R.string.spotify_mirror_open_cd),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+    }
+
+    if (showMirrorSheet) {
+        SpotifyMirrorSettingsSheet(
+            onDismiss = { showMirrorSheet = false },
+            viewModel = mirrorViewModel,
+        )
+    }
+}
+
+@Composable
+internal fun SpotifyMirrorSettingsCard(
+    position: GroupPosition = GroupPosition.SINGLE,
+    isHighlighted: Boolean = false,
+) {
+    val mirrorViewModel: SpotifyMirrorViewModel = hiltViewModel()
+    val mirrorState by mirrorViewModel.mirrorState.collectAsStateWithLifecycle()
+    val mirrorSettings by mirrorViewModel.settings.collectAsStateWithLifecycle()
+    var showMirrorSheet by remember { mutableStateOf(false) }
+
+    val shape = groupShape(position)
+    Card(
+        onClick = { showMirrorSheet = true },
+        shape = shape,
+        colors = CardDefaults.cardColors(
+            containerColor = if (isHighlighted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize()
+            .settingHighlightGlow(isHighlighted = isHighlighted, shape = shape),
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconBadge(
-                QualityGlyphs.Spotify,
-                MaterialTheme.colorScheme.primaryContainer,
-                MaterialTheme.colorScheme.primary,
+                Icons.Filled.SpeakerPhone,
+                if (mirrorSettings.enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+                if (mirrorSettings.enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    "Spotify Account",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Connected (sp_dc)",
+                    text = stringResource(R.string.spotify_mirror_title),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "Tap to manage session",
+                    text = mirrorStatusHeadline(mirrorState),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Spacer(Modifier.width(8.dp))
-            FilledTonalIconButton(
-                onClick = onDisconnect,
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-            ) {
-                Icon(Icons.Filled.Logout, contentDescription = stringResource(R.string.set_disconnect_cd))
-            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = stringResource(R.string.spotify_mirror_open_cd),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
+    }
+
+    if (showMirrorSheet) {
+        SpotifyMirrorSettingsSheet(
+            onDismiss = { showMirrorSheet = false },
+            viewModel = mirrorViewModel,
+        )
     }
 }
 

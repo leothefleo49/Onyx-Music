@@ -54,6 +54,16 @@ class SpotifyPreferences @Inject constructor(
         .map { it.readSafely(PREFER_SPOTIFY_CANVAS_KEY) ?: true }
 
     val isConnected: Flow<Boolean> = spdc.map { !it.isNullOrBlank() }
+    /** Whether the current Spotify session has confirmed Connect/streaming (Premium) access. */
+    val streamingScopeGranted: Flow<Boolean> = dataStore.data
+        .recoverPreferences("SpotifyPreferences")
+        .map { it.readSafely(STREAMING_SCOPE_GRANTED_KEY) ?: false }
+
+    /** Detected Spotify subscription tier ("premium" / "free") if known. */
+    val accountProduct: Flow<String?> = dataStore.data
+        .recoverPreferences("SpotifyPreferences")
+        .map { it.readSafely(ACCOUNT_PRODUCT_KEY)?.takeIf { s -> s.isNotBlank() } }
+
     /** The per-install device id the client-token profile presents. */
     val deviceId: Flow<String> = dataStore.data
         .recoverPreferences("SpotifyPreferences")
@@ -122,6 +132,22 @@ class SpotifyPreferences @Inject constructor(
         }
     }
 
+    suspend fun setStreamingScopeGranted(granted: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[STREAMING_SCOPE_GRANTED_KEY] = granted
+        }
+    }
+
+    suspend fun saveAccountProduct(product: String?) {
+        dataStore.edit { prefs ->
+            if (product.isNullOrBlank()) {
+                prefs.remove(ACCOUNT_PRODUCT_KEY)
+            } else {
+                prefs[ACCOUNT_PRODUCT_KEY] = product.trim().lowercase()
+            }
+        }
+    }
+
 
     suspend fun clearConnection() {
         dataStore.edit { prefs ->
@@ -130,6 +156,8 @@ class SpotifyPreferences @Inject constructor(
             prefs.remove(PERSONAL_TOKEN_EXPIRES_KEY)
             prefs.remove(CLIENT_TOKEN_KEY)
             prefs.remove(CLIENT_TOKEN_EXPIRES_KEY)
+            prefs.remove(STREAMING_SCOPE_GRANTED_KEY)
+            prefs.remove(ACCOUNT_PRODUCT_KEY)
         }
     }
 
@@ -142,5 +170,7 @@ class SpotifyPreferences @Inject constructor(
         val CANVAS_ENABLED_KEY = booleanPreferencesKey("spotify_canvas_enabled")
         val PREFER_SPOTIFY_CANVAS_KEY = booleanPreferencesKey("spotify_prefer_canvas")
         val DEVICE_ID_KEY = stringPreferencesKey("spotify_device_id")
+        val STREAMING_SCOPE_GRANTED_KEY = booleanPreferencesKey("spotify_streaming_scope_granted")
+        val ACCOUNT_PRODUCT_KEY = stringPreferencesKey("spotify_account_product")
     }
 }
