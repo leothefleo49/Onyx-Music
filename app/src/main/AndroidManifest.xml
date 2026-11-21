@@ -36,6 +36,24 @@
         <package android:name="com.discord.canary" />
         <package android:name="com.discord.ptb" />
         <package android:name="com.discord.debug" />
+        <!-- Popular external music players for Pano-style system scrobbler controls -->
+        <package android:name="com.spotify.music" />
+        <package android:name="com.apple.android.music" />
+        <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="com.soundcloud.android" />
+        <package android:name="com.aspiro.tidal" />
+        <package android:name="com.qobuz.music" />
+        <package android:name="tv.plex.labs.plexamp" />
+        <package android:name="com.maxmpz.audioplayer" />
+        <package android:name="com.amazon.mp3" />
+        <package android:name="deezer.android.app" />
+        <package android:name="com.bandcamp.android" />
+        <package android:name="org.videolan.vlc" />
+        <package android:name="in.krosbits.musicolet" />
+        <package android:name="com.neutroncode.mp" />
+        <package android:name="com.hiby.music" />
+        <package android:name="com.foobar2000.foobar2000" />
+        <package android:name="app.symfonik.music.player" />
     </queries>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
@@ -272,6 +290,17 @@
             <!-- OriginOS (vivo / iQOO) music card: heart, loop mode and lists. -->
             <intent-filter>
                 <action android:name="com.vivo.musicwidgetmix.support.service" />
+            </intent-filter>
+        </service>
+
+        <!-- Built-in Pano-style system-wide Notification Listener scrobbler -->
+        <service
+            android:name=".data.scrobble.OnyxNotificationScrobblerService"
+            android:exported="true"
+            android:label="@string/scrobbler_service_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
 

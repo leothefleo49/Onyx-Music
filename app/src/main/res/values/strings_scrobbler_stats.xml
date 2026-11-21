@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="scrobbler_service_label">Onyx Music Scrobbler</string>
+    <string name="stats_hub_title">Listening Stats</string>
+    <string name="stats_open_history_cd">Open scrobble history</string>
+    <string name="stats_open_scrobbler_cd">Open scrobbler controls</string>
+    <string name="stats_refresh_cd">Refresh stats</string>
+    <string name="scrobbler_settings_title">Scrobbler Controls</string>
+    <string name="scrobbler_permission_granted">Notification access granted</string>
+    <string name="scrobbler_permission_missing">Notification access required</string>
+    <string name="scrobbler_permission_subtitle">Required by Android to detect now-playing tracks from Spotify, Apple Music, YouTube Music, and other players.</string>
+    <string name="scrobbler_open_android_settings">Open Settings</string>
+    <string name="scrobbler_export_json">Export JSON</string>
+    <string name="scrobbler_export_csv">Export CSV</string>
+    <string name="scrobbler_import_history">Import History</string>
+    <string name="scrobbler_sync_now">Sync Queue</string>
+    <string name="scrobbler_pull_loved">Pull Loved</string>
+    <string name="scrobbler_add_rule">Add Auto-Fix Rule</string>
+    <string name="scrobbler_save_auto_rule">Save as Pano auto-fix rule</string>
+    <string name="scrobbler_apply_retroactive">Apply to matching past scrobbles</string>
+</resources>

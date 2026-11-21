@@ -2,34 +2,136 @@ package com.lastwave.app.data.repository
 
 import com.lastwave.app.data.local.db.DownloadedTrackDao
 import com.lastwave.app.data.playlist.PlaylistRepository
+import com.lastwave.app.data.scrobble.ScrobbleEventDao
+import com.lastwave.app.data.scrobble.ScrobbleEventEntity
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Local Stats Mode for the Stats tab (HomeScreen).
  *
- * When Last.fm is NOT connected, the Stats page seamlessly switches here:
- * plays, top artists/tracks, and listening time are aggregated directly from
- * the local Room database — saved playlists (including Liked Songs) and
- * downloaded tracks — instead of user.getinfo / user.gettoptracks.
- *
- * This is the local-first counterpart to [HomeRepository.fetchStats]: same
- * [HomeStats] shape so the UI renders identically, with a banner pointing to
- * Settings → Integrations to sync global scrobbles.
+ * When Last.fm is NOT connected (or temporarily offline), the Stats page draws
+ * first from real timestamped plays in [OnyxScrobbleDatabase] (both Onyx Music
+ * and external apps via the built-in Pano-style scrobbler), falling back to
+ * saved playlists and downloaded tracks when no scrobble events exist yet.
  */
 @Singleton
 class LocalStatsRepository @Inject constructor(
     private val playlistRepository: PlaylistRepository,
     private val downloadedTrackDao: DownloadedTrackDao,
+    private val scrobbleEventDao: ScrobbleEventDao,
 ) {
     data class LocalStats(
         val stats: HomeStats,
         val topTracks: List<HomeTrack>,
         val topArtists: List<HomeArtistItem>,
         val topAlbums: List<HomeAlbum>,
+        val recentTracks: List<HomeTrack> = emptyList(),
+        val topTracks7Days: List<HomeTrack> = emptyList(),
+        val topTracks30Days: List<HomeTrack> = emptyList(),
     )
 
     suspend fun load(): LocalStats {
+        val scrobbleEvents = runCatching { scrobbleEventDao.getAll() }.getOrDefault(emptyList())
+        if (scrobbleEvents.isNotEmpty()) {
+            return buildFromScrobbleEvents(scrobbleEvents)
+        }
+        return buildFromLibraryFallback()
+    }
+
+    private fun buildFromScrobbleEvents(events: List<ScrobbleEventEntity>): LocalStats {
+        val valid = events.filter {
+            it.title.isNotBlank() && it.artist.isNotBlank() &&
+                !com.lastwave.app.util.ArtistHelper.isPlayCountOrStat(it.artist)
+        }
+        if (valid.isEmpty()) return buildEmpty()
+
+        val now = System.currentTimeMillis()
+        val cutoff7 = now - 7L * 86_400_000L
+        val cutoff30 = now - 30L * 86_400_000L
+
+        val byTrack = valid.groupBy { it.trackKey }
+        val byArtist = valid.groupBy { it.artist.trim().lowercase() }
+        val byAlbum = valid.filter { it.album.isNotBlank() }
+            .groupBy { "${it.artist.trim().lowercase()}|${it.album.trim().lowercase()}" }
+
+        val topTracks = aggregateTopTracks(valid, limit = 50)
+        val topTracks7 = aggregateTopTracks(valid.filter { it.scrobbledAtMs >= cutoff7 }, limit = 50)
+        val topTracks30 = aggregateTopTracks(valid.filter { it.scrobbledAtMs >= cutoff30 }, limit = 50)
+
+        val countByKey = byTrack.mapValues { it.value.size }
+        val recentTracks = valid
+            .sortedByDescending { it.scrobbledAtMs }
+            .take(150)
+            .map { ev ->
+                HomeTrack(
+                    name = ev.title,
+                    artist = ev.artist,
+                    artworkUrl = ev.artworkUrl,
+                    timestampMillis = ev.scrobbledAtMs,
+                    playCount = countByKey[ev.trackKey] ?: 1,
+                )
+            }
+
+        val topArtists = byArtist.entries
+            .sortedByDescending { it.value.size }
+            .take(30)
+            .map { (_, list) ->
+                val sample = list.first()
+                HomeArtistItem(
+                    name = sample.artist.trim(),
+                    playCount = list.size.toLong(),
+                    artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                )
+            }
+
+        val topAlbums = byAlbum.entries
+            .sortedByDescending { it.value.size }
+            .take(20)
+            .map { (_, list) ->
+                val sample = list.first()
+                HomeAlbum(
+                    name = sample.album.trim(),
+                    artist = sample.artist.trim(),
+                    artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                    playCount = list.size.toLong(),
+                )
+            }
+
+        return LocalStats(
+            stats = HomeStats(
+                scrobbles = valid.size.toLong(),
+                trackCount = byTrack.size.toLong(),
+                artistCount = byArtist.size.toLong(),
+                albumCount = byAlbum.size.toLong(),
+                avatarUrl = null,
+            ),
+            topTracks = topTracks,
+            topArtists = topArtists,
+            topAlbums = topAlbums,
+            recentTracks = recentTracks,
+            topTracks7Days = topTracks7,
+            topTracks30Days = topTracks30,
+        )
+    }
+
+    private fun aggregateTopTracks(events: List<ScrobbleEventEntity>, limit: Int): List<HomeTrack> {
+        return events.groupBy { it.trackKey }.entries
+            .sortedByDescending { it.value.size }
+            .take(limit)
+            .map { (_, list) ->
+                val latest = list.maxByOrNull { it.scrobbledAtMs } ?: list.first()
+                HomeTrack(
+                    name = latest.title,
+                    artist = latest.artist,
+                    artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                    timestampMillis = latest.scrobbledAtMs,
+                    playCount = list.size,
+                )
+            }
+    }
+
+    private suspend fun buildFromLibraryFallback(): LocalStats {
         val playlists = runCatching { playlistRepository.getAll() }.getOrDefault(emptyList())
         val liked = runCatching { playlistRepository.getLikedSongs()?.tracks.orEmpty() }.getOrDefault(emptyList())
         val downloaded = runCatching { downloadedTrackDao.getAllList() }.getOrDefault(emptyList())
@@ -37,8 +139,6 @@ class LocalStatsRepository @Inject constructor(
         val allTracks = (playlists.flatMap { it.tracks } + liked)
             .filter { it.name.isNotBlank() && it.artist.isNotBlank() && !com.lastwave.app.util.ArtistHelper.isPlayCountOrStat(it.artist) }
 
-        // Plays proxy: each saved occurrence counts once; duplicates across
-        // playlists collapse for distinct counts but sum for total plays.
         val playCounts = allTracks.groupingBy { it.key }.eachCount()
         val totalPlays = playCounts.values.sum().toLong()
         val distinctTracks = playCounts.size.toLong()
@@ -50,13 +150,9 @@ class LocalStatsRepository @Inject constructor(
 
         val albumKeys = allTracks.mapNotNull { it.album?.trim()?.takeIf(String::isNotBlank)?.lowercase() }
             .toSet().size.toLong()
-        // Downloads contribute albums too (album column is authoritative there).
         val downloadAlbums = downloaded.mapNotNull { it.album.trim().takeIf(String::isNotBlank)?.lowercase() }
             .toSet().size.toLong()
         val distinctAlbums = maxOf(albumKeys, downloadAlbums)
-
-        // Listening-time estimate reuses Home's 210s/track convention so the
-        // timer reads consistently between local and Last.fm modes.
         val scrobbles = totalPlays + downloaded.size.toLong()
 
         val topTracks = playCounts.entries
@@ -84,8 +180,6 @@ class LocalStatsRepository @Inject constructor(
                 HomeArtistItem(name = display, playCount = count.toLong(), artworkUrl = artwork)
             }
 
-        // Top albums: group Room tracks + downloads by artist|album. Singles
-        // without an album name are skipped — they already surface in tracks.
         data class AlbumSeed(val artist: String, val title: String, val artworkUrl: String?)
         val albumSeeds = allTracks.mapNotNull { t ->
             val album = t.album?.trim()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
@@ -122,4 +216,11 @@ class LocalStatsRepository @Inject constructor(
             topAlbums = topAlbums,
         )
     }
+
+    private fun buildEmpty(): LocalStats = LocalStats(
+        stats = HomeStats(0L, 0L, 0L, 0L, null),
+        topTracks = emptyList(),
+        topArtists = emptyList(),
+        topAlbums = emptyList(),
+    )
 }

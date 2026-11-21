@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -27,11 +29,20 @@ data class ScrobblerSettings(
      *  track must also be longer than 30s, and is capped at needing at
      *  most 4 minutes of playback regardless of this percent. */
     val scrobblePercent: Int = 50,
-    /** Package names to actually watch for now-playing/scrobble — empty
-     *  means "not configured yet" (the service treats empty as "watch
-     *  nothing" rather than silently watching everything, so a track
-     *  never gets scrobbled from an app the user never explicitly chose). */
+    /** Package names explicitly enabled for external app scrobbling. */
     val selectedPackages: Set<String> = emptySet(),
+    /** Package names explicitly blocked from external app scrobbling. */
+    val blockedPackages: Set<String> = emptySet(),
+    /** When true, known external music players (Spotify, Apple Music, etc.)
+     *  are scrobbled automatically unless explicitly listed in [blockedPackages]. */
+    val autoScrobbleKnownPlayers: Boolean = true,
+    /** Two-way Last.fm love sync (push love/unlove and pull user.getLovedTracks). */
+    val twoWayLoveSync: Boolean = true,
+    /** Optional ListenBrainz submission toggle + user token. */
+    val listenBrainzEnabled: Boolean = false,
+    val listenBrainzToken: String = "",
+    val listenBrainzUsername: String = "",
+    val lastLovedSyncAtMs: Long = 0L,
 )
 
 @Singleton
@@ -43,6 +54,13 @@ class ScrobblerPreferences @Inject constructor(
         val SUBMIT_NOW_PLAYING = booleanPreferencesKey("lw_scrobbler_now_playing")
         val PERCENT = intPreferencesKey("lw_scrobbler_percent")
         val PACKAGES = stringSetPreferencesKey("lw_scrobbler_packages")
+        val BLOCKED_PACKAGES = stringSetPreferencesKey("lw_scrobbler_blocked_packages")
+        val AUTO_KNOWN_PLAYERS = booleanPreferencesKey("lw_scrobbler_auto_known_players")
+        val TWO_WAY_LOVE_SYNC = booleanPreferencesKey("lw_scrobbler_two_way_love")
+        val LB_ENABLED = booleanPreferencesKey("lw_scrobbler_lb_enabled")
+        val LB_TOKEN = stringPreferencesKey("lw_scrobbler_lb_token")
+        val LB_USERNAME = stringPreferencesKey("lw_scrobbler_lb_username")
+        val LAST_LOVED_SYNC = longPreferencesKey("lw_scrobbler_last_loved_sync")
     }
 
     val settings: Flow<ScrobblerSettings> = dataStore.data
@@ -55,6 +73,13 @@ class ScrobblerPreferences @Inject constructor(
                 // range. Never pass an invalid persisted value into Compose.
                 scrobblePercent = (p.readSafely(Keys.PERCENT) ?: 50).coerceIn(25, 90),
                 selectedPackages = p.readSafely(Keys.PACKAGES) ?: emptySet(),
+                blockedPackages = p.readSafely(Keys.BLOCKED_PACKAGES) ?: emptySet(),
+                autoScrobbleKnownPlayers = p.readSafely(Keys.AUTO_KNOWN_PLAYERS) ?: true,
+                twoWayLoveSync = p.readSafely(Keys.TWO_WAY_LOVE_SYNC) ?: true,
+                listenBrainzEnabled = p.readSafely(Keys.LB_ENABLED) ?: false,
+                listenBrainzToken = p.readSafely(Keys.LB_TOKEN) ?: "",
+                listenBrainzUsername = p.readSafely(Keys.LB_USERNAME) ?: "",
+                lastLovedSyncAtMs = p.readSafely(Keys.LAST_LOVED_SYNC) ?: 0L,
             )
         }
 
@@ -79,5 +104,43 @@ class ScrobblerPreferences @Inject constructor(
             val current = prefs.readSafely(Keys.PACKAGES) ?: emptySet()
             prefs[Keys.PACKAGES] = if (packageName in current) current - packageName else current + packageName
         }
+    }
+
+    suspend fun setPackageAllowed(packageName: String, allowed: Boolean) {
+        dataStore.edit { prefs ->
+            val selected = prefs.readSafely(Keys.PACKAGES) ?: emptySet()
+            val blocked = prefs.readSafely(Keys.BLOCKED_PACKAGES) ?: emptySet()
+            if (allowed) {
+                prefs[Keys.PACKAGES] = selected + packageName
+                prefs[Keys.BLOCKED_PACKAGES] = blocked - packageName
+            } else {
+                prefs[Keys.PACKAGES] = selected - packageName
+                prefs[Keys.BLOCKED_PACKAGES] = blocked + packageName
+            }
+        }
+    }
+
+    suspend fun setAutoScrobbleKnownPlayers(enabled: Boolean) {
+        dataStore.edit { it[Keys.AUTO_KNOWN_PLAYERS] = enabled }
+    }
+
+    suspend fun setTwoWayLoveSync(enabled: Boolean) {
+        dataStore.edit { it[Keys.TWO_WAY_LOVE_SYNC] = enabled }
+    }
+
+    suspend fun setListenBrainzConfig(enabled: Boolean, token: String, username: String = "") {
+        dataStore.edit {
+            it[Keys.LB_ENABLED] = enabled
+            it[Keys.LB_TOKEN] = token.trim()
+            it[Keys.LB_USERNAME] = username.trim()
+        }
+    }
+
+    suspend fun setListenBrainzEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.LB_ENABLED] = enabled }
+    }
+
+    suspend fun setLastLovedSyncAt(timestampMs: Long) {
+        dataStore.edit { it[Keys.LAST_LOVED_SYNC] = timestampMs }
     }
 }

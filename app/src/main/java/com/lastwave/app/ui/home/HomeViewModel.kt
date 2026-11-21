@@ -75,6 +75,10 @@ data class HomeUiState(
      * while signed in, so Stats can recover without requiring a relogin.
      */
     val isLastFmConnected: Boolean = false,
+    val currentStreakDays: Int = 0,
+    val pendingSyncCount: Int = 0,
+    val localScrobbleCount: Int = 0,
+    val recentScrobbleEvents: List<com.lastwave.app.data.scrobble.ScrobbleEventEntity> = emptyList(),
 ) {
     val isViewingFriend: Boolean get() = viewingUsername.isNotBlank() && viewingUsername != username
 
@@ -233,6 +237,8 @@ class HomeViewModel @Inject constructor(
     private val viewingProfileState: com.lastwave.app.data.repository.ViewingProfileState,
     private val settingsPreferences: com.lastwave.app.data.local.SettingsPreferences,
     private val scrobbleRepository: com.lastwave.app.data.repository.ScrobbleRepository,
+    private val scrobbleEventDao: com.lastwave.app.data.scrobble.ScrobbleEventDao,
+    private val scrobbleSyncEngine: com.lastwave.app.data.scrobble.ScrobbleSyncEngine,
     private val artworkRepository: com.lastwave.app.data.artwork.ArtworkRepository,
 ) : ViewModel() {
 
@@ -305,6 +311,27 @@ class HomeViewModel @Inject constructor(
                 // Instantly update recent tracks list and scrobble count when a track scrobbles
                 delay(1200L)
                 refreshSilently()
+            }
+        }
+        viewModelScope.launch {
+            scrobbleEventDao.observeAll().collect { events ->
+                val streaks = withContext(Dispatchers.Default) {
+                    com.lastwave.app.data.scrobble.ScrobbleRulesEngine.computeStreaks(
+                        events.map { it.scrobbledAtMs },
+                    )
+                }
+                _uiState.update {
+                    it.copy(
+                        localScrobbleCount = events.size,
+                        currentStreakDays = streaks.currentStreakDays,
+                        recentScrobbleEvents = events,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            scrobbleSyncEngine.pendingSyncCount.collect { pending ->
+                _uiState.update { it.copy(pendingSyncCount = pending) }
             }
         }
         viewModelScope.launch {
@@ -436,7 +463,8 @@ class HomeViewModel @Inject constructor(
     private suspend fun tryLoadLocalStats(username: String, isConnected: Boolean): Boolean {
         val local = runCatching { localStatsRepository.load() }.getOrNull() ?: return false
         cachedTopTracks = local.topTracks
-        fallbackForcedMostPlayed = true
+        val hasTimestampedRecent = local.recentTracks.isNotEmpty()
+        fallbackForcedMostPlayed = !hasTimestampedRecent
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -444,13 +472,13 @@ class HomeViewModel @Inject constructor(
                 viewingUsername = username,
                 stats = local.stats,
                 nowPlaying = null,
-                // Local tracks carry no timestamps, so default to Most Played
-                // (Recent would filter everything out).
-                sortMode = HomeSortMode.MOST_PLAYED,
-                allTracks = local.topTracks,
+                // Use Recent when real timestamped scrobble events exist;
+                // fall back to Most Played when only library aggregates exist.
+                sortMode = if (hasTimestampedRecent) HomeSortMode.RECENT else HomeSortMode.MOST_PLAYED,
+                allTracks = if (hasTimestampedRecent) local.recentTracks else local.topTracks,
                 topTracksOverall = local.topTracks,
-                topTracks7Days = emptyList(),
-                topTracks30Days = emptyList(),
+                topTracks7Days = local.topTracks7Days,
+                topTracks30Days = local.topTracks30Days,
                 topArtists = local.topArtists.take(10),
                 topAlbums = local.topAlbums.take(10),
                 page = 1,
@@ -575,8 +603,10 @@ class HomeViewModel @Inject constructor(
                         it.copy(
                             isRefreshing = false,
                             stats = local.stats,
-                            allTracks = local.topTracks,
+                            allTracks = if (local.recentTracks.isNotEmpty()) local.recentTracks else local.topTracks,
                             topTracksOverall = local.topTracks,
+                            topTracks7Days = local.topTracks7Days,
+                            topTracks30Days = local.topTracks30Days,
                             topArtists = local.topArtists.take(10),
                             topAlbums = local.topAlbums.take(10),
                             topTags = tags,
@@ -817,8 +847,10 @@ class HomeViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             stats = local.stats,
-                            allTracks = local.topTracks,
+                            allTracks = if (local.recentTracks.isNotEmpty()) local.recentTracks else local.topTracks,
                             topTracksOverall = local.topTracks,
+                            topTracks7Days = local.topTracks7Days,
+                            topTracks30Days = local.topTracks30Days,
                             topArtists = local.topArtists.take(10),
                             topAlbums = local.topAlbums.take(10),
                             isLastFmConnected = connected,
@@ -962,4 +994,41 @@ class HomeViewModel @Inject constructor(
     }
 
     fun dismissError() = _uiState.update { it.copy(error = null) }
+
+    fun toggleScrobbleLove(event: com.lastwave.app.data.scrobble.ScrobbleEventEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            scrobbleSyncEngine.setTrackLoved(
+                artist = event.artist,
+                title = event.title,
+                loved = !event.isLoved,
+                eventId = event.id,
+            )
+        }
+    }
+
+    fun deleteScrobbleEvent(event: com.lastwave.app.data.scrobble.ScrobbleEventEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            scrobbleSyncEngine.deleteScrobble(event.id)
+        }
+    }
+
+    fun editScrobbleEvent(
+        event: com.lastwave.app.data.scrobble.ScrobbleEventEntity,
+        newTitle: String,
+        newArtist: String,
+        newAlbum: String,
+        saveAsAutoRule: Boolean,
+        applyRetroactively: Boolean,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            scrobbleSyncEngine.editScrobbleEvent(
+                event = event,
+                newTitle = newTitle,
+                newArtist = newArtist,
+                newAlbum = newAlbum,
+                saveAsAutoRule = saveAsAutoRule,
+                applyRetroactively = applyRetroactively,
+            )
+        }
+    }
 }
