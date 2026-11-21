@@ -67,10 +67,10 @@ object DiscordPresence {
      * Repo the card's buttons open — this Android project, so "Get LastWave"
      * lands on the native build.
      */
-    const val PROJECT_URL = "https://github.com/Clash-Projects/LastWave-Native"
+    const val PROJECT_URL = "https://github.com/leothefleo49/Onyx-Music"
     const val RELEASES_URL = "$PROJECT_URL/releases"
-    const val DEFAULT_BUTTON_1 = "Listen On LastWave"
-    const val DEFAULT_BUTTON_2 = "Get LastWave"
+    const val DEFAULT_BUTTON_1 = "Listen On Onyx Music"
+    const val DEFAULT_BUTTON_2 = "Get Onyx Music"
 
     /** Discord truncates nothing for us: over-long fields are dropped. */
     const val MAX_FIELD = 120
@@ -129,7 +129,7 @@ object DiscordPresence {
      */
     fun activityName(title: String): String {
         val trimmed = title.trim()
-        return if (trimmed.isEmpty()) "LastWave" else "LastWave \u00B7 " + clip(trimmed)
+        return if (trimmed.isEmpty()) "Onyx Music" else "Onyx Music \u00B7 " + clip(trimmed)
     }
 
     /**
@@ -142,7 +142,7 @@ object DiscordPresence {
      * visible on both platforms, so the audio format never depends on hovering.
      */
     fun stateLine(artist: String, album: String?, quality: String): String {
-        val head = artist.trim().ifEmpty { album?.trim()?.takeIf { it.isNotEmpty() } ?: "LastWave" }
+        val head = artist.trim().ifEmpty { album?.trim()?.takeIf { it.isNotEmpty() } ?: "Onyx Music" }
         return clip(if (quality.isEmpty()) head else "$head \u00B7 $quality", MAX_STATE)
     }
 
@@ -277,7 +277,7 @@ object DiscordPresence {
         val quality = qualityLine(state)
         // The desktop card keeps the subtitle for the artist and parks the
         // audio-format line in the brand badge's tooltip.
-        val smallText = clip(if (quality.isEmpty()) "LastWave" else "LastWave \u00B7 $quality")
+        val smallText = clip(if (quality.isEmpty()) "Onyx Music" else "Onyx Music \u00B7 $quality")
 
         return buildJsonObject {
             put("type", TYPE_LISTENING)

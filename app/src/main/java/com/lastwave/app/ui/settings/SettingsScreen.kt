@@ -2368,9 +2368,9 @@ fun SettingsScreen(
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
                                 title = stringResource(R.string.settings_source_code),
-                                subtitle = "github.com/Clash-Projects/LastWave-native",
+                                subtitle = "github.com/leothefleo49/Onyx-Music",
                                 onClick = {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Clash-Projects/LastWave-native"))
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/leothefleo49/Onyx-Music"))
                                     if (!startActivitySafely(context, intent)) {
                                         viewModel.showToast(context.getString(R.string.toast_no_browser_plain))
                                     }
@@ -2379,13 +2379,13 @@ fun SettingsScreen(
                                 isHighlighted = (highlightedSettingId == "about.source_code"),
                             )
                             else -> SettingsActionCard(
-                                icon = Icons.Filled.Download,
+                                icon = Icons.Filled.Code,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                title = stringResource(R.string.settings_desktop_app),
-                                subtitle = "github.com/Clash-Projects/LastWave-Desktop",
+                                title = "Upstream Attribution (GPL-3.0)",
+                                subtitle = "Based on Clash-Projects/LastWave-Native",
                                 onClick = {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Clash-Projects/LastWave-Desktop"))
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Clash-Projects/LastWave-Native"))
                                     if (!startActivitySafely(context, intent)) {
                                         viewModel.showToast(context.getString(R.string.toast_no_browser_plain))
                                     }

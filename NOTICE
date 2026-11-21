@@ -1,0 +1,17 @@
+Onyx Music — Attribution & License Notice
+=========================================
+
+Onyx Music (`com.leothefleo49.onyxmusic`, https://github.com/leothefleo49/Onyx-Music)
+is licensed under the GNU General Public License v3.0 (GPL-3.0). See `LICENSE` in
+the repository root for the full license text.
+
+Upstream Attribution
+--------------------
+Onyx Music is derived from **LastWave-Native** (`https://github.com/Clash-Projects/LastWave-Native`),
+created and maintained by the Clash-Projects / LastWave Team and upstream contributors,
+originally distributed under the GNU General Public License v3.0 (GPL-3.0).
+
+All original copyright notices, git commit history, and GPL-3.0 license terms from
+`Clash-Projects/LastWave-Native` and its bundled/linked dependencies (including
+Media3 FFmpeg decoder, libsoxr under LGPL, Oboe under Apache-2.0, NewPipeExtractor
+under GPL-3.0, and Decent USB Audio Driver) are preserved in full.

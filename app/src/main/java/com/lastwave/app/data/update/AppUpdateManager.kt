@@ -60,7 +60,7 @@ class AppUpdateManager @Inject constructor(
     private val okHttpClient: OkHttpClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val prefs = context.getSharedPreferences("lastwave_updates", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("onyx_updates", Context.MODE_PRIVATE)
 
     private val _updateInfo = MutableStateFlow(
         UpdateInfo(
@@ -96,9 +96,9 @@ class AppUpdateManager @Inject constructor(
     }
 
     fun getCurrentVersion(): String = try {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "5.0.0"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: BuildConfig.VERSION_NAME
     } catch (_: Exception) {
-        "5.0.0"
+        BuildConfig.VERSION_NAME
     }
 
     fun checkForUpdate(isSilent: Boolean = false) {
@@ -111,9 +111,9 @@ class AppUpdateManager @Inject constructor(
             }
             try {
                 val request = Request.Builder()
-                    .url("https://api.github.com/repos/Clash-Projects/LastWave-native/releases/latest")
+                    .url("https://api.github.com/repos/leothefleo49/Onyx-Music/releases/latest")
                     .header("Accept", "application/vnd.github.v3+json")
-                    .header("User-Agent", "LastWave-Android")
+                    .header("User-Agent", "OnyxMusic-Android")
                     .build()
 
                 val response = withContext(Dispatchers.IO) {
@@ -134,7 +134,7 @@ class AppUpdateManager @Inject constructor(
                 val body = response.body?.string().orEmpty()
                 val json = JSONObject(body)
                 val tagName = json.optString("tag_name", "")
-                val releaseUrl = json.optString("html_url", "https://github.com/Clash-Projects/LastWave-native/releases")
+                val releaseUrl = json.optString("html_url", "https://github.com/leothefleo49/Onyx-Music/releases")
                 val releaseNotes = json.optString("body", "")
                 val releaseTitle = json.optString("name", "")
                 val publishedAt = json.optString("published_at", "")
@@ -224,7 +224,7 @@ class AppUpdateManager @Inject constructor(
     /** The release page, for the dialog's GitHub button. */
     fun openReleasePage(context: Context) {
         val targetUrl = _updateInfo.value.releaseUrl.ifBlank {
-            "https://github.com/Clash-Projects/LastWave-native/releases"
+            "https://github.com/leothefleo49/Onyx-Music/releases"
         }
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

@@ -345,7 +345,7 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
             return
         }
         val uri = intent.data
-        val isJamDeepLink = (uri?.scheme == "lastwave" && (uri.host == "jam" || uri.host == "sync")) ||
+        val isJamDeepLink = ((uri?.scheme == "onyxmusic" || uri?.scheme == "lastwave") && (uri.host == "jam" || uri.host == "sync")) ||
             ((uri?.scheme == "https" || uri?.scheme == "http") && (uri?.host == "jam.clashgram.org" || uri?.host == "jam.clashprojects.qd.je"))
         if (isJamDeepLink) {
             val code = uri?.getQueryParameter("code")

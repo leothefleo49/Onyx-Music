@@ -219,9 +219,10 @@ static bool verifyCallerSignature(JNIEnv* env, jobject context, uint8_t outCertS
     if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
     if (!packageName) return false;
 
-    // Package allowlist: standard client + vivo Origin Island build.
+    // Package allowlist: Onyx Music + upstream LastWave + vivo Origin Island build.
     const char* pkgChars = env->GetStringUTFChars(packageName, nullptr);
     bool pkgOk = pkgChars && (
+        strcmp(pkgChars, "com.leothefleo49.onyxmusic") == 0 ||
         strcmp(pkgChars, "com.lastwave.app") == 0 ||
         strcmp(pkgChars, "com.tencent.qqmusic") == 0
     );

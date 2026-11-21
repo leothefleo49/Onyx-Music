@@ -110,14 +110,17 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="onyxmusic" android:host="auth-callback" />
                 <data android:scheme="lastwave" android:host="auth-callback" />
             </intent-filter>
 
-            <!-- LastWave Jam deep links (lastwave://jam?code=... and lastwave://sync?code=...) -->
+            <!-- Onyx Music Jam deep links (onyxmusic://jam?code=... and onyxmusic://sync?code=...) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="onyxmusic" android:host="jam" />
+                <data android:scheme="onyxmusic" android:host="sync" />
                 <data android:scheme="lastwave" android:host="jam" />
                 <data android:scheme="lastwave" android:host="sync" />
             </intent-filter>

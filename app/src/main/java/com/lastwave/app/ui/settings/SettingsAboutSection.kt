@@ -267,11 +267,11 @@ import kotlin.math.roundToLong
 
 
 internal fun appVersionName(context: android.content.Context): String = try {
-    context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "5.0.0"
+    context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: com.lastwave.app.BuildConfig.VERSION_NAME
 } catch (error: Exception) {
-    "5.0.0"
+    com.lastwave.app.BuildConfig.VERSION_NAME
 } catch (error: LinkageError) {
-    "5.0.0"
+    com.lastwave.app.BuildConfig.VERSION_NAME
 }
 
 @Composable
@@ -614,13 +614,13 @@ internal fun AboutCard(
             ) {
                 Icon(
                     painter = painterResource(appIcon.logoRes),
-                    contentDescription = "LastWave",
+                    contentDescription = "Onyx Music",
                     tint = Color.Unspecified,
                     modifier = Modifier.size(72.dp),
                 )
             }
             Spacer(Modifier.height(14.dp))
-            Text("LastWave", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Onyx Music", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Surface(
                 shape = ExpressivePillShape,
@@ -635,25 +635,18 @@ internal fun AboutCard(
                 )
             }
             Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.about_made_by),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.width(6.dp))
-                Image(
-                    painter = painterResource(R.drawable.ic_flag_india),
-                    contentDescription = "India",
-                )
-            }
+            Text(
+                stringResource(R.string.about_made_by),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
             Spacer(Modifier.height(14.dp))
             Surface(
                 shape = ExpressivePillShape,
                 color = MaterialTheme.colorScheme.secondaryContainer,
                 onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Clash-Projects/LastWave-Desktop"))
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/leothefleo49/Onyx-Music"))
                     if (!startActivitySafely(context, intent)) {
                         android.widget.Toast.makeText(context, context.getString(R.string.toast_no_browser_plain), android.widget.Toast.LENGTH_SHORT).show()
                     }
@@ -664,14 +657,14 @@ internal fun AboutCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Download,
+                        imageVector = Icons.Filled.Code,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = stringResource(R.string.settings_desktop_app),
+                        text = stringResource(R.string.settings_source_code),
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,

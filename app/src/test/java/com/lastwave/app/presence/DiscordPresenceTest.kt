@@ -79,7 +79,7 @@ class DiscordPresenceTest {
         assertEquals(2, activity["type"]?.jsonPrimitive?.int) // 2 = Listening
         // The compact member-list line renders "Listening to " + name, so the
         // name carries the track to read "Listening to LastWave · <song>".
-        assertEquals("LastWave \u00B7 Sunglasses at Night", str(activity, "name"))
+        assertEquals("Onyx Music \u00B7 Sunglasses at Night", str(activity, "name"))
         assertEquals("Sunglasses at Night", str(activity, "details"))
         assertEquals("Moondrop \u00B7 Hi-Res Lossless \u00B7 24-bit \u00B7 96 kHz", str(activity, "state"))
         // No status_display_type: the compact member-list line falls back to
@@ -155,7 +155,7 @@ class DiscordPresenceTest {
         // tooltip carries the measured audio-format line.
         assertEquals(DiscordPresence.DISCORD_LOGO_URL, playing["small_image"]?.jsonPrimitive?.content)
         assertEquals(
-            "LastWave \u00B7 Hi-Res Lossless \u00B7 24-bit \u00B7 96 kHz",
+            "Onyx Music \u00B7 Hi-Res Lossless \u00B7 24-bit \u00B7 96 kHz",
             playing["small_text"]?.jsonPrimitive?.content,
         )
 
@@ -164,7 +164,7 @@ class DiscordPresenceTest {
             state(isLossless = false, bitDepth = null, samplingRateKHz = null, audioCodec = null, bitrateKbps = 128),
             NOW_MS,
         )["assets"]!!.jsonObject
-        assertEquals("LastWave", lossy["small_text"]?.jsonPrimitive?.content)
+        assertEquals("Onyx Music", lossy["small_text"]?.jsonPrimitive?.content)
 
         // No album: the title stands in, exactly as on desktop.
         val noAlbum = DiscordPresence.buildActivity(state(track = track(album = null)), NOW_MS)["assets"]!!.jsonObject
@@ -175,15 +175,15 @@ class DiscordPresenceTest {
     fun buttonsOpenTheTrackAndTheProject() {
         val buttons = DiscordPresence.buildActivity(state(), NOW_MS)["buttons"]!!.jsonArray
         assertEquals(2, buttons.size)
-        assertEquals("Listen On LastWave", buttons[0].jsonObject["label"]?.jsonPrimitive?.content)
+        assertEquals("Listen On Onyx Music", buttons[0].jsonObject["label"]?.jsonPrimitive?.content)
         assertEquals(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             buttons[0].jsonObject["url"]?.jsonPrimitive?.content,
         )
-        assertEquals("Get LastWave", buttons[1].jsonObject["label"]?.jsonPrimitive?.content)
+        assertEquals("Get Onyx Music", buttons[1].jsonObject["label"]?.jsonPrimitive?.content)
         // Native build, not the desktop one.
         assertEquals(
-            "https://github.com/Clash-Projects/LastWave-Native",
+            "https://github.com/leothefleo49/Onyx-Music",
             buttons[1].jsonObject["url"]?.jsonPrimitive?.content,
         )
 
@@ -191,7 +191,7 @@ class DiscordPresenceTest {
         // to deep-link, so it falls back to the releases page.
         val local = DiscordPresence.buildActivity(state(track = track(videoId = null)), NOW_MS)["buttons"]!!.jsonArray
         assertEquals(
-            "https://github.com/Clash-Projects/LastWave-Native/releases",
+            "https://github.com/leothefleo49/Onyx-Music/releases",
             local[0].jsonObject["url"]?.jsonPrimitive?.content,
         )
     }
@@ -323,7 +323,7 @@ class DiscordPresenceTest {
                 NOW_MS,
             )["state"]?.jsonPrimitive?.content,
         )
-        assertEquals("LastWave", DiscordPresence.stateLine("", null, ""))
+        assertEquals("Onyx Music", DiscordPresence.stateLine("", null, ""))
     }
 
     // ---- A buffer stall is not a pause ------------------------------------

@@ -1,9 +1,7 @@
-name: Build 5.2.1 Release Assets
+name: Build Onyx Music Release Assets
 
+# Automated push/PR triggers are disabled (manual workflow_dispatch only).
 on:
-  push:
-    branches: [ codex/release-5.2.1 ]
-    paths-ignore: [ '**.md' ]
   workflow_dispatch:
 
 permissions:
@@ -21,19 +19,19 @@ jobs:
             task: assembleRelease
             arguments: ''
             output: release/app-release.apk
-            package: com.lastwave.app
+            package: com.leothefleo49.onyxmusic
             min_sdk: '29'
           - variant: universal-uncompressed
             task: assembleRawRelease
             arguments: ''
             output: rawRelease/app-rawRelease.apk
-            package: com.lastwave.app
+            package: com.leothefleo49.onyxmusic
             min_sdk: '29'
           - variant: android7
             task: assembleRelease
             arguments: '-PminSdk=24'
             output: release/app-release.apk
-            package: com.lastwave.app
+            package: com.leothefleo49.onyxmusic
             min_sdk: '24'
           - variant: vivo-origin
             task: assembleRelease

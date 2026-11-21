@@ -1539,11 +1539,11 @@ object SettingsSearchIndex {
             add(
                 SettingsEntry(
                     id = "about.source_code",
-                    title = "Open Source Code",
-                    subtitle = "View repository at github.com/Clash-Projects/LastWave-native",
+                    title = "Source Code",
+                    subtitle = "View repository at github.com/leothefleo49/Onyx-Music",
                     keywords = listOf(
                         "source code", "github", "open source", "repository", "gpl", "license",
-                        "contribute", "git"
+                        "contribute", "git", "onyx"
                     ),
                     icon = Icons.Filled.Code,
                     iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
@@ -1556,13 +1556,12 @@ object SettingsSearchIndex {
             add(
                 SettingsEntry(
                     id = "about.desktop_app",
-                    title = "Download Desktop App",
-                    subtitle = "View repository at github.com/Clash-Projects/LastWave-Desktop",
+                    title = "Upstream Attribution (GPL-3.0)",
+                    subtitle = "Based on Clash-Projects/LastWave-Native",
                     keywords = listOf(
-                        "desktop", "pc", "windows", "mac", "linux", "electron", "github", "clash-projects",
-                        "download"
+                        "upstream", "lastwave", "gpl", "license", "attribution", "clash-projects"
                     ),
-                    icon = Icons.Filled.Download,
+                    icon = Icons.Filled.Code,
                     iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
                     iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
                     parentTab = SettingsTab.ABOUT,
