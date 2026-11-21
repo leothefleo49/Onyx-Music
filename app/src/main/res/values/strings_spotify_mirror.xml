@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="spotify_mirror_title">Silent Spotify Mirror</string>
+    <string name="spotify_mirror_subtitle">Mirror plays silently to Spotify Connect for Wrapped</string>
+    <string name="spotify_mirror_enable_title">Silent Connect Mirroring</string>
+    <string name="spotify_mirror_enable_sub">Plays matched catalog tracks at zero volume on virtual device \"%1$s\"</string>
+    <string name="spotify_mirror_enable_need_signin">Connect your Spotify account above before enabling mirroring</string>
+    <string name="spotify_mirror_external_title">Pause when another Spotify device is active</string>
+    <string name="spotify_mirror_external_sub">Yields automatically so Onyx Music never interrupts playback on your other devices</string>
+    <string name="spotify_mirror_confidence_title">Minimum match confidence</string>
+    <string name="spotify_mirror_confidence_sub">Higher values reduce false matches; lower matches fall back to Local-Only</string>
+    <string name="spotify_mirror_status_off">Off</string>
+    <string name="spotify_mirror_status_not_signed_in">Sign in to Spotify to enable</string>
+    <string name="spotify_mirror_status_connecting">Connecting as \"%1$s\"...</string>
+    <string name="spotify_mirror_status_connected">Connected as \"%1$s\"</string>
+    <string name="spotify_mirror_status_mirroring">Mirroring silently on \"%1$s\"</string>
+    <string name="spotify_mirror_status_local_only">Local-only track</string>
+    <string name="spotify_mirror_status_external_device">Paused — external device active</string>
+    <string name="spotify_mirror_status_external_device_named">Paused — active on %1$s</string>
+    <string name="spotify_mirror_status_premium_required">Spotify Premium required</string>
+    <string name="spotify_mirror_status_error">Connection issue</string>
+    <string name="spotify_mirror_last_match_header">Current and Last Match</string>
+    <string name="spotify_mirror_no_match_yet">Play a track in Onyx Music to resolve its Spotify catalog match.</string>
+    <string name="spotify_mirror_catalog_badge">Catalog match</string>
+    <string name="spotify_mirror_local_only_badge">Local-only</string>
+    <string name="spotify_mirror_manual_badge">Manual override</string>
+    <string name="spotify_mirror_confidence_value">%1$d%% confidence</string>
+    <string name="spotify_mirror_rematch">Re-match</string>
+    <string name="spotify_mirror_override_uri">Override URI</string>
+    <string name="spotify_mirror_mark_local">Mark Local-Only</string>
+    <string name="spotify_mirror_override_hint">Paste spotify:track:... or open.spotify.com/track/...</string>
+    <string name="spotify_mirror_override_apply">Apply</string>
+    <string name="spotify_mirror_override_invalid">Enter a valid Spotify track URI or track link</string>
+    <string name="spotify_mirror_override_saved">Manual Spotify track override saved</string>
+    <string name="spotify_mirror_stats_header">Mirror Totals</string>
+    <string name="spotify_mirror_stats_catalog">Catalog Mirrored</string>
+    <string name="spotify_mirror_stats_local_only">Local-Only</string>
+    <string name="spotify_mirror_stats_local_hint">Tracked in Onyx Stats</string>
+    <string name="spotify_mirror_reconnect">Reconnect device</string>
+    <string name="spotify_mirror_clear_cache">Clear match cache</string>
+    <string name="spotify_mirror_cache_cleared">Cleared cached Spotify track matches</string>
+    <string name="spotify_mirror_requirements_title">How Wrapped Sync Works</string>
+    <string name="spotify_mirror_requirements_body">Spotify Wrapped only counts plays recorded on Spotify\'s servers for tracks in Spotify\'s catalog, and Spotify Connect playback requires Spotify Premium. Onyx Music keeps this virtual device muted at zero volume without taking Android audio focus. Non-catalog or low-confidence tracks automatically pause mirroring as Local-Only and continue tracking cleanly in Onyx Stats.</string>
+    <string name="spotify_mirror_open_cd">Open Silent Spotify Mirror settings</string>
+    <string name="spotify_mirror_close_cd">Close Silent Spotify Mirror settings</string>
+</resources>

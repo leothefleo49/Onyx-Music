@@ -143,6 +143,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
     @Inject lateinit var trackLikeController: TrackLikeController
     @Inject lateinit var playlistRepository: PlaylistRepository
     @Inject lateinit var jamPlaybackSync: com.lastwave.app.playback.jam.JamPlaybackSync
+    @Inject lateinit var spotifySilentMirrorManager: com.lastwave.app.data.spotify.mirror.SpotifySilentMirrorManager
 
     // SupervisorJob stops sibling failure propagation; the handler below
     // additionally stops an unexpected exception in any fire-and-forget
@@ -406,6 +407,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
             }
         }
         startDetector()
+        spotifySilentMirrorManager.attach(this, scope)
     }
 
     override fun onGetRoot(
@@ -717,6 +719,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
         com.lastwave.app.diagnostics.AppLog.flush()
         detectorJob?.cancel()
         artworkJob?.cancel()
+        spotifySilentMirrorManager.detach()
         WaveWidgetUpdater.setPlaybackServiceActive(false)
         if (isPlaybackForeground) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
