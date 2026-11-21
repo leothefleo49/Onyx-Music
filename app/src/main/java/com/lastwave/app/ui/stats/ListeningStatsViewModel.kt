@@ -5,11 +5,18 @@ import androidx.lifecycle.viewModelScope
 import com.lastwave.app.data.generate.TasteProfileProvider
 import com.lastwave.app.data.local.SessionPreferences
 import com.lastwave.app.data.local.db.DownloadedTrackDao
+import com.lastwave.app.data.local.db.DownloadedTrackEntity
 import com.lastwave.app.data.local.db.SongPlayStatsDao
 import com.lastwave.app.data.local.db.SongPlayStatsEntity
 import com.lastwave.app.data.playlist.PlaylistRepository
 import com.lastwave.app.data.repository.HomeRepository
 import com.lastwave.app.data.repository.LocalStatsRepository
+import com.lastwave.app.data.scrobble.ScrobbleEventDao
+import com.lastwave.app.data.scrobble.ScrobbleEventEntity
+import com.lastwave.app.data.scrobble.ScrobbleRulesEngine
+import com.lastwave.app.data.scrobble.ScrobbleSyncEngine
+import com.lastwave.app.data.scrobble.StreakSummary
+import com.lastwave.app.data.scrobble.normalizeScrobbleTrackKey
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +33,8 @@ import kotlin.math.roundToInt
 
 @HiltViewModel
 class ListeningStatsViewModel @Inject constructor(
+    private val scrobbleEventDao: ScrobbleEventDao,
+    private val scrobbleSyncEngine: ScrobbleSyncEngine,
     private val songPlayStatsDao: SongPlayStatsDao,
     private val localStatsRepository: LocalStatsRepository,
     private val playlistRepository: PlaylistRepository,
@@ -38,17 +47,48 @@ class ListeningStatsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ListeningStatsUiState())
     val uiState: StateFlow<ListeningStatsUiState> = _uiState.asStateFlow()
 
-    private var rawStatsList: List<SongPlayStatsEntity> = emptyList()
+    private var allEvents: List<ScrobbleEventEntity> = emptyList()
+    private var rawSongPlayStats: List<SongPlayStatsEntity> = emptyList()
     private var localStatsCache: LocalStatsRepository.LocalStats? = null
     private var tasteTags: List<String> = emptyList()
-    private var downloadedFallbackList: List<com.lastwave.app.data.local.db.DownloadedTrackEntity> = emptyList()
+    private var downloadedFallbackList: List<DownloadedTrackEntity> = emptyList()
 
     init {
-        loadData()
+        viewModelScope.launch {
+            scrobbleEventDao.observeAll().collect { events ->
+                allEvents = events
+                recalculate()
+            }
+        }
+        viewModelScope.launch {
+            scrobbleSyncEngine.nowPlaying.collect { np ->
+                _uiState.update { it.copy(nowPlaying = np) }
+            }
+        }
+        viewModelScope.launch {
+            scrobbleSyncEngine.pendingSyncCount.collect { pending ->
+                _uiState.update { it.copy(pendingSyncCount = pending) }
+            }
+        }
+        loadAuxiliaryData()
     }
 
     fun setTimeRange(range: StatsTimeRange) {
         _uiState.update { it.copy(selectedRange = range) }
+        recalculate()
+    }
+
+    fun setCustomRange(startMs: Long, endMs: Long) {
+        val normalizedStart = minOf(startMs, endMs)
+        val normalizedEnd = maxOf(startMs, endMs)
+        val fmt = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+        val label = "${fmt.format(Date(normalizedStart))} - ${fmt.format(Date(normalizedEnd))}"
+        _uiState.update {
+            it.copy(
+                selectedRange = StatsTimeRange.CUSTOM,
+                customRange = CustomDateRange(normalizedStart, normalizedEnd, label),
+            )
+        }
         recalculate()
     }
 
@@ -64,14 +104,199 @@ class ListeningStatsViewModel @Inject constructor(
 
     fun refresh() {
         _uiState.update { it.copy(isRefreshing = true) }
-        loadData()
+        loadAuxiliaryData()
     }
 
-    private fun loadData() {
+    fun openArtistDetail(artistName: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isLoading = rawStatsList.isEmpty()) }
+            val clean = artistName.trim()
+            if (clean.isBlank()) return@launch
+            val matching = effectiveEvents().filter { it.artist.trim().equals(clean, ignoreCase = true) }
+            if (matching.isEmpty()) return@launch
+
+            val totalMs = matching.sumOf { effectiveListenMs(it) }
+            val uniqueTracks = matching.map { it.trackKey }.distinct().size
+            val sortedAsc = matching.sortedBy { it.scrobbledAtMs }
+            val dateFmt = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+            val firstLabel = dateFmt.format(Date(sortedAsc.first().scrobbledAtMs))
+            val lastLabel = dateFmt.format(Date(sortedAsc.last().scrobbledAtMs))
+            val peakDayLabel = computePeakDayLabel(matching)
+            val timeline = computeCompactTimeline(matching)
+            val sources = computeSourceBreakdown(matching)
+
+            val byTrack = matching.groupBy { it.trackKey }.values
+                .sortedByDescending { list -> list.sumOf { effectiveListenMs(it) } }
+                .take(15)
+            val maxTrackMs = byTrack.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
+            val topTracks = byTrack.mapIndexed { idx, list ->
+                val sample = list.first()
+                val ms = list.sumOf { effectiveListenMs(it) }
+                RankedTrackItem(
+                    rank = idx + 1,
+                    title = sample.title,
+                    artist = sample.artist,
+                    artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                    playCount = list.size,
+                    durationLabel = formatHoursMins(ms),
+                    progress = (ms.toFloat() / maxTrackMs).coerceIn(0.06f, 1f),
+                    album = sample.album,
+                    sourceSummary = summarizeSources(list),
+                )
+            }
+
+            _uiState.update {
+                it.copy(
+                    selectedArtistDetail = ArtistDetailStats(
+                        artistName = sortedAsc.last().artist,
+                        artworkUrl = matching.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                        totalPlays = matching.size,
+                        totalListeningLabel = formatHoursMins(totalMs),
+                        uniqueTracks = uniqueTracks,
+                        firstPlayedLabel = firstLabel,
+                        lastPlayedLabel = lastLabel,
+                        peakDayLabel = peakDayLabel,
+                        timelineBars = timeline,
+                        sourceBreakdown = sources,
+                        topTracks = topTracks,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun dismissArtistDetail() {
+        _uiState.update { it.copy(selectedArtistDetail = null) }
+    }
+
+    fun openTrackDetail(title: String, artist: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val key = normalizeScrobbleTrackKey(artist, title)
+            val matching = effectiveEvents().filter { it.trackKey == key }
+            if (matching.isEmpty()) return@launch
+
+            val totalMs = matching.sumOf { effectiveListenMs(it) }
+            val sortedAsc = matching.sortedBy { it.scrobbledAtMs }
+            val latest = sortedAsc.last()
+            val dateFmt = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+            val firstLabel = dateFmt.format(Date(sortedAsc.first().scrobbledAtMs))
+            val lastLabel = dateFmt.format(Date(latest.scrobbledAtMs))
+            val peakDayLabel = computePeakDayLabel(matching)
+
+            _uiState.update {
+                it.copy(
+                    selectedTrackDetail = TrackDetailStats(
+                        title = latest.title,
+                        artist = latest.artist,
+                        album = matching.firstOrNull { it.album.isNotBlank() }?.album.orEmpty(),
+                        artworkUrl = matching.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                        totalPlays = matching.size,
+                        totalListeningLabel = formatHoursMins(totalMs),
+                        isLoved = matching.any { it.isLoved },
+                        firstPlayedLabel = firstLabel,
+                        lastPlayedLabel = lastLabel,
+                        peakDayLabel = peakDayLabel,
+                        timelineBars = computeCompactTimeline(matching),
+                        sourceBreakdown = computeSourceBreakdown(matching),
+                        recentEvents = sortedAsc.reversed(),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun dismissTrackDetail() {
+        _uiState.update { it.copy(selectedTrackDetail = null) }
+    }
+
+    fun toggleLoveForEvent(event: ScrobbleEventEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            scrobbleSyncEngine.setTrackLoved(
+                artist = event.artist,
+                title = event.title,
+                loved = !event.isLoved,
+                eventId = event.id,
+            )
+            refreshOpenTrackDetailIfMatching(event.artist, event.title)
+        }
+    }
+
+    fun toggleLoveForSelectedTrack() {
+        val current = _uiState.value.selectedTrackDetail ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            scrobbleSyncEngine.setTrackLoved(
+                artist = current.artist,
+                title = current.title,
+                loved = !current.isLoved,
+            )
+            _uiState.update { state ->
+                state.selectedTrackDetail?.let { detail ->
+                    state.copy(selectedTrackDetail = detail.copy(isLoved = !detail.isLoved))
+                } ?: state
+            }
+        }
+    }
+
+    fun editScrobble(
+        event: ScrobbleEventEntity,
+        newTitle: String,
+        newArtist: String,
+        newAlbum: String,
+        saveAsAutoRule: Boolean,
+        applyRetroactively: Boolean,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = scrobbleSyncEngine.editScrobbleEvent(
+                event = event,
+                newTitle = newTitle,
+                newArtist = newArtist,
+                newAlbum = newAlbum,
+                saveAsAutoRule = saveAsAutoRule,
+                applyRetroactively = applyRetroactively,
+            )
+            _uiState.update {
+                it.copy(
+                    statusBanner = if (saveAsAutoRule) {
+                        "Updated $updated scrobble(s) and saved Pano auto-fix rule"
+                    } else {
+                        "Scrobble updated"
+                    },
+                )
+            }
+        }
+    }
+
+    fun deleteScrobble(event: ScrobbleEventEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            scrobbleSyncEngine.deleteScrobble(event.id)
+        }
+    }
+
+    fun flushPendingSync() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val report = scrobbleSyncEngine.flushPendingQueue()
+            val total = report.lastFmSynced + report.listenBrainzSynced
+            if (total > 0) {
+                _uiState.update { it.copy(statusBanner = "Synced $total queued scrobbles") }
+            }
+        }
+    }
+
+    fun clearStatusBanner() {
+        _uiState.update { it.copy(statusBanner = null) }
+    }
+
+    private fun refreshOpenTrackDetailIfMatching(artist: String, title: String) {
+        val open = _uiState.value.selectedTrackDetail ?: return
+        if (normalizeScrobbleTrackKey(open.artist, open.title) == normalizeScrobbleTrackKey(artist, title)) {
+            openTrackDetail(open.title, open.artist)
+        }
+    }
+
+    private fun loadAuxiliaryData() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isLoading = allEvents.isEmpty() && rawSongPlayStats.isEmpty()) }
             runCatching {
-                rawStatsList = songPlayStatsDao.getAll()
+                rawSongPlayStats = songPlayStatsDao.getAll()
                 localStatsCache = runCatching { localStatsRepository.load() }.getOrNull()
                 tasteTags = runCatching { tasteProfileProvider.get().topTags.toList() }.getOrNull().orEmpty()
                 downloadedFallbackList = runCatching { downloadedTrackDao.getAllList() }.getOrNull().orEmpty()
@@ -81,183 +306,238 @@ class ListeningStatsViewModel @Inject constructor(
         }
     }
 
-    private fun getCutoffMillis(range: StatsTimeRange): Long {
-        val now = Calendar.getInstance()
+    /**
+     * Primary source of truth is [allEvents] from [OnyxScrobbleDatabase].
+     * When the user hasn't accumulated scrobble events yet, synthesizes
+     * fallback events from [SongPlayStatsDao] / [LocalStatsRepository] / downloads
+     * so the Stats Hub never looks empty on first run.
+     */
+    private fun effectiveEvents(): List<ScrobbleEventEntity> {
+        if (allEvents.isNotEmpty()) return allEvents
+
+        if (rawSongPlayStats.isNotEmpty()) {
+            return rawSongPlayStats.flatMap { s ->
+                val count = s.playCount.coerceIn(1, 20)
+                val perPlayMs = (if (s.totalPlayTimeMs > 0L) s.totalPlayTimeMs / count else 210_000L)
+                    .coerceAtLeast(30_000L)
+                val baseTime = if (s.lastPlayedAtMillis > 0L) s.lastPlayedAtMillis else System.currentTimeMillis()
+                (0 until count).map { idx ->
+                    val ts = (baseTime - idx * 3_600_000L).coerceAtLeast(1L)
+                    ScrobbleEventEntity(
+                        id = -(s.trackKey.hashCode().toLong() * 31 + idx),
+                        trackKey = normalizeScrobbleTrackKey(s.artist, s.title),
+                        title = s.title.ifBlank { "Unknown Title" },
+                        artist = s.artist.ifBlank { "Unknown Artist" },
+                        artworkUrl = s.artworkUrl,
+                        durationMs = perPlayMs,
+                        listenedMs = perPlayMs,
+                        startedAtMs = ts,
+                        scrobbledAtMs = ts,
+                        sourcePackage = "com.leothefleo49.onyxmusic",
+                        sourceAppName = "Onyx Music",
+                    )
+                }
+            }
+        }
+
+        val local = localStatsCache
+        if (local != null && local.topTracks.isNotEmpty()) {
+            val now = System.currentTimeMillis()
+            return local.topTracks.mapIndexed { idx, ht ->
+                val ts = ht.timestampMillis ?: (now - idx * 86_400_000L)
+                ScrobbleEventEntity(
+                    id = -(idx.toLong() + 1L),
+                    trackKey = normalizeScrobbleTrackKey(ht.artist, ht.name),
+                    title = ht.name,
+                    artist = ht.artist,
+                    artworkUrl = ht.artworkUrl,
+                    durationMs = 210_000L,
+                    listenedMs = ht.playCount.coerceAtLeast(1) * 210_000L,
+                    startedAtMs = ts,
+                    scrobbledAtMs = ts,
+                    sourcePackage = "com.leothefleo49.onyxmusic",
+                    sourceAppName = "Onyx Music",
+                )
+            }
+        }
+
+        if (downloadedFallbackList.isNotEmpty()) {
+            return downloadedFallbackList.mapIndexed { idx, dt ->
+                val dur = dt.durationMs.takeIf { it > 0L } ?: 210_000L
+                ScrobbleEventEntity(
+                    id = -(10_000L + idx),
+                    trackKey = normalizeScrobbleTrackKey(dt.artist, dt.title),
+                    title = dt.title,
+                    artist = dt.artist,
+                    album = dt.album,
+                    artworkUrl = dt.artworkUrl,
+                    durationMs = dur,
+                    listenedMs = dur,
+                    startedAtMs = dt.downloadedAtMillis,
+                    scrobbledAtMs = dt.downloadedAtMillis,
+                    sourcePackage = "com.leothefleo49.onyxmusic",
+                    sourceAppName = "Onyx Music",
+                )
+            }
+        }
+        return emptyList()
+    }
+
+    private fun getWindowBounds(range: StatsTimeRange, custom: CustomDateRange?): Pair<Long, Long> {
+        val now = System.currentTimeMillis()
+        val cal = Calendar.getInstance()
         return when (range) {
-            StatsTimeRange.WEEK -> {
-                now.apply {
-                    set(Calendar.DAY_OF_WEEK, firstDayOfWeek)
-                    set(Calendar.HOUR_OF_DAY, 0)
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }.timeInMillis
+            StatsTimeRange.TODAY -> {
+                cal.set(Calendar.HOUR_OF_DAY, 0)
+                cal.set(Calendar.MINUTE, 0)
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+                cal.timeInMillis to now
             }
-            StatsTimeRange.MONTH_TO_DATE -> {
-                now.apply {
-                    set(Calendar.DAY_OF_MONTH, 1)
-                    set(Calendar.HOUR_OF_DAY, 0)
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }.timeInMillis
-            }
+            StatsTimeRange.WEEK -> (now - 7L * 86_400_000L) to now
+            StatsTimeRange.MONTH_TO_DATE -> (now - 30L * 86_400_000L) to now
             StatsTimeRange.YEAR_TO_DATE -> {
-                now.apply {
-                    set(Calendar.DAY_OF_YEAR, 1)
-                    set(Calendar.HOUR_OF_DAY, 0)
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }.timeInMillis
+                cal.set(Calendar.DAY_OF_YEAR, 1)
+                cal.set(Calendar.HOUR_OF_DAY, 0)
+                cal.set(Calendar.MINUTE, 0)
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+                cal.timeInMillis to now
             }
-            StatsTimeRange.ALL_TIME -> 0L
+            StatsTimeRange.ALL_TIME -> 0L to Long.MAX_VALUE
+            StatsTimeRange.CUSTOM -> {
+                if (custom != null) custom.startMs to custom.endMs else (now - 30L * 86_400_000L) to now
+            }
         }
     }
 
     private fun recalculate() {
         val state = _uiState.value
-        val cutoff = getCutoffMillis(state.selectedRange)
+        val fullPool = effectiveEvents()
+        val (startMs, endMs) = getWindowBounds(state.selectedRange, state.customRange)
 
-        // 1. Filter tracks within the selected time window
-        var tracks = if (cutoff > 0L) {
-            rawStatsList.filter { it.lastPlayedAtMillis >= cutoff }
+        val inWindow = if (startMs > 0L || endMs < Long.MAX_VALUE) {
+            fullPool.filter { it.scrobbledAtMs in startMs..endMs }
         } else {
-            rawStatsList
+            fullPool
         }
 
-        // Fallback: If DB song_play_stats is empty for the requested range,
-        // fall back to raw stats, localStatsCache, or downloads so the user sees real library insights
-        if (tracks.isEmpty()) {
-            if (rawStatsList.isNotEmpty()) {
-                tracks = rawStatsList
-            } else if (localStatsCache != null) {
-                val local = localStatsCache!!
-                tracks = local.topTracks.map { ht ->
-                    SongPlayStatsEntity(
-                        trackKey = "${ht.name}|${ht.artist}".lowercase(),
-                        title = ht.name,
-                        artist = ht.artist,
-                        artworkUrl = ht.artworkUrl,
-                        totalPlayTimeMs = ht.playCount * 210_000L,
-                        playCount = ht.playCount,
-                        lastPlayedAtMillis = System.currentTimeMillis() - (1..30).random() * 86_400_000L,
-                    )
-                }
-            } else if (downloadedFallbackList.isNotEmpty()) {
-                tracks = downloadedFallbackList.map { dt ->
-                    SongPlayStatsEntity(
-                        trackKey = "${dt.title}|${dt.artist}".lowercase(),
-                        title = dt.title,
-                        artist = dt.artist,
-                        artworkUrl = dt.artworkUrl,
-                        totalPlayTimeMs = dt.durationMs.takeIf { it > 0L } ?: 210_000L,
-                        playCount = 1,
-                        lastPlayedAtMillis = dt.downloadedAtMillis,
-                    )
-                }
-            }
-        }
+        val totalListeningMs = inWindow.sumOf { effectiveListenMs(it) }
+        val totalPlays = inWindow.size
+        val uniqueTracks = inWindow.map { it.trackKey }.distinct().size
+        val uniqueArtists = inWindow.map { it.artist.trim().lowercase() }.filter { it.isNotBlank() }.distinct().size
+        val uniqueAlbums = inWindow.map { it.album.trim().lowercase() }.filter { it.isNotBlank() }.distinct().size
+        val sources = computeSourceBreakdown(inWindow)
 
-        // Total listening duration & play count
-        val totalListeningMs = tracks.sumOf {
-            if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L
-        }
-        val totalPlays = tracks.sumOf { it.playCount.coerceAtLeast(1) }
+        val streakSummary = ScrobbleRulesEngine.computeStreaks(fullPool.map { it.scrobbledAtMs })
         val totalListeningLabel = formatHoursMins(totalListeningMs)
 
-        // 2. Timeline Bars & Peak Segment
-        val (bars, peakName, peakDuration) = computeTimelineBars(tracks, state.selectedRange, state.selectedTimelineMetric)
+        val heroKpis = HeroKpiSummary(
+            totalListeningLabel = totalListeningLabel,
+            totalScrobbles = totalPlays,
+            uniqueTracks = uniqueTracks,
+            uniqueArtists = uniqueArtists,
+            uniqueAlbums = uniqueAlbums,
+            currentStreakDays = streakSummary.currentStreakDays,
+            longestStreakDays = streakSummary.longestStreakDays,
+            activeSourcesCount = sources.size,
+        )
 
-        // 3. Category Items (Song / Album / Artist / Genre)
-        val categoryItems = computeCategoryItems(tracks, state.selectedCategory)
+        val (bars, peakName, peakDuration) = computeTimelineBars(
+            events = inWindow,
+            range = state.selectedRange,
+            metric = state.selectedTimelineMetric,
+        )
+        val categoryItems = computeCategoryItems(inWindow, state.selectedCategory)
+        val habits = computeHabits(inWindow, totalListeningMs, totalPlays)
+        val concentration = computeConcentration(inWindow, totalListeningMs)
+        val records = computePersonalRecords(fullPool, streakSummary)
+        val weeklyRhythm = computeWeeklyRhythm(fullPool)
+        val monthComparison = computeMonthComparison(fullPool)
+        val hourlyRhythm = computeHourlyRhythm(inWindow.ifEmpty { fullPool })
+        val matrixHeatmap = computeMatrixHeatmap(inWindow.ifEmpty { fullPool })
+        val activityHeatmap = computeActivityHeatmap(fullPool)
 
-        // 4. Listening Habits
-        val habits = computeHabits(tracks, totalListeningMs, totalPlays)
-
-        // 5. Track Concentration
-        val concentration = computeConcentration(tracks, totalListeningMs, totalPlays)
-
-        // 6. Detailed Rhythm & Insights
-        val records = computePersonalRecords(rawStatsList.ifEmpty { tracks })
-        val weeklyRhythm = computeWeeklyRhythm(rawStatsList.ifEmpty { tracks })
-        val monthComparison = computeMonthComparison(rawStatsList.ifEmpty { tracks })
-        val hourlyRhythm = computeHourlyRhythm(rawStatsList.ifEmpty { tracks })
-        val activityHeatmap = computeActivityHeatmap(rawStatsList.ifEmpty { tracks })
-
-        // Sleep-tracker-inspired: Consistency Score & Listening Stages
-        val streak = records?.longestStreakDays ?: 1
-        val avgSessionMins = ((habits?.avgSessionLabel?.filter { it.isDigit() }?.toIntOrNull() ?: 18)).coerceIn(5, 120)
-        val score = (60 + (streak * 4).coerceAtMost(20) + (avgSessionMins / 3).coerceAtMost(20)).coerceIn(65, 99)
+        val avgSessionMins = (habits.avgSessionLabel.filter { it.isDigit() }.toIntOrNull() ?: 15).coerceIn(5, 120)
+        val consistencyScore = (
+            55 +
+                (streakSummary.currentStreakDays * 4).coerceAtMost(24) +
+                (streakSummary.activeDaysLast7 * 3).coerceAtMost(21)
+            ).coerceIn(0, 99)
         val rating = when {
-            score >= 90 -> "Peak Flow"
-            score >= 80 -> "Optimal Rhythm"
-            score >= 70 -> "Steady Cadence"
+            consistencyScore >= 90 -> "Peak Flow"
+            consistencyScore >= 78 -> "Optimal Rhythm"
+            consistencyScore >= 65 -> "Steady Cadence"
             else -> "Light Rhythm"
         }
         val consistency = ConsistencyScoreData(
-            score = score,
+            score = if (fullPool.isEmpty()) 0 else consistencyScore,
             rating = rating,
-            subtitle = if (streak > 2) "$streak-day listening streak active" else "Consistent daily listening sessions",
+            subtitle = if (streakSummary.currentStreakDays > 0) {
+                "${streakSummary.currentStreakDays}-day listening streak active (best ${streakSummary.longestStreakDays}d)"
+            } else {
+                "Play a track today to start a new streak"
+            },
             avgSessionMinutes = avgSessionMins,
-            activeDaysThisWeek = (streak.coerceAtMost(7)).coerceAtLeast(3),
-            streakDays = streak,
+            activeDaysThisWeek = streakSummary.activeDaysLast7.coerceIn(0, 7),
+            streakDays = streakSummary.currentStreakDays,
         )
 
-        val deepTracks = tracks.filter { it.totalPlayTimeMs >= 240_000L || it.playCount >= 3 }
-        val deepMs = deepTracks.sumOf { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }
-        val deepPercent = if (totalListeningMs > 0) ((deepMs.toDouble() / totalListeningMs) * 100).roundToInt().coerceIn(20, 70) else 45
-        val discoveryTracks = tracks.filter { it.playCount <= 1 }
-        val discoveryMs = discoveryTracks.sumOf { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else 210_000L }
-        val discoveryPercent = if (totalListeningMs > 0) ((discoveryMs.toDouble() / totalListeningMs) * 100).roundToInt().coerceIn(10, 35) else 20
-        val flowPercent = (100 - deepPercent - discoveryPercent).coerceAtLeast(15)
+        val trackCounts = inWindow.groupingBy { it.trackKey }.eachCount()
+        val deepMs = inWindow.filter { (trackCounts[it.trackKey] ?: 1) >= 3 }.sumOf { effectiveListenMs(it) }
+        val discoveryMs = inWindow.filter { (trackCounts[it.trackKey] ?: 1) == 1 }.sumOf { effectiveListenMs(it) }
+        val deepPct = if (totalListeningMs > 0L) ((deepMs.toDouble() / totalListeningMs) * 100).roundToInt().coerceIn(5, 80) else 0
+        val discPct = if (totalListeningMs > 0L) ((discoveryMs.toDouble() / totalListeningMs) * 100).roundToInt().coerceIn(5, 100 - deepPct) else 0
+        val flowPct = if (totalListeningMs > 0L) (100 - deepPct - discPct).coerceAtLeast(0) else 0
 
         val stages = ListeningStagesData(
             deepFocus = ListeningStage(
-                name = "Deep Focus",
-                percent = deepPercent,
-                durationLabel = formatHoursMins((totalListeningMs * deepPercent) / 100),
-                description = "Extended listening sessions and favorite repeats",
+                name = "Heavy Rotation",
+                percent = deepPct,
+                durationLabel = formatHoursMins(deepMs),
+                description = "Tracks played 3 or more times in this window",
             ),
             flowState = ListeningStage(
-                name = "Flow State",
-                percent = flowPercent,
-                durationLabel = formatHoursMins((totalListeningMs * flowPercent) / 100),
-                description = "Balanced background listening & daily rotation",
+                name = "Steady Rotation",
+                percent = flowPct,
+                durationLabel = formatHoursMins((totalListeningMs - deepMs - discoveryMs).coerceAtLeast(0L)),
+                description = "Tracks revisited across sessions",
             ),
             discovery = ListeningStage(
                 name = "Discovery",
-                percent = discoveryPercent,
-                durationLabel = formatHoursMins((totalListeningMs * discoveryPercent) / 100),
-                description = "Exploring new tracks & genre adventures",
+                percent = discPct,
+                durationLabel = formatHoursMins(discoveryMs),
+                description = "First-time plays and one-off listens",
             ),
         )
 
-        // 7. Tracks in range
-        val maxTrackMs = tracks.maxOfOrNull {
-            if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L
-        }?.coerceAtLeast(1L) ?: 1L
-
-        val tracksInRange = tracks
-            .sortedByDescending { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }
+        val groupedTracks = inWindow.groupBy { it.trackKey }.values
+            .sortedByDescending { list -> list.size * 1_000_000L + list.sumOf { effectiveListenMs(it) } }
             .take(30)
-            .mapIndexed { idx, entity ->
-                val trackMs = if (entity.totalPlayTimeMs > 0L) entity.totalPlayTimeMs else entity.playCount * 210_000L
-                RankedTrackItem(
-                    rank = idx + 1,
-                    title = entity.title.ifBlank { "Unknown Title" },
-                    artist = entity.artist.ifBlank { "Unknown Artist" },
-                    artworkUrl = entity.artworkUrl,
-                    playCount = entity.playCount.coerceAtLeast(1),
-                    durationLabel = formatHoursMins(trackMs),
-                    progress = (trackMs.toFloat() / maxTrackMs).coerceIn(0.05f, 1f),
-                )
-            }
+        val maxTrackMs = groupedTracks.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
+        val tracksInRange = groupedTracks.mapIndexed { idx, list ->
+            val latest = list.maxByOrNull { it.scrobbledAtMs } ?: list.first()
+            val ms = list.sumOf { effectiveListenMs(it) }
+            RankedTrackItem(
+                rank = idx + 1,
+                title = latest.title.ifBlank { "Unknown Title" },
+                artist = latest.artist.ifBlank { "Unknown Artist" },
+                artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                playCount = list.size,
+                durationLabel = formatHoursMins(ms),
+                progress = (ms.toFloat() / maxTrackMs).coerceIn(0.05f, 1f),
+                album = latest.album,
+                sourceSummary = summarizeSources(list),
+            )
+        }
 
         _uiState.update {
             it.copy(
+                isLoading = false,
+                heroKpis = heroKpis,
                 totalListeningLabel = totalListeningLabel,
                 totalPlays = totalPlays,
+                sourceBreakdown = sources,
                 timelineBars = bars,
                 peakSegmentName = peakName,
                 peakSegmentDuration = peakDuration,
@@ -269,309 +549,359 @@ class ListeningStatsViewModel @Inject constructor(
                 weeklyRhythm = weeklyRhythm,
                 monthComparison = monthComparison,
                 hourlyRhythm = hourlyRhythm,
+                matrixHeatmap = matrixHeatmap,
                 activityHeatmap = activityHeatmap,
                 consistency = consistency,
                 stages = stages,
+                recentScrobbles = allEvents,
             )
         }
     }
 
+    private fun effectiveListenMs(event: ScrobbleEventEntity): Long = when {
+        event.listenedMs > 0L -> event.listenedMs
+        event.durationMs > 0L -> event.durationMs
+        else -> 210_000L
+    }
+
+    private fun computeSourceBreakdown(events: List<ScrobbleEventEntity>): List<SourceAppBreakdown> {
+        if (events.isEmpty()) return emptyList()
+        val total = events.size.coerceAtLeast(1).toFloat()
+        return events
+            .groupBy { (it.sourcePackage.ifBlank { "com.leothefleo49.onyxmusic" }) to (it.sourceAppName.ifBlank { "Onyx Music" }) }
+            .entries
+            .sortedByDescending { it.value.size }
+            .map { (key, list) ->
+                val ms = list.sumOf { effectiveListenMs(it) }
+                SourceAppBreakdown(
+                    packageName = key.first,
+                    appName = key.second,
+                    playCount = list.size,
+                    listeningLabel = formatHoursMins(ms),
+                    fraction = (list.size / total).coerceIn(0.05f, 1f),
+                )
+            }
+    }
+
+    private fun summarizeSources(events: List<ScrobbleEventEntity>): String {
+        val grouped = events.groupingBy { it.sourceAppName.ifBlank { "Onyx Music" } }.eachCount()
+        if (grouped.isEmpty()) return ""
+        val top = grouped.entries.sortedByDescending { it.value }
+        return if (top.size == 1) {
+            top.first().key
+        } else {
+            "${top.first().key} +${top.size - 1}"
+        }
+    }
+
     private fun computeTimelineBars(
-        tracks: List<SongPlayStatsEntity>,
+        events: List<ScrobbleEventEntity>,
         range: StatsTimeRange,
         metric: TimelineMetric,
     ): Triple<List<TimelineBar>, String, String> {
-        if (tracks.isEmpty()) {
-            val emptyYear = Calendar.getInstance().get(Calendar.YEAR).toString()
-            return Triple(listOf(TimelineBar(emptyYear, 1f, "0m", isPeak = true)), emptyYear, "0m")
+        if (events.isEmpty()) {
+            val fallbackLabel = Calendar.getInstance().get(Calendar.YEAR).toString()
+            return Triple(listOf(TimelineBar(fallbackLabel, 0.08f, "0m", isPeak = false)), "", "0m")
         }
 
-        // Group tracks by label based on range
         data class Bucket(val label: String, var totalMs: Long = 0L, var plays: Int = 0, var sessions: Int = 0)
         val buckets = LinkedHashMap<String, Bucket>()
+        val cal = Calendar.getInstance()
 
         when (range) {
-            StatsTimeRange.WEEK -> {
-                val dayNameFmt = SimpleDateFormat("EEE", Locale.getDefault())
-                val tempCal = Calendar.getInstance()
-                tempCal.set(Calendar.DAY_OF_WEEK, tempCal.firstDayOfWeek)
-                val daysOfWeek = mutableListOf<String>()
-                for (i in 0..6) {
-                    daysOfWeek.add(dayNameFmt.format(tempCal.time))
-                    tempCal.add(Calendar.DAY_OF_WEEK, 1)
+            StatsTimeRange.TODAY -> {
+                for (block in 0..20 step 4) {
+                    val label = String.format(Locale.US, "%02d", block)
+                    buckets[label] = Bucket(label)
                 }
-                daysOfWeek.forEach { d -> buckets[d] = Bucket(d) }
-                val cal = Calendar.getInstance()
-                tracks.forEach { t ->
-                    val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-                    cal.timeInMillis = time
-                    val label = dayNameFmt.format(cal.time)
+                events.forEach { ev ->
+                    cal.timeInMillis = ev.scrobbledAtMs
+                    val block = (cal.get(Calendar.HOUR_OF_DAY) / 4) * 4
+                    val label = String.format(Locale.US, "%02d", block)
                     val b = buckets.getOrPut(label) { Bucket(label) }
-                    val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
-                    b.totalMs += ms
-                    b.plays += t.playCount.coerceAtLeast(1)
-                    b.sessions += (t.playCount.coerceAtLeast(1) / 3).coerceAtLeast(1)
+                    b.totalMs += effectiveListenMs(ev)
+                    b.plays++
                 }
             }
-            StatsTimeRange.ALL_TIME -> {
-                val currentYear = Calendar.getInstance().get(Calendar.YEAR)
-                val years = listOf(currentYear - 2, currentYear - 1, currentYear)
-                years.forEach { y -> buckets[y.toString()] = Bucket(y.toString()) }
-
-                val cal = Calendar.getInstance()
-                tracks.forEach { t ->
-                    val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-                    cal.timeInMillis = time
-                    val y = cal.get(Calendar.YEAR).toString()
-                    val b = buckets.getOrPut(y) { Bucket(y) }
-                    val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
-                    b.totalMs += ms
-                    b.plays += t.playCount.coerceAtLeast(1)
-                    b.sessions += (t.playCount.coerceAtLeast(1) / 3).coerceAtLeast(1)
+            StatsTimeRange.WEEK -> {
+                val dayFmt = SimpleDateFormat("EEE", Locale.getDefault())
+                val cursor = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -6) }
+                for (i in 0..6) {
+                    val label = dayFmt.format(cursor.time)
+                    buckets[label] = Bucket(label)
+                    cursor.add(Calendar.DAY_OF_YEAR, 1)
+                }
+                events.forEach { ev ->
+                    cal.timeInMillis = ev.scrobbledAtMs
+                    val label = dayFmt.format(cal.time)
+                    val b = buckets.getOrPut(label) { Bucket(label) }
+                    b.totalMs += effectiveListenMs(ev)
+                    b.plays++
+                }
+            }
+            StatsTimeRange.MONTH_TO_DATE, StatsTimeRange.CUSTOM -> {
+                val dayFmt = SimpleDateFormat("MM/dd", Locale.US)
+                val sorted = events.sortedBy { it.scrobbledAtMs }
+                val uniqueDays = sorted.map {
+                    cal.timeInMillis = it.scrobbledAtMs
+                    dayFmt.format(cal.time)
+                }.distinct()
+                val useMonthly = uniqueDays.size > 45
+                val fmt = if (useMonthly) SimpleDateFormat("MMM yy", Locale.getDefault()) else SimpleDateFormat("dd", Locale.US)
+                sorted.forEach { ev ->
+                    cal.timeInMillis = ev.scrobbledAtMs
+                    val label = fmt.format(cal.time)
+                    val b = buckets.getOrPut(label) { Bucket(label) }
+                    b.totalMs += effectiveListenMs(ev)
+                    b.plays++
                 }
             }
             StatsTimeRange.YEAR_TO_DATE -> {
                 val monthFmt = SimpleDateFormat("MMM", Locale.getDefault())
-                val cal = Calendar.getInstance()
                 val currentMonth = cal.get(Calendar.MONTH)
                 for (m in 0..currentMonth) {
                     cal.set(Calendar.MONTH, m)
                     val label = monthFmt.format(cal.time)
                     buckets[label] = Bucket(label)
                 }
-                tracks.forEach { t ->
-                    val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-                    cal.timeInMillis = time
+                events.forEach { ev ->
+                    cal.timeInMillis = ev.scrobbledAtMs
                     val label = monthFmt.format(cal.time)
                     val b = buckets.getOrPut(label) { Bucket(label) }
-                    val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
-                    b.totalMs += ms
-                    b.plays += t.playCount.coerceAtLeast(1)
-                    b.sessions += (t.playCount.coerceAtLeast(1) / 3).coerceAtLeast(1)
+                    b.totalMs += effectiveListenMs(ev)
+                    b.plays++
                 }
             }
-            StatsTimeRange.MONTH_TO_DATE -> {
-                val dayFmt = SimpleDateFormat("dd", Locale.getDefault())
-                val cal = Calendar.getInstance()
-                val currentDay = cal.get(Calendar.DAY_OF_MONTH)
-                val step = if (currentDay > 14) 2 else 1
-                for (d in 1..currentDay step step) {
-                    cal.set(Calendar.DAY_OF_MONTH, d)
-                    val label = dayFmt.format(cal.time)
-                    buckets[label] = Bucket(label)
-                }
-                tracks.forEach { t ->
-                    val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-                    cal.timeInMillis = time
-                    val label = dayFmt.format(cal.time)
+            StatsTimeRange.ALL_TIME -> {
+                events.sortedBy { it.scrobbledAtMs }.forEach { ev ->
+                    cal.timeInMillis = ev.scrobbledAtMs
+                    val label = cal.get(Calendar.YEAR).toString()
                     val b = buckets.getOrPut(label) { Bucket(label) }
-                    val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
-                    b.totalMs += ms
-                    b.plays += t.playCount.coerceAtLeast(1)
-                    b.sessions += (t.playCount.coerceAtLeast(1) / 3).coerceAtLeast(1)
+                    b.totalMs += effectiveListenMs(ev)
+                    b.plays++
                 }
             }
         }
 
-        val bucketList = buckets.values.toList()
-        val peakBucket = bucketList.maxByOrNull {
-            when (metric) {
-                TimelineMetric.LISTENING_TIME -> it.totalMs.toFloat()
-                TimelineMetric.PLAY_COUNT -> it.plays.toFloat()
-                TimelineMetric.AVG_SESSION -> if (it.sessions > 0) (it.totalMs / (it.sessions * 60_000f)) else 0f
-            }
+        // Trim excessive buckets to keep bar chart readable
+        val rawList = buckets.values.toList()
+        val bucketList = if (rawList.size > 14) rawList.takeLast(14) else rawList
+        bucketList.forEach { b -> b.sessions = (b.plays / 4).coerceAtLeast(if (b.plays > 0) 1 else 0) }
+
+        fun metricVal(b: Bucket): Float = when (metric) {
+            TimelineMetric.LISTENING_TIME -> b.totalMs / 60_000f
+            TimelineMetric.PLAY_COUNT -> b.plays.toFloat()
+            TimelineMetric.AVG_SESSION -> if (b.sessions > 0) (b.totalMs / (b.sessions * 60_000f)) else 0f
         }
 
-        val maxVal = bucketList.maxOfOrNull {
-            when (metric) {
-                TimelineMetric.LISTENING_TIME -> (it.totalMs / 60_000f)
-                TimelineMetric.PLAY_COUNT -> it.plays.toFloat()
-                TimelineMetric.AVG_SESSION -> if (it.sessions > 0) (it.totalMs / (it.sessions * 60_000f)) else 0f
-            }
-        }?.coerceAtLeast(1f) ?: 1f
+        val peakBucket = bucketList.maxByOrNull { metricVal(it) }
+        val maxVal = bucketList.maxOfOrNull { metricVal(it) }?.coerceAtLeast(1f) ?: 1f
 
         val bars = bucketList.map { b ->
-            val numVal = when (metric) {
-                TimelineMetric.LISTENING_TIME -> (b.totalMs / 60_000f)
-                TimelineMetric.PLAY_COUNT -> b.plays.toFloat()
-                TimelineMetric.AVG_SESSION -> if (b.sessions > 0) (b.totalMs / (b.sessions * 60_000f)) else 0f
-            }
-            val valueLabel = when (metric) {
+            val v = metricVal(b)
+            val labelText = when (metric) {
                 TimelineMetric.LISTENING_TIME -> formatHoursMins(b.totalMs)
                 TimelineMetric.PLAY_COUNT -> "${b.plays} plays"
-                TimelineMetric.AVG_SESSION -> "${numVal.roundToInt()}m"
+                TimelineMetric.AVG_SESSION -> "${v.roundToInt()}m"
             }
             TimelineBar(
                 label = b.label,
-                value = (numVal / maxVal).coerceIn(0.05f, 1f),
-                valueLabel = valueLabel,
-                isPeak = (b == peakBucket && numVal > 0f),
+                value = (v / maxVal).coerceIn(0.05f, 1f),
+                valueLabel = labelText,
+                isPeak = b == peakBucket && v > 0f,
             )
         }
-
-        val peakName = peakBucket?.label ?: "2026"
-        val peakDuration = formatHoursMins(peakBucket?.totalMs ?: 0L)
-        return Triple(bars, peakName, peakDuration)
+        return Triple(bars, peakBucket?.label.orEmpty(), formatHoursMins(peakBucket?.totalMs ?: 0L))
     }
 
     private fun computeCategoryItems(
-        tracks: List<SongPlayStatsEntity>,
+        events: List<ScrobbleEventEntity>,
         category: CategoryFilter,
     ): List<RankedCategoryItem> {
         return when (category) {
             CategoryFilter.SONG -> {
-                val sorted = tracks.sortedByDescending { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }.take(10)
-                val maxMs = sorted.firstOrNull()?.let { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }?.coerceAtLeast(1L) ?: 1L
-                sorted.mapIndexed { idx, t ->
-                    val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
+                val grouped = events.groupBy { it.trackKey }.values
+                    .sortedByDescending { list -> list.sumOf { effectiveListenMs(it) } }
+                    .take(15)
+                val maxMs = grouped.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
+                grouped.mapIndexed { idx, list ->
+                    val sample = list.first()
+                    val ms = list.sumOf { effectiveListenMs(it) }
+                    val src = summarizeSources(list)
                     RankedCategoryItem(
                         rank = idx + 1,
-                        title = t.title.ifBlank { "Unknown Title" },
-                        subtitle = "${t.playCount.coerceAtLeast(1)} plays \u2022 ${t.artist.ifBlank { "Unknown Artist" }}",
+                        title = sample.title.ifBlank { "Unknown Title" },
+                        subtitle = "${list.size} plays \u00b7 ${sample.artist.ifBlank { "Unknown Artist" }}" +
+                            if (src.isNotBlank()) " \u00b7 $src" else "",
                         durationLabel = formatHoursMins(ms),
                         progress = (ms.toFloat() / maxMs).coerceIn(0.05f, 1f),
-                        artworkUrl = t.artworkUrl,
+                        artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                        artist = sample.artist,
+                        playCount = list.size,
+                        sourceSummary = src,
                     )
                 }
             }
             CategoryFilter.ARTIST -> {
-                val grouped = tracks.groupBy { it.artist.trim().ifBlank { "Unknown Artist" } }
-                val artistList = grouped.map { (artist, list) ->
-                    val totalMs = list.sumOf { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }
-                    val totalPlays = list.sumOf { it.playCount.coerceAtLeast(1) }
-                    val distinctTracks = list.size
-                    Triple(artist, totalMs, "$totalPlays plays \u2022 $distinctTracks tracks")
-                }.sortedByDescending { it.second }.take(10)
-
-                val maxMs = artistList.firstOrNull()?.second?.coerceAtLeast(1L) ?: 1L
-                artistList.mapIndexed { idx, (artist, ms, sub) ->
+                val grouped = events.groupBy { it.artist.trim().lowercase().ifBlank { "unknown" } }.values
+                    .sortedByDescending { list -> list.sumOf { effectiveListenMs(it) } }
+                    .take(15)
+                val maxMs = grouped.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
+                grouped.mapIndexed { idx, list ->
+                    val displayArtist = list.first().artist.trim().ifBlank { "Unknown Artist" }
+                    val ms = list.sumOf { effectiveListenMs(it) }
+                    val distinctTracks = list.map { it.trackKey }.distinct().size
+                    val src = summarizeSources(list)
                     RankedCategoryItem(
                         rank = idx + 1,
-                        title = artist,
-                        subtitle = sub,
+                        title = displayArtist,
+                        subtitle = "${list.size} plays \u00b7 $distinctTracks tracks" +
+                            if (src.isNotBlank()) " \u00b7 $src" else "",
                         durationLabel = formatHoursMins(ms),
                         progress = (ms.toFloat() / maxMs).coerceIn(0.05f, 1f),
+                        artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                        artist = displayArtist,
+                        playCount = list.size,
+                        sourceSummary = src,
                     )
                 }
             }
             CategoryFilter.ALBUM -> {
-                val localAlbums = localStatsCache?.topAlbums.orEmpty()
-                if (localAlbums.isNotEmpty()) {
-                    val maxPlays = localAlbums.firstOrNull()?.playCount?.coerceAtLeast(1L) ?: 1L
-                    localAlbums.take(10).mapIndexed { idx, alb ->
-                        val durationMs = alb.playCount * 210_000L
+                val withAlbum = events.filter { it.album.isNotBlank() }
+                if (withAlbum.isNotEmpty()) {
+                    val grouped = withAlbum
+                        .groupBy { "${it.artist.trim().lowercase()}|${it.album.trim().lowercase()}" }
+                        .values
+                        .sortedByDescending { list -> list.sumOf { effectiveListenMs(it) } }
+                        .take(15)
+                    val maxMs = grouped.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
+                    grouped.mapIndexed { idx, list ->
+                        val sample = list.first()
+                        val ms = list.sumOf { effectiveListenMs(it) }
                         RankedCategoryItem(
                             rank = idx + 1,
-                            title = alb.name,
-                            subtitle = "${alb.playCount} plays \u2022 ${alb.artist}",
-                            durationLabel = formatHoursMins(durationMs),
-                            progress = (alb.playCount.toFloat() / maxPlays).coerceIn(0.05f, 1f),
-                            artworkUrl = alb.artworkUrl,
+                            title = sample.album.trim(),
+                            subtitle = "${list.size} plays \u00b7 ${sample.artist.trim()}",
+                            durationLabel = formatHoursMins(ms),
+                            progress = (ms.toFloat() / maxMs).coerceIn(0.05f, 1f),
+                            artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                            artist = sample.artist.trim(),
+                            playCount = list.size,
+                            sourceSummary = summarizeSources(list),
                         )
                     }
                 } else {
-                    // Fallback to grouping tracks by artist as album proxy
-                    val grouped = tracks.groupBy { it.artist.trim().ifBlank { "Single / Album" } }
-                    val list = grouped.map { (name, list) ->
-                        val ms = list.sumOf { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }
-                        Triple(name, ms, "${list.sumOf { it.playCount.coerceAtLeast(1) }} plays \u2022 ${list.size} tracks")
-                    }.sortedByDescending { it.second }.take(10)
-                    val maxMs = list.firstOrNull()?.second?.coerceAtLeast(1L) ?: 1L
-                    list.mapIndexed { idx, (title, ms, sub) ->
+                    val localAlbums = localStatsCache?.topAlbums.orEmpty()
+                    val maxPlays = localAlbums.firstOrNull()?.playCount?.coerceAtLeast(1L) ?: 1L
+                    localAlbums.take(15).mapIndexed { idx, alb ->
                         RankedCategoryItem(
                             rank = idx + 1,
-                            title = title,
-                            subtitle = sub,
-                            durationLabel = formatHoursMins(ms),
-                            progress = (ms.toFloat() / maxMs).coerceIn(0.05f, 1f),
+                            title = alb.name,
+                            subtitle = "${alb.playCount} plays \u00b7 ${alb.artist}",
+                            durationLabel = formatHoursMins(alb.playCount * 210_000L),
+                            progress = (alb.playCount.toFloat() / maxPlays).coerceIn(0.05f, 1f),
+                            artworkUrl = alb.artworkUrl,
+                            artist = alb.artist,
+                            playCount = alb.playCount.toInt(),
                         )
                     }
                 }
             }
             CategoryFilter.GENRE -> {
-                val tags = tasteTags
-                val genres = if (tags.isNotEmpty()) tags else listOf("Pop", "Electronic", "Rock", "Hip-Hop", "Indie", "R&B")
-                val totalMs = tracks.sumOf { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }
-                genres.take(8).mapIndexed { idx, genre ->
-                    val weight = (genres.size - idx).toFloat() / (genres.size * (genres.size + 1) / 2f)
-                    val genreMs = (totalMs * weight).toLong().coerceAtLeast(60_000L)
-                    val plays = (tracks.size * weight).roundToInt().coerceAtLeast(1)
-                    RankedCategoryItem(
-                        rank = idx + 1,
-                        title = genre.replaceFirstChar { it.uppercase() },
-                        subtitle = "$plays plays",
-                        durationLabel = formatHoursMins(genreMs),
-                        progress = ((genres.size - idx).toFloat() / genres.size).coerceIn(0.15f, 1f),
-                    )
+                val withGenre = events.filter { it.genre.isNotBlank() }
+                if (withGenre.isNotEmpty()) {
+                    val grouped = withGenre.groupBy { it.genre.trim().lowercase() }.values
+                        .sortedByDescending { list -> list.sumOf { effectiveListenMs(it) } }
+                        .take(12)
+                    val maxMs = grouped.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
+                    grouped.mapIndexed { idx, list ->
+                        val ms = list.sumOf { effectiveListenMs(it) }
+                        val display = list.first().genre.trim().replaceFirstChar { it.uppercase() }
+                        RankedCategoryItem(
+                            rank = idx + 1,
+                            title = display,
+                            subtitle = "${list.size} plays \u00b7 ${summarizeSources(list)}",
+                            durationLabel = formatHoursMins(ms),
+                            progress = (ms.toFloat() / maxMs).coerceIn(0.05f, 1f),
+                            playCount = list.size,
+                        )
+                    }
+                } else if (tasteTags.isNotEmpty()) {
+                    val totalMs = events.sumOf { effectiveListenMs(it) }
+                    tasteTags.take(8).mapIndexed { idx, tag ->
+                        val weight = (tasteTags.size - idx).toFloat() / (tasteTags.size * (tasteTags.size + 1) / 2f)
+                        val ms = (totalMs * weight).toLong()
+                        val plays = (events.size * weight).roundToInt().coerceAtLeast(1)
+                        RankedCategoryItem(
+                            rank = idx + 1,
+                            title = tag.replaceFirstChar { it.uppercase() },
+                            subtitle = "$plays estimated plays",
+                            durationLabel = formatHoursMins(ms),
+                            progress = ((tasteTags.size - idx).toFloat() / tasteTags.size).coerceIn(0.12f, 1f),
+                            playCount = plays,
+                        )
+                    }
+                } else {
+                    emptyList()
                 }
             }
         }
     }
 
     private fun computeHabits(
-        tracks: List<SongPlayStatsEntity>,
+        events: List<ScrobbleEventEntity>,
         totalListeningMs: Long,
         totalPlays: Int,
     ): ListeningHabitsData {
-        if (tracks.isEmpty()) {
+        if (events.isEmpty()) {
             return ListeningHabitsData(
                 totalSessions = 0,
                 avgSessionLabel = "0m",
                 longestSessionLabel = "0m",
                 sessionsPerDay = "0.0",
-                mostActiveDay = "Sunday, 0m",
-                peakTimelineSlot = "2026, 0m",
+                mostActiveDay = "None",
+                peakTimelineSlot = "None",
             )
         }
 
-        // Sessions calculation:
-        // Cluster plays within 25 minutes of each other into contiguous sessions
-        val sortedByTime = tracks
-            .filter { it.lastPlayedAtMillis > 0L }
-            .sortedBy { it.lastPlayedAtMillis }
-
+        val sorted = events.sortedBy { it.scrobbledAtMs }
         var sessionsCount = 1
         var longestSessionMs = 0L
-        var currentSessionStart = sortedByTime.firstOrNull()?.lastPlayedAtMillis ?: 0L
-        var lastTime = currentSessionStart
+        var sessionMs = effectiveListenMs(sorted.first())
+        var lastTime = sorted.first().scrobbledAtMs
 
-        sortedByTime.forEach { t ->
-            if (t.lastPlayedAtMillis - lastTime > 25 * 60_000L) {
-                val dur = (lastTime - currentSessionStart).coerceAtLeast(15 * 60_000L)
-                longestSessionMs = maxOf(longestSessionMs, dur)
+        for (i in 1 until sorted.size) {
+            val ev = sorted[i]
+            if (ev.scrobbledAtMs - lastTime > 25 * 60_000L) {
+                longestSessionMs = maxOf(longestSessionMs, sessionMs)
                 sessionsCount++
-                currentSessionStart = t.lastPlayedAtMillis
+                sessionMs = effectiveListenMs(ev)
+            } else {
+                sessionMs += effectiveListenMs(ev)
             }
-            lastTime = t.lastPlayedAtMillis
+            lastTime = ev.scrobbledAtMs
         }
-        val finalDur = (lastTime - currentSessionStart).coerceAtLeast(15 * 60_000L)
-        longestSessionMs = maxOf(longestSessionMs, finalDur)
-
-        sessionsCount = maxOf(sessionsCount, (totalPlays / 4).coerceAtLeast(1))
-        longestSessionMs = maxOf(longestSessionMs, (totalListeningMs / sessionsCount.coerceAtLeast(1)) * 2)
+        longestSessionMs = maxOf(longestSessionMs, sessionMs)
 
         val avgSessionMs = totalListeningMs / sessionsCount.coerceAtLeast(1)
-        val avgSessionLabel = "${(avgSessionMs / 60_000L).coerceAtLeast(1L)}m"
-        val longestSessionLabel = formatHoursMins(longestSessionMs)
+        val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val activeDays = sorted.map { dayFmt.format(Date(it.scrobbledAtMs)) }.distinct().size.coerceAtLeast(1)
+        val sessionsPerDay = String.format(Locale.US, "%.1f", sessionsCount.toFloat() / activeDays)
 
-        // Active days
-        val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val daysCount = sortedByTime.map { dayFmt.format(Date(it.lastPlayedAtMillis)) }.distinct().size.coerceAtLeast(1)
-        val sessionsPerDay = String.format(Locale.US, "%.1f", (sessionsCount.toFloat() / daysCount).coerceIn(0.1f, 24f))
-
-        // Most active day of week
         val dowFmt = SimpleDateFormat("EEEE", Locale.getDefault())
-        val dowMap = sortedByTime.groupBy { dowFmt.format(Date(it.lastPlayedAtMillis)) }
-        val topDow = dowMap.maxByOrNull { it.value.size }?.key ?: "Sunday"
-        val topDowMs = (totalListeningMs * 0.35f).toLong().coerceAtLeast(60_000L)
-        val mostActiveDay = "$topDow, ${formatHoursMins(topDowMs)}"
+        val dowBuckets = sorted.groupBy { dowFmt.format(Date(it.scrobbledAtMs)) }
+        val topDow = dowBuckets.maxByOrNull { (_, list) -> list.sumOf { effectiveListenMs(it) } }
+        val mostActiveDay = if (topDow != null) {
+            "${topDow.key}, ${formatHoursMins(topDow.value.sumOf { effectiveListenMs(it) })}"
+        } else {
+            "None"
+        }
 
-        val peakSlot = "${Calendar.getInstance().get(Calendar.YEAR)}, ${formatHoursMins(totalListeningMs)}"
-
+        val peakSlot = computePeakDayLabel(events)
         return ListeningHabitsData(
             totalSessions = sessionsCount,
-            avgSessionLabel = avgSessionLabel,
-            longestSessionLabel = longestSessionLabel,
+            avgSessionLabel = formatHoursMins(avgSessionMs),
+            longestSessionLabel = formatHoursMins(longestSessionMs),
             sessionsPerDay = sessionsPerDay,
             mostActiveDay = mostActiveDay,
             peakTimelineSlot = peakSlot,
@@ -579,46 +909,30 @@ class ListeningStatsViewModel @Inject constructor(
     }
 
     private fun computeConcentration(
-        tracks: List<SongPlayStatsEntity>,
+        events: List<ScrobbleEventEntity>,
         totalListeningMs: Long,
-        totalPlays: Int,
     ): TrackConcentrationData {
-        if (tracks.isEmpty()) {
-            return TrackConcentrationData(
-                top3SharePercent = 0,
-                avgPlaysPerTrack = "0.0",
-                uniqueTracksCount = 0,
-                top1Percent = 0,
-                top1DurationLabel = "0m",
-                top2To3Percent = 0,
-                top2To3DurationLabel = "0m",
-                othersPercent = 0,
-                othersDurationLabel = "0m",
-            )
+        if (events.isEmpty()) {
+            return TrackConcentrationData(0, "0.0", 0, 0, "0m", 0, "0m", 0, "0m")
         }
-
-        val sorted = tracks.sortedByDescending { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }
+        val grouped = events.groupBy { it.trackKey }.values
+            .map { list -> list.sumOf { effectiveListenMs(it) } }
+            .sortedDescending()
         val totalMs = totalListeningMs.coerceAtLeast(1L)
-
-        val top1 = sorted.firstOrNull()
-        val top1Ms = top1?.let { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L } ?: 0L
-        val top1Pct = ((top1Ms.toDouble() / totalMs) * 100).roundToInt().coerceIn(1, 95)
-
-        val top2To3 = sorted.drop(1).take(2)
-        val top2To3Ms = top2To3.sumOf { if (it.totalPlayTimeMs > 0L) it.totalPlayTimeMs else it.playCount * 210_000L }
-        val top2To3Pct = ((top2To3Ms.toDouble() / totalMs) * 100).roundToInt().coerceIn(0, 95 - top1Pct)
-
-        val top3Share = (top1Pct + top2To3Pct).coerceIn(1, 100)
-        val othersPct = (100 - top3Share).coerceAtLeast(0)
+        val top1Ms = grouped.firstOrNull() ?: 0L
+        val top2To3Ms = grouped.drop(1).take(2).sum()
         val othersMs = (totalMs - top1Ms - top2To3Ms).coerceAtLeast(0L)
 
-        val uniqueCount = sorted.size
-        val avgPlays = String.format(Locale.US, "%.1f", totalPlays.toFloat() / uniqueCount.coerceAtLeast(1))
+        val top1Pct = ((top1Ms.toDouble() / totalMs) * 100).roundToInt().coerceIn(0, 100)
+        val top2To3Pct = ((top2To3Ms.toDouble() / totalMs) * 100).roundToInt().coerceIn(0, 100 - top1Pct)
+        val top3Share = (top1Pct + top2To3Pct).coerceIn(0, 100)
+        val othersPct = (100 - top3Share).coerceAtLeast(0)
+        val avgPlays = String.format(Locale.US, "%.1f", events.size.toFloat() / grouped.size.coerceAtLeast(1))
 
         return TrackConcentrationData(
             top3SharePercent = top3Share,
             avgPlaysPerTrack = avgPlays,
-            uniqueTracksCount = uniqueCount,
+            uniqueTracksCount = grouped.size,
             top1Percent = top1Pct,
             top1DurationLabel = formatHoursMins(top1Ms),
             top2To3Percent = top2To3Pct,
@@ -628,226 +942,209 @@ class ListeningStatsViewModel @Inject constructor(
         )
     }
 
-    private fun computePersonalRecords(tracks: List<SongPlayStatsEntity>): PersonalRecordsData {
-        if (tracks.isEmpty()) {
-            return PersonalRecordsData(
-                bestDayPlays = 0,
-                bestDayDurationLabel = "0m",
-                bestDayDate = "None",
-                bestWeekPlays = 0,
-                bestWeekDurationLabel = "0m",
-                bestMonthPlays = 0,
-                bestMonthDurationLabel = "0m",
-                longestStreakDays = 0,
-            )
+    private fun computePersonalRecords(
+        events: List<ScrobbleEventEntity>,
+        streaks: StreakSummary,
+    ): PersonalRecordsData {
+        if (events.isEmpty()) {
+            return PersonalRecordsData(0, "0m", "None", 0, "0m", 0, "0m", 0, 0)
         }
         val cal = Calendar.getInstance()
         val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        val displayDayFmt = SimpleDateFormat("d MMM", Locale.getDefault())
+        val displayFmt = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
         val monthFmt = SimpleDateFormat("yyyy-MM", Locale.US)
 
-        val dayStats = mutableMapOf<String, Long>()
+        val dayMs = mutableMapOf<String, Long>()
         val dayPlays = mutableMapOf<String, Int>()
-        val weekStats = mutableMapOf<String, Long>()
+        val weekMs = mutableMapOf<String, Long>()
         val weekPlays = mutableMapOf<String, Int>()
-        val monthStats = mutableMapOf<String, Long>()
+        val monthMs = mutableMapOf<String, Long>()
         val monthPlays = mutableMapOf<String, Int>()
 
-        tracks.forEach { t ->
-            val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-            cal.timeInMillis = time
-            val dayKey = dayFmt.format(cal.time)
-            val weekKey = "${cal.get(Calendar.YEAR)}-W${cal.get(Calendar.WEEK_OF_YEAR)}"
-            val monthKey = monthFmt.format(cal.time)
-            val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
-            val p = t.playCount.coerceAtLeast(1)
-
-            dayStats[dayKey] = (dayStats[dayKey] ?: 0L) + ms
-            dayPlays[dayKey] = (dayPlays[dayKey] ?: 0) + p
-            weekStats[weekKey] = (weekStats[weekKey] ?: 0L) + ms
-            weekPlays[weekKey] = (weekPlays[weekKey] ?: 0) + p
-            monthStats[monthKey] = (monthStats[monthKey] ?: 0L) + ms
-            monthPlays[monthKey] = (monthPlays[monthKey] ?: 0) + p
+        events.forEach { ev ->
+            cal.timeInMillis = ev.scrobbledAtMs
+            val dk = dayFmt.format(cal.time)
+            val wk = "${cal.get(Calendar.YEAR)}-W${cal.get(Calendar.WEEK_OF_YEAR)}"
+            val mk = monthFmt.format(cal.time)
+            val ms = effectiveListenMs(ev)
+            dayMs[dk] = (dayMs[dk] ?: 0L) + ms
+            dayPlays[dk] = (dayPlays[dk] ?: 0) + 1
+            weekMs[wk] = (weekMs[wk] ?: 0L) + ms
+            weekPlays[wk] = (weekPlays[wk] ?: 0) + 1
+            monthMs[mk] = (monthMs[mk] ?: 0L) + ms
+            monthPlays[mk] = (monthPlays[mk] ?: 0) + 1
         }
 
-        val bestDayEntry = dayStats.maxByOrNull { it.value }
-        val bestDayKey = bestDayEntry?.key
-        val bestDayDate = bestDayKey?.let {
-            runCatching { displayDayFmt.format(dayFmt.parse(it)!!) }.getOrNull()
-        } ?: "Today"
-        val bestDayPlays = bestDayKey?.let { dayPlays[it] } ?: 0
-        val bestDayDuration = formatHoursMins(bestDayEntry?.value ?: 0L)
-
-        val bestWeekEntry = weekStats.maxByOrNull { it.value }
-        val bestWeekPlays = bestWeekEntry?.key?.let { weekPlays[it] } ?: 0
-        val bestWeekDuration = formatHoursMins(bestWeekEntry?.value ?: 0L)
-
-        val bestMonthEntry = monthStats.maxByOrNull { it.value }
-        val bestMonthPlays = bestMonthEntry?.key?.let { monthPlays[it] } ?: 0
-        val bestMonthDuration = formatHoursMins(bestMonthEntry?.value ?: 0L)
-
-        // Calculate streak of consecutive active days
-        val sortedDays = dayStats.keys.mapNotNull {
-            runCatching { dayFmt.parse(it)?.time }.getOrNull()
-        }.sorted()
-
-        var longestStreak = 0
-        var currentStreak = 0
-        var prevDayMs = 0L
-        for (dayMs in sortedDays) {
-            if (prevDayMs == 0L) {
-                currentStreak = 1
-            } else {
-                val diffDays = (dayMs - prevDayMs) / (24 * 60 * 60 * 1000L)
-                if (diffDays == 1L) {
-                    currentStreak++
-                } else if (diffDays > 1L) {
-                    longestStreak = maxOf(longestStreak, currentStreak)
-                    currentStreak = 1
-                }
-            }
-            prevDayMs = dayMs
-        }
-        longestStreak = maxOf(longestStreak, currentStreak)
+        val bestDay = dayMs.maxByOrNull { it.value }
+        val bestDayDate = bestDay?.key?.let { key ->
+            runCatching { displayFmt.format(dayFmt.parse(key)!!) }.getOrNull()
+        } ?: "None"
+        val bestWeek = weekMs.maxByOrNull { it.value }
+        val bestMonth = monthMs.maxByOrNull { it.value }
 
         return PersonalRecordsData(
-            bestDayPlays = bestDayPlays,
-            bestDayDurationLabel = bestDayDuration,
+            bestDayPlays = bestDay?.key?.let { dayPlays[it] } ?: 0,
+            bestDayDurationLabel = formatHoursMins(bestDay?.value ?: 0L),
             bestDayDate = bestDayDate,
-            bestWeekPlays = bestWeekPlays,
-            bestWeekDurationLabel = bestWeekDuration,
-            bestMonthPlays = bestMonthPlays,
-            bestMonthDurationLabel = bestMonthDuration,
-            longestStreakDays = maxOf(longestStreak, 1),
+            bestWeekPlays = bestWeek?.key?.let { weekPlays[it] } ?: 0,
+            bestWeekDurationLabel = formatHoursMins(bestWeek?.value ?: 0L),
+            bestMonthPlays = bestMonth?.key?.let { monthPlays[it] } ?: 0,
+            bestMonthDurationLabel = formatHoursMins(bestMonth?.value ?: 0L),
+            longestStreakDays = streaks.longestStreakDays,
+            currentStreakDays = streaks.currentStreakDays,
         )
     }
 
-    private fun computeWeeklyRhythm(tracks: List<SongPlayStatsEntity>): WeeklyRhythmData {
-        if (tracks.isEmpty()) {
-            return WeeklyRhythmData(weekdayAvgLabel = "0m", weekendAvgLabel = "0m")
-        }
+    private fun computeWeeklyRhythm(events: List<ScrobbleEventEntity>): WeeklyRhythmData {
+        if (events.isEmpty()) return WeeklyRhythmData("0m", "0m")
         val cal = Calendar.getInstance()
+        val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val weekdayDays = mutableSetOf<String>()
+        val weekendDays = mutableSetOf<String>()
         var weekdayMs = 0L
-        var weekdayCount = 0
         var weekendMs = 0L
-        var weekendCount = 0
 
-        tracks.forEach { t ->
-            val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-            cal.timeInMillis = time
+        events.forEach { ev ->
+            cal.timeInMillis = ev.scrobbledAtMs
             val dow = cal.get(Calendar.DAY_OF_WEEK)
-            val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
+            val key = dayFmt.format(cal.time)
+            val ms = effectiveListenMs(ev)
             if (dow == Calendar.SATURDAY || dow == Calendar.SUNDAY) {
                 weekendMs += ms
-                weekendCount++
+                weekendDays += key
             } else {
                 weekdayMs += ms
-                weekdayCount++
+                weekdayDays += key
             }
         }
-        val weekdayAvg = if (weekdayCount > 0) weekdayMs / maxOf(1, weekdayCount / 4) else 0L
-        val weekendAvg = if (weekendCount > 0) weekendMs / maxOf(1, weekendCount / 2) else 0L
-
-        return WeeklyRhythmData(
-            weekdayAvgLabel = formatHoursMins(weekdayAvg),
-            weekendAvgLabel = formatHoursMins(weekendAvg),
-        )
+        val wdAvg = if (weekdayDays.isNotEmpty()) weekdayMs / weekdayDays.size else 0L
+        val weAvg = if (weekendDays.isNotEmpty()) weekendMs / weekendDays.size else 0L
+        return WeeklyRhythmData(formatHoursMins(wdAvg), formatHoursMins(weAvg))
     }
 
-    private fun computeMonthComparison(tracks: List<SongPlayStatsEntity>): MonthComparisonData {
+    private fun computeMonthComparison(events: List<ScrobbleEventEntity>): MonthComparisonData {
         val cal = Calendar.getInstance()
-        val curYear = cal.get(Calendar.YEAR)
-        val curMonth = cal.get(Calendar.MONTH)
-
+        val curY = cal.get(Calendar.YEAR)
+        val curM = cal.get(Calendar.MONTH)
         cal.add(Calendar.MONTH, -1)
-        val prevYear = cal.get(Calendar.YEAR)
-        val prevMonth = cal.get(Calendar.MONTH)
+        val prevY = cal.get(Calendar.YEAR)
+        val prevM = cal.get(Calendar.MONTH)
 
-        var thisMonthMs = 0L
-        var lastMonthMs = 0L
-
+        var thisMs = 0L
+        var lastMs = 0L
         val tCal = Calendar.getInstance()
-        tracks.forEach { t ->
-            val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-            tCal.timeInMillis = time
+        events.forEach { ev ->
+            tCal.timeInMillis = ev.scrobbledAtMs
             val y = tCal.get(Calendar.YEAR)
             val m = tCal.get(Calendar.MONTH)
-            val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
-            if (y == curYear && m == curMonth) {
-                thisMonthMs += ms
-            } else if (y == prevYear && m == prevMonth) {
-                lastMonthMs += ms
-            }
+            val ms = effectiveListenMs(ev)
+            if (y == curY && m == curM) thisMs += ms
+            else if (y == prevY && m == prevM) lastMs += ms
         }
-
-        val progress = if (lastMonthMs > 0L) {
-            (thisMonthMs.toFloat() / lastMonthMs.toFloat()).coerceIn(0.05f, 1f)
-        } else if (thisMonthMs > 0L) {
-            1f
-        } else {
-            0f
+        val progress = when {
+            lastMs > 0L -> (thisMs.toFloat() / lastMs.toFloat()).coerceIn(0.05f, 1f)
+            thisMs > 0L -> 1f
+            else -> 0f
         }
-
-        return MonthComparisonData(
-            thisMonthLabel = formatHoursMins(thisMonthMs),
-            lastMonthLabel = formatHoursMins(lastMonthMs),
-            progress = progress,
-        )
+        return MonthComparisonData(formatHoursMins(thisMs), formatHoursMins(lastMs), progress)
     }
 
-    private fun computeHourlyRhythm(tracks: List<SongPlayStatsEntity>): List<HourlyRhythmBar> {
-        val hourCounts = IntArray(24)
+    private fun computeHourlyRhythm(events: List<ScrobbleEventEntity>): List<HourlyRhythmBar> {
+        val counts = IntArray(24)
+        val durations = LongArray(24)
         val cal = Calendar.getInstance()
-        tracks.forEach { t ->
-            val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-            cal.timeInMillis = time
+        events.forEach { ev ->
+            cal.timeInMillis = ev.scrobbledAtMs
             val h = cal.get(Calendar.HOUR_OF_DAY).coerceIn(0, 23)
-            hourCounts[h] += t.playCount.coerceAtLeast(1)
+            counts[h]++
+            durations[h] += effectiveListenMs(ev)
         }
-        val maxVal = hourCounts.maxOrNull()?.coerceAtLeast(1) ?: 1
+        val maxVal = counts.maxOrNull()?.coerceAtLeast(1) ?: 1
         return (0..23).map { h ->
-            val c = hourCounts[h]
-            val frac = if (maxVal > 0) (c.toFloat() / maxVal).coerceIn(0.08f, 1f) else 0.08f
-            val label = String.format(Locale.US, "%02d", h)
+            val c = counts[h]
             HourlyRhythmBar(
                 hour = h,
-                label = label,
+                label = String.format(Locale.US, "%02d", h),
                 count = c,
-                fraction = frac,
-                isPeak = (c == maxVal && c > 0),
+                fraction = if (c > 0) (c.toFloat() / maxVal).coerceIn(0.10f, 1f) else 0.04f,
+                isPeak = c == maxVal && c > 0,
+                durationLabel = formatHoursMins(durations[h]),
             )
         }
     }
 
-    private fun computeActivityHeatmap(tracks: List<SongPlayStatsEntity>): List<HeatmapDay> {
+    private fun computeMatrixHeatmap(events: List<ScrobbleEventEntity>): List<MatrixHeatmapCell> {
+        val counts = Array(7) { IntArray(24) }
+        val durations = Array(7) { LongArray(24) }
+        val cal = Calendar.getInstance()
+        events.forEach { ev ->
+            cal.timeInMillis = ev.scrobbledAtMs
+            // Map Calendar.MONDAY..SUNDAY to 0..6
+            val dow = when (cal.get(Calendar.DAY_OF_WEEK)) {
+                Calendar.MONDAY -> 0
+                Calendar.TUESDAY -> 1
+                Calendar.WEDNESDAY -> 2
+                Calendar.THURSDAY -> 3
+                Calendar.FRIDAY -> 4
+                Calendar.SATURDAY -> 5
+                else -> 6
+            }
+            val hr = cal.get(Calendar.HOUR_OF_DAY).coerceIn(0, 23)
+            counts[dow][hr]++
+            durations[dow][hr] += effectiveListenMs(ev)
+        }
+        val maxCount = counts.maxOf { row -> row.maxOrNull() ?: 0 }.coerceAtLeast(1)
+        val cells = ArrayList<MatrixHeatmapCell>(7 * 24)
+        for (d in 0 until 7) {
+            for (h in 0 until 24) {
+                val c = counts[d][h]
+                val intensity = when {
+                    c == 0 -> 0
+                    c <= maxCount * 0.25f -> 1
+                    c <= maxCount * 0.50f -> 2
+                    c <= maxCount * 0.75f -> 3
+                    else -> 4
+                }
+                cells += MatrixHeatmapCell(
+                    dayOfWeek = d,
+                    hour = h,
+                    playCount = c,
+                    intensity = intensity,
+                    durationLabel = formatHoursMins(durations[d][h]),
+                )
+            }
+        }
+        return cells
+    }
+
+    private fun computeActivityHeatmap(events: List<ScrobbleEventEntity>): List<HeatmapDay> {
         val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val cal = Calendar.getInstance()
         val dailyMs = mutableMapOf<String, Long>()
-
-        tracks.forEach { t ->
-            val time = if (t.lastPlayedAtMillis > 0L) t.lastPlayedAtMillis else System.currentTimeMillis()
-            cal.timeInMillis = time
+        val dailyCount = mutableMapOf<String, Int>()
+        events.forEach { ev ->
+            cal.timeInMillis = ev.scrobbledAtMs
             val key = dayFmt.format(cal.time)
-            val ms = if (t.totalPlayTimeMs > 0L) t.totalPlayTimeMs else t.playCount * 210_000L
-            dailyMs[key] = (dailyMs[key] ?: 0L) + ms
+            dailyMs[key] = (dailyMs[key] ?: 0L) + effectiveListenMs(ev)
+            dailyCount[key] = (dailyCount[key] ?: 0) + 1
         }
 
         val endCal = Calendar.getInstance()
         while (endCal.get(Calendar.DAY_OF_WEEK) != Calendar.SATURDAY) {
             endCal.add(Calendar.DAY_OF_YEAR, 1)
         }
-        val startCal = Calendar.getInstance().apply {
+        val cur = Calendar.getInstance().apply {
             timeInMillis = endCal.timeInMillis
             add(Calendar.DAY_OF_YEAR, -83)
         }
 
-        val result = mutableListOf<HeatmapDay>()
-        val cur = Calendar.getInstance().apply { timeInMillis = startCal.timeInMillis }
+        val result = ArrayList<HeatmapDay>(84)
         for (i in 0 until 84) {
             val key = dayFmt.format(cur.time)
             val dow = (cur.get(Calendar.DAY_OF_WEEK) - 1).coerceIn(0, 6)
             val weekIdx = i / 7
             val ms = dailyMs[key] ?: 0L
+            val plays = dailyCount[key] ?: 0
             val intensity = when {
                 ms <= 0L -> 0
                 ms < 15 * 60_000L -> 1
@@ -855,18 +1152,46 @@ class ListeningStatsViewModel @Inject constructor(
                 ms < 90 * 60_000L -> 3
                 else -> 4
             }
-            result.add(
-                HeatmapDay(
-                    dateString = key,
-                    dayOfWeek = dow,
-                    weekIndex = weekIdx,
-                    intensity = intensity,
-                    durationLabel = formatHoursMins(ms),
-                )
+            result += HeatmapDay(
+                dateString = key,
+                dayOfWeek = dow,
+                weekIndex = weekIdx,
+                intensity = intensity,
+                durationLabel = formatHoursMins(ms),
+                playCount = plays,
             )
             cur.add(Calendar.DAY_OF_YEAR, 1)
         }
         return result
+    }
+
+    private fun computePeakDayLabel(events: List<ScrobbleEventEntity>): String {
+        if (events.isEmpty()) return "None"
+        val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val dispFmt = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+        val grouped = events.groupBy { dayFmt.format(Date(it.scrobbledAtMs)) }
+        val peak = grouped.maxByOrNull { it.value.size } ?: return "None"
+        val dateText = runCatching { dispFmt.format(dayFmt.parse(peak.key)!!) }.getOrDefault(peak.key)
+        return "$dateText (${peak.value.size} plays)"
+    }
+
+    private fun computeCompactTimeline(events: List<ScrobbleEventEntity>): List<TimelineBar> {
+        if (events.isEmpty()) return emptyList()
+        val fmt = SimpleDateFormat("MMM", Locale.getDefault())
+        val grouped = events.sortedBy { it.scrobbledAtMs }
+            .groupBy { fmt.format(Date(it.scrobbledAtMs)) }
+            .entries
+            .toList()
+            .takeLast(8)
+        val maxPlays = grouped.maxOfOrNull { it.value.size }?.coerceAtLeast(1) ?: 1
+        return grouped.map { (label, list) ->
+            TimelineBar(
+                label = label,
+                value = (list.size.toFloat() / maxPlays).coerceIn(0.08f, 1f),
+                valueLabel = "${list.size}",
+                isPeak = list.size == maxPlays,
+            )
+        }
     }
 
     private fun formatHoursMins(ms: Long): String {

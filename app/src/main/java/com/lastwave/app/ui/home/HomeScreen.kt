@@ -51,8 +51,10 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material3.DropdownMenu
@@ -181,7 +183,19 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val jamViewModel: com.lastwave.app.ui.jam.LastWaveJamViewModel = hiltViewModel()
     var showJamSheet by remember { mutableStateOf(false) }
+    var showScrobblerControls by remember { mutableStateOf(false) }
+    var showScrobbleHistory by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    if (showScrobblerControls) {
+        com.lastwave.app.ui.settings.ScrobblerSettingsScreen(
+            onBack = {
+                showScrobblerControls = false
+                viewModel.refreshSilently()
+            },
+        )
+        return
+    }
 
     LaunchedEffect(viewModel) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -199,6 +213,10 @@ fun HomeScreen(
                     title = "Statistics",
                     modifier = Modifier.adaptiveContentWidth(maxWidth = 860.dp),
                     actions = {
+                        HeaderActionIcon(
+                            Icons.Filled.Tune,
+                            stringResource(R.string.stats_open_scrobbler_cd),
+                        ) { showScrobblerControls = true }
                         HeaderActionIcon(Icons.Filled.Search, "Search", onOpenSearch)
                         com.lastwave.app.ui.recognition.MusicRecognitionButton(key = "recognition_stats")
                         IconButton(onClick = onOpenSettings) {
@@ -294,7 +312,19 @@ fun HomeScreen(
                         )
                     },
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
+            }
+
+            if (!uiState.isViewingFriend) {
+                StatsHubQuickStrip(
+                    streakDays = uiState.currentStreakDays,
+                    pendingSyncCount = uiState.pendingSyncCount,
+                    onOpenStatsHub = onOpenListeningStats,
+                    onOpenHistory = { showScrobbleHistory = true },
+                    onOpenScrobbler = { showScrobblerControls = true },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Spacer(Modifier.height(10.dp))
             }
 
 
@@ -484,6 +514,125 @@ fun HomeScreen(
             viewModel = jamViewModel,
             onDismiss = { showJamSheet = false },
         )
+    }
+
+    if (showScrobbleHistory) {
+        val musicPlayer = com.lastwave.app.ui.player.LocalMusicPlayer.current
+        com.lastwave.app.ui.stats.ScrobbleHistorySheet(
+            events = uiState.recentScrobbleEvents,
+            onDismiss = { showScrobbleHistory = false },
+            onToggleLove = viewModel::toggleScrobbleLove,
+            onDelete = viewModel::deleteScrobbleEvent,
+            onEdit = viewModel::editScrobbleEvent,
+            onPlayTrack = { ev ->
+                musicPlayer.playQueue(
+                    tracks = listOf(
+                        com.lastwave.app.playback.PlayableTrack(
+                            title = ev.title,
+                            artist = ev.artist,
+                            album = ev.album.ifBlank { null },
+                            artworkUrl = ev.artworkUrl,
+                        ),
+                    ),
+                    startIndex = 0,
+                    sourceLabel = "Scrobble History",
+                )
+            },
+        )
+    }
+}
+
+@Composable
+private fun StatsHubQuickStrip(
+    streakDays: Int,
+    pendingSyncCount: Int,
+    onOpenStatsHub: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenScrobbler: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            Surface(
+                onClick = onOpenStatsHub,
+                shape = BadgePillShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.BarChart,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (streakDays > 0) "Insights Hub \u00b7 ${streakDays}d" else "Insights Hub",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+        }
+        item {
+            Surface(
+                onClick = onOpenHistory,
+                shape = BadgePillShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.History,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "Play Feed",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+        item {
+            Surface(
+                onClick = onOpenScrobbler,
+                shape = BadgePillShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (pendingSyncCount > 0) "Scrobbler ($pendingSyncCount)" else "Scrobbler",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
     }
 }
 

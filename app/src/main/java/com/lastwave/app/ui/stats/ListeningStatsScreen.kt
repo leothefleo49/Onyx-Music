@@ -1,12 +1,10 @@
 package com.lastwave.app.ui.stats
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -27,11 +25,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DateRangePicker
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,17 +42,29 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.lastwave.app.R
+import com.lastwave.app.playback.PlayableTrack
 import com.lastwave.app.ui.common.adaptiveContentWidth
+import com.lastwave.app.ui.player.LocalMusicPlayer
+import com.lastwave.app.ui.settings.ScrobblerSettingsScreen
 import com.lastwave.app.ui.shell.FloatingNavDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,13 +74,30 @@ fun ListeningStatsScreen(
     viewModel: ListeningStatsViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val musicPlayer = LocalMusicPlayer.current
+
+    var showHistorySheet by remember { mutableStateOf(false) }
+    var showScrobblerControls by remember { mutableStateOf(false) }
+    var showCustomDatePicker by remember { mutableStateOf(false) }
+
+    if (showScrobblerControls) {
+        ScrobblerSettingsScreen(
+            onBack = {
+                showScrobblerControls = false
+                viewModel.refresh()
+            },
+        )
+        return
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             Surface(
                 color = MaterialTheme.colorScheme.background,
-                modifier = Modifier.fillMaxWidth().statusBarsPadding(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding(),
             ) {
                 Row(
                     modifier = Modifier
@@ -81,14 +113,30 @@ fun ListeningStatsScreen(
                             tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(4.dp))
                     Text(
-                        text = "Listening Stats",
-                        style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp),
+                        text = stringResource(R.string.stats_hub_title),
+                        style = MaterialTheme.typography.headlineMedium.copy(fontSize = 22.sp),
                         fontWeight = FontWeight.Black,
                         color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    IconButton(onClick = { showHistorySheet = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.History,
+                            contentDescription = stringResource(R.string.stats_open_history_cd),
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    IconButton(onClick = { showScrobblerControls = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Tune,
+                            contentDescription = stringResource(R.string.stats_open_scrobbler_cd),
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                     IconButton(onClick = viewModel::refresh) {
                         if (uiState.isRefreshing) {
                             CircularProgressIndicator(
@@ -99,7 +147,7 @@ fun ListeningStatsScreen(
                         } else {
                             Icon(
                                 imageVector = Icons.Filled.Refresh,
-                                contentDescription = "Refresh",
+                                contentDescription = stringResource(R.string.stats_refresh_cd),
                                 tint = MaterialTheme.colorScheme.onSurface,
                             )
                         }
@@ -125,102 +173,287 @@ fun ListeningStatsScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .adaptiveContentWidth(maxWidth = 860.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
                 top = 8.dp,
-                bottom = FloatingNavDefaults.contentBottomPadding() + 24.dp,
+                bottom = FloatingNavDefaults.contentBottomPadding() + 28.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            // ── TIME RANGE CHIPS ──
-            item {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    items(StatsTimeRange.entries) { range ->
-                        StatsFilterChip(
-                            label = range.label,
-                            selected = (uiState.selectedRange == range),
-                            onClick = { viewModel.setTimeRange(range) },
+            // ── LIVE NOW PLAYING / SYNC BANNER ──
+            uiState.nowPlaying?.let { np ->
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.GraphicEq,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Now scrobbling via ${np.sourceAppName.ifBlank { "Onyx Music" }}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "${np.title} \u00b7 ${np.artist}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (uiState.pendingSyncCount > 0) {
+                item {
+                    Surface(
+                        onClick = viewModel::flushPendingSync,
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.CloudQueue,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = "${uiState.pendingSyncCount} scrobbles queued offline \u00b7 Tap to sync",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        }
+                    }
+                }
+            }
+
+            uiState.statusBanner?.let { banner ->
+                item {
+                    Surface(
+                        onClick = viewModel::clearStatusBanner,
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = banner,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         )
                     }
                 }
             }
 
-            // ── TOP SUMMARY CARDS (Listening & Plays) ──
+            // ── TIME WINDOW CHIPS ──
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    SummaryStatCard(
-                        label = "Listening",
-                        value = uiState.totalListeningLabel,
-                        modifier = Modifier.weight(1f),
-                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-                        contentColor = MaterialTheme.colorScheme.onSurface,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        items(StatsTimeRange.entries) { range ->
+                            val chipLabel = if (range == StatsTimeRange.CUSTOM && uiState.customRange != null) {
+                                uiState.customRange!!.label
+                            } else {
+                                range.label
+                            }
+                            StatsFilterChip(
+                                label = chipLabel,
+                                selected = uiState.selectedRange == range,
+                                onClick = {
+                                    if (range == StatsTimeRange.CUSTOM) {
+                                        showCustomDatePicker = true
+                                    } else {
+                                        viewModel.setTimeRange(range)
+                                    }
+                                },
+                            )
+                        }
+                    }
+
+                    // Quick Hub Action Bar (Scrobble Feed + Scrobbler Controls)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Surface(
+                            onClick = { showHistorySheet = true },
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.History,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Play Feed (${uiState.recentScrobbles.size})",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        Surface(
+                            onClick = { showScrobblerControls = true },
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Tune,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Scrobbler & Rules",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── HERO KPI GRID ──
+            item {
+                HeroKpiGrid(kpis = uiState.heroKpis)
+            }
+
+            // ── SOURCE APP BREAKDOWN ──
+            if (uiState.sourceBreakdown.isNotEmpty()) {
+                item {
+                    SourceAppBreakdownCard(
+                        title = "Listening by source app",
+                        sources = uiState.sourceBreakdown,
                     )
-                    SummaryStatCard(
-                        label = "Plays",
-                        value = uiState.totalPlays.toString(),
-                        modifier = Modifier.weight(1f),
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
-                        contentColor = MaterialTheme.colorScheme.onSurface,
+                }
+            }
+
+            // ── TOP RANKINGS (TRACKS / ARTISTS / ALBUMS / GENRES) ──
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Top charts",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        items(CategoryFilter.entries) { cat ->
+                            StatsFilterChip(
+                                label = cat.label,
+                                selected = uiState.selectedCategory == cat,
+                                onClick = { viewModel.setCategory(cat) },
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Top ${uiState.selectedCategory.label.lowercase()}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            if (uiState.categoryItems.isEmpty()) {
+                                Text(
+                                    text = "No ${uiState.selectedCategory.label.lowercase()} captured in this window yet.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(vertical = 10.dp),
+                                )
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    uiState.categoryItems.forEach { item ->
+                                        val clickAction: (() -> Unit)? = when (uiState.selectedCategory) {
+                                            CategoryFilter.SONG -> ({
+                                                viewModel.openTrackDetail(item.title, item.artist)
+                                            })
+                                            CategoryFilter.ARTIST -> ({
+                                                viewModel.openArtistDetail(item.title)
+                                            })
+                                            CategoryFilter.ALBUM -> if (item.artist.isNotBlank()) {
+                                                { viewModel.openArtistDetail(item.artist) }
+                                            } else null
+                                            CategoryFilter.GENRE -> null
+                                        }
+                                        RankedCategoryRow(item = item, onClick = clickAction)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // ── RHYTHM & CONSISTENCY (SLEEP TRACKER INSPIRED) ──
-            uiState.consistency?.let { consistency ->
-                item {
-                    ConsistencyScoreCard(data = consistency)
-                }
-            }
-
-            // ── LISTENING STAGES (DEEP FOCUS / FLOW / DISCOVERY) ──
-            uiState.stages?.let { stages ->
-                item {
-                    ListeningStagesCard(stages = stages)
-                }
-            }
-
-            // ── PERSONAL RECORDS ──
-            uiState.records?.let { records ->
-                item {
-                    PersonalRecordsCard(records = records)
-                }
-            }
-
-            // ── WEEKLY RHYTHM & MONTH COMPARISON ──
-            uiState.weeklyRhythm?.let { rhythm ->
-                item {
-                    WeeklyRhythmCard(rhythm = rhythm)
-                }
-            }
-
-            uiState.monthComparison?.let { comparison ->
-                item {
-                    MonthComparisonCard(comparison = comparison)
-                }
-            }
-
-            // ── HOURLY LISTENING RHYTHM ──
+            // ── 24-HOUR RADIAL LISTENING CLOCK ──
             if (uiState.hourlyRhythm.isNotEmpty()) {
                 item {
-                    HourlyRhythmChart(bars = uiState.hourlyRhythm)
+                    ListeningClockCard(bars = uiState.hourlyRhythm)
                 }
             }
 
-            // ── ACTIVITY HEATMAP (LAST 12 WEEKS) ──
-            if (uiState.activityHeatmap.isNotEmpty()) {
+            // ── 7x24 MATRIX & 12-WEEK CALENDAR HEATMAP ──
+            if (uiState.matrixHeatmap.isNotEmpty() || uiState.activityHeatmap.isNotEmpty()) {
                 item {
-                    ActivityHeatmapGrid(days = uiState.activityHeatmap)
+                    ListeningActivityHeatmapCard(
+                        matrixCells = uiState.matrixHeatmap,
+                        calendarDays = uiState.activityHeatmap,
+                    )
                 }
             }
 
-            // ── SECTION 1: LISTENING TIMELINE ──
+            // ── LISTENING TIMELINE ──
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
@@ -229,32 +462,18 @@ fun ListeningStatsScreen(
                         fontWeight = FontWeight.Black,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Text(
-                        text = when (uiState.selectedRange) {
-                            StatsTimeRange.WEEK -> "Total listening captured this week. Daily bars summarize your progression."
-                            StatsTimeRange.MONTH_TO_DATE -> "Total listening captured this month. Daily bars summarize your progression."
-                            StatsTimeRange.YEAR_TO_DATE -> "Total listening captured this year. Monthly bars summarize your progression."
-                            StatsTimeRange.ALL_TIME -> "Total listening captured in the selected range. Yearly bars summarize your full history."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    // Timeline metric chips
                     LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         items(TimelineMetric.entries) { metric ->
                             StatsFilterChip(
                                 label = metric.label,
-                                selected = (uiState.selectedTimelineMetric == metric),
+                                selected = uiState.selectedTimelineMetric == metric,
                                 onClick = { viewModel.setTimelineMetric(metric) },
                             )
                         }
                     }
-
-                    // Bar Chart Card
                     Surface(
                         shape = RoundedCornerShape(24.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -266,29 +485,11 @@ fun ListeningStatsScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Column {
-                                    Text(
-                                        text = when (uiState.selectedRange) {
-                                            StatsTimeRange.WEEK -> "Current week progression"
-                                            StatsTimeRange.MONTH_TO_DATE -> "Current month progression"
-                                            StatsTimeRange.YEAR_TO_DATE -> "Year-to-date progression"
-                                            StatsTimeRange.ALL_TIME -> "All-time progression"
-                                        },
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    Text(
-                                        text = when (uiState.selectedRange) {
-                                            StatsTimeRange.WEEK -> "Grouped by day"
-                                            StatsTimeRange.MONTH_TO_DATE -> "Grouped by day"
-                                            StatsTimeRange.YEAR_TO_DATE -> "Grouped by month"
-                                            StatsTimeRange.ALL_TIME -> "Grouped by year"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
+                                Text(
+                                    text = "${uiState.selectedRange.label} progression",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                )
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
                                     color = MaterialTheme.colorScheme.primaryContainer,
@@ -302,18 +503,11 @@ fun ListeningStatsScreen(
                                     )
                                 }
                             }
-
-                            Spacer(Modifier.height(18.dp))
-
-                            ListeningStatsBarChart(
-                                bars = uiState.timelineBars,
-                                highlightColor = MaterialTheme.colorScheme.primary,
-                                barColor = MaterialTheme.colorScheme.surfaceVariant,
-                            )
+                            Spacer(Modifier.height(16.dp))
+                            ListeningStatsBarChart(bars = uiState.timelineBars)
                         }
                     }
 
-                    // Peak segment card
                     if (uiState.peakSegmentName.isNotBlank()) {
                         Surface(
                             shape = RoundedCornerShape(20.dp),
@@ -348,15 +542,9 @@ fun ListeningStatsScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                     Text(
-                                        text = uiState.peakSegmentName,
+                                        text = "${uiState.peakSegmentName} \u00b7 ${uiState.peakSegmentDuration}",
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    Text(
-                                        text = uiState.peakSegmentDuration,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                             }
@@ -365,268 +553,188 @@ fun ListeningStatsScreen(
                 }
             }
 
-            // ── SECTION 2: TOP CATEGORIES ──
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Top categories",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = "Compare how you listen across genres, artists, albums, and songs.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            // ── RHYTHM, STAGES & PERSONAL RECORDS ──
+            uiState.consistency?.let { consistency ->
+                item { ConsistencyScoreCard(data = consistency) }
+            }
+            uiState.stages?.let { stages ->
+                item { ListeningStagesCard(stages = stages) }
+            }
+            uiState.records?.let { records ->
+                item { PersonalRecordsCard(records = records) }
+            }
+            uiState.weeklyRhythm?.let { rhythm ->
+                item { WeeklyRhythmCard(rhythm = rhythm) }
+            }
+            uiState.monthComparison?.let { comparison ->
+                item { MonthComparisonCard(comparison = comparison) }
+            }
 
-                    // Filter chips: Song / Album / Artist / Genre
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        items(CategoryFilter.entries) { cat ->
-                            StatsFilterChip(
-                                label = cat.label,
-                                selected = (uiState.selectedCategory == cat),
-                                onClick = { viewModel.setCategory(cat) },
-                            )
-                        }
+            // ── LISTENING HABITS ──
+            uiState.habits?.let { habits ->
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Listening habits",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black,
+                        )
+                        HabitItemRow("Total sessions", habits.totalSessions.toString(), Icons.Filled.History)
+                        HabitItemRow("Average session", habits.avgSessionLabel, Icons.Filled.Timer)
+                        HabitItemRow("Longest session", habits.longestSessionLabel, Icons.Filled.Bolt)
+                        HabitItemRow("Sessions per day", habits.sessionsPerDay, Icons.Filled.AutoAwesome)
+                        HabitItemRow("Most active weekday", habits.mostActiveDay, Icons.Filled.CalendarMonth)
+                        HabitItemRow("Peak listening day", habits.peakTimelineSlot, Icons.Filled.TrendingUp)
                     }
+                }
+            }
 
-                    // Content card
+            // ── TRACK CONCENTRATION ──
+            uiState.concentration?.let { conc ->
+                item {
                     Surface(
                         shape = RoundedCornerShape(24.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            DonutConcentrationChart(percentage = conc.top3SharePercent)
+                            Spacer(Modifier.height(14.dp))
                             Text(
-                                text = "Listening by ${uiState.selectedCategory.label.lowercase()}",
+                                text = "Listening concentration",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = "Top 3 tracks represent ${conc.top3SharePercent}% of listening time (${conc.avgPlaysPerTrack} avg plays/track).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Spacer(Modifier.height(14.dp))
-
-                            if (uiState.categoryItems.isEmpty()) {
-                                Text(
-                                    text = "No ${uiState.selectedCategory.label.lowercase()} plays captured in this range yet.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(vertical = 12.dp),
-                                )
-                            } else {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    uiState.categoryItems.forEach { item ->
-                                        RankedCategoryRow(item = item)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ── SECTION 3: LISTENING HABITS ──
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Listening habits",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-
-                    val habits = uiState.habits
-                    if (habits != null) {
-                        HabitItemRow(
-                            title = "Total sessions",
-                            value = habits.totalSessions.toString(),
-                            icon = Icons.Filled.History,
-                        )
-                        HabitItemRow(
-                            title = "Avg session",
-                            value = habits.avgSessionLabel,
-                            icon = Icons.Filled.Timer,
-                        )
-                        HabitItemRow(
-                            title = "Longest session",
-                            value = habits.longestSessionLabel,
-                            icon = Icons.Filled.Bolt,
-                        )
-                        HabitItemRow(
-                            title = "Sessions/day",
-                            value = habits.sessionsPerDay,
-                            icon = Icons.Filled.AutoAwesome,
-                        )
-                        HabitItemRow(
-                            title = "Most active day",
-                            value = habits.mostActiveDay,
-                            icon = Icons.Filled.CalendarMonth,
-                        )
-                        HabitItemRow(
-                            title = "Peak timeline slot",
-                            value = habits.peakTimelineSlot,
-                            icon = Icons.Filled.TrendingUp,
-                        )
-                    }
-                }
-            }
-
-            // ── SECTION 4: TRACK CONCENTRATION ──
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Track concentration",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = "How your listening time is distributed across your top tracks.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    val conc = uiState.concentration
-                    if (conc != null) {
-                        Surface(
-                            shape = RoundedCornerShape(24.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
                             Column(
-                                modifier = Modifier.padding(20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth(),
                             ) {
-                                DonutConcentrationChart(
-                                    percentage = conc.top3SharePercent,
-                                    accentColor = MaterialTheme.colorScheme.primary,
-                                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                                )
-
-                                Spacer(Modifier.height(16.dp))
-
-                                Text(
-                                    text = "Listening concentration",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = "Top 3 tracks account for ${conc.top3SharePercent}% of your listening time.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-
-                                Spacer(Modifier.height(16.dp))
-
-                                // Summary mini-cards
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        modifier = Modifier.weight(1f),
-                                    ) {
-                                        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                                            Text(
-                                                text = conc.avgPlaysPerTrack,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                            )
-                                            Text(
-                                                text = "Avg plays/track",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
-                                        }
-                                    }
-                                    Surface(
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        modifier = Modifier.weight(1f),
-                                    ) {
-                                        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                                            Text(
-                                                text = conc.uniqueTracksCount.toString(),
-                                                style = MaterialTheme.typography.titleMedium,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                            )
-                                            Text(
-                                                text = "Unique tracks",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Spacer(Modifier.height(16.dp))
-
-                                // Breakdown rows with colored dots
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                                    ConcentrationRow(
-                                        label = "Top 1",
-                                        percentage = conc.top1Percent,
-                                        duration = conc.top1DurationLabel,
-                                        dotColor = MaterialTheme.colorScheme.primary,
-                                    )
-                                    ConcentrationRow(
-                                        label = "Top 2-3",
-                                        percentage = conc.top2To3Percent,
-                                        duration = conc.top2To3DurationLabel,
-                                        dotColor = MaterialTheme.colorScheme.tertiary,
-                                    )
-                                    ConcentrationRow(
-                                        label = "Others",
-                                        percentage = conc.othersPercent,
-                                        duration = conc.othersDurationLabel,
-                                        dotColor = MaterialTheme.colorScheme.outlineVariant,
-                                    )
-                                }
+                                ConcentrationRow("Top 1", conc.top1Percent, conc.top1DurationLabel, MaterialTheme.colorScheme.primary)
+                                ConcentrationRow("Top 2-3", conc.top2To3Percent, conc.top2To3DurationLabel, MaterialTheme.colorScheme.tertiary)
+                                ConcentrationRow("Others", conc.othersPercent, conc.othersDurationLabel, MaterialTheme.colorScheme.outlineVariant)
                             }
                         }
                     }
                 }
             }
 
-            // ── SECTION 5: TRACKS IN THIS RANGE ──
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Tracks in this range",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = "Most played tracks for the selected time range.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    if (uiState.tracksInRange.isEmpty()) {
+            // ── TOP TRACKS IN RANGE (TAPPABLE FOR DEEP DIVE) ──
+            if (uiState.tracksInRange.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            text = "No track playback recorded for this range.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = "Most played tracks",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black,
                         )
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            uiState.tracksInRange.forEach { track ->
-                                RankedTrackCard(track = track)
-                            }
+                        uiState.tracksInRange.forEach { track ->
+                            RankedTrackCard(
+                                track = track,
+                                onClick = { viewModel.openTrackDetail(track.title, track.artist) },
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+
+    if (showHistorySheet) {
+        ScrobbleHistorySheet(
+            events = uiState.recentScrobbles,
+            onDismiss = { showHistorySheet = false },
+            onToggleLove = viewModel::toggleLoveForEvent,
+            onDelete = viewModel::deleteScrobble,
+            onEdit = viewModel::editScrobble,
+            onPlayTrack = { ev ->
+                musicPlayer.playQueue(
+                    tracks = listOf(
+                        PlayableTrack(
+                            title = ev.title,
+                            artist = ev.artist,
+                            album = ev.album.ifBlank { null },
+                            artworkUrl = ev.artworkUrl,
+                        ),
+                    ),
+                    startIndex = 0,
+                    sourceLabel = "Scrobble History",
+                )
+            },
+        )
+    }
+
+    uiState.selectedArtistDetail?.let { artistDetail ->
+        ArtistDetailStatsSheet(
+            detail = artistDetail,
+            onDismiss = viewModel::dismissArtistDetail,
+            onSelectTrack = { title, artist ->
+                viewModel.dismissArtistDetail()
+                viewModel.openTrackDetail(title, artist)
+            },
+        )
+    }
+
+    uiState.selectedTrackDetail?.let { trackDetail ->
+        TrackDetailStatsSheet(
+            detail = trackDetail,
+            onDismiss = viewModel::dismissTrackDetail,
+            onPlay = {
+                musicPlayer.playQueue(
+                    tracks = listOf(
+                        PlayableTrack(
+                            title = trackDetail.title,
+                            artist = trackDetail.artist,
+                            album = trackDetail.album.ifBlank { null },
+                            artworkUrl = trackDetail.artworkUrl,
+                        ),
+                    ),
+                    startIndex = 0,
+                    sourceLabel = "Listening Stats",
+                )
+            },
+            onToggleLove = viewModel::toggleLoveForSelectedTrack,
+        )
+    }
+
+    if (showCustomDatePicker) {
+        val pickerState = rememberDateRangePickerState()
+        DatePickerDialog(
+            onDismissRequest = { showCustomDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val s = pickerState.selectedStartDateMillis
+                        val e = pickerState.selectedEndDateMillis ?: s
+                        if (s != null && e != null) {
+                            // Extend end date to 23:59:59.999
+                            viewModel.setCustomRange(s, e + 86_399_999L)
+                        }
+                        showCustomDatePicker = false
+                    },
+                    enabled = pickerState.selectedStartDateMillis != null,
+                ) {
+                    Text("Apply")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomDatePicker = false }) {
+                    Text("Cancel")
+                }
+            },
+        ) {
+            DateRangePicker(
+                state = pickerState,
+                modifier = Modifier.height(420.dp),
+            )
         }
     }
 }
@@ -636,7 +744,7 @@ private fun ConcentrationRow(
     label: String,
     percentage: Int,
     duration: String,
-    dotColor: androidx.compose.ui.graphics.Color,
+    dotColor: Color,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),

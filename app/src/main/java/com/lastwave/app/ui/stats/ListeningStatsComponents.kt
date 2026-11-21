@@ -5,7 +5,6 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,10 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -51,11 +47,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -90,6 +84,106 @@ fun StatsFilterChip(
 }
 
 @Composable
+fun HeroKpiGrid(
+    kpis: HeroKpiSummary,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SummaryStatCard(
+                label = "Listening Time",
+                value = kpis.totalListeningLabel,
+                modifier = Modifier.weight(1f),
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            )
+            SummaryStatCard(
+                label = "Scrobbles",
+                value = "%,d".format(kpis.totalScrobbles),
+                modifier = Modifier.weight(1f),
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CompactKpiTile(label = "Tracks", value = "%,d".format(kpis.uniqueTracks), modifier = Modifier.weight(1f))
+            CompactKpiTile(label = "Artists", value = "%,d".format(kpis.uniqueArtists), modifier = Modifier.weight(1f))
+            CompactKpiTile(label = "Albums", value = "%,d".format(kpis.uniqueAlbums), modifier = Modifier.weight(1f))
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CompactKpiTile(
+                label = "Current Streak",
+                value = "${kpis.currentStreakDays}d",
+                modifier = Modifier.weight(1f),
+                highlight = kpis.currentStreakDays > 0,
+            )
+            CompactKpiTile(
+                label = "Longest Streak",
+                value = "${kpis.longestStreakDays}d",
+                modifier = Modifier.weight(1f),
+            )
+            CompactKpiTile(
+                label = "Apps",
+                value = kpis.activeSourcesCount.toString(),
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactKpiTile(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    highlight: Boolean = false,
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = if (highlight) {
+            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Black,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
 fun SummaryStatCard(
     label: String,
     value: String,
@@ -100,24 +194,24 @@ fun SummaryStatCard(
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = containerColor,
-        modifier = modifier.height(115.dp),
+        modifier = modifier.height(106.dp),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
+                .padding(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
                 color = contentColor.copy(alpha = 0.8f),
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 text = value,
-                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp),
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 26.sp),
                 fontWeight = FontWeight.Black,
                 color = contentColor,
                 maxLines = 1,
@@ -142,7 +236,7 @@ fun ListeningStatsBarChart(
         animationProgress.snapTo(0f)
         animationProgress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 750, easing = FastOutSlowInEasing),
+            animationSpec = tween(durationMillis = 700, easing = FastOutSlowInEasing),
         )
     }
 
@@ -171,7 +265,7 @@ fun ListeningStatsBarChart(
         val topMargin = 28.dp.toPx()
         val chartHeight = size.height - bottomMargin - topMargin
         val slotWidth = size.width / totalBars
-        val barWidth = (slotWidth * 0.55f).coerceIn(16.dp.toPx(), 48.dp.toPx())
+        val barWidth = (slotWidth * 0.55f).coerceIn(12.dp.toPx(), 44.dp.toPx())
 
         bars.forEachIndexed { index, item ->
             val isHighlighted = (selectedIndex == index) || (selectedIndex == null && item.isPeak)
@@ -179,7 +273,6 @@ fun ListeningStatsBarChart(
             val left = (index * slotWidth) + (slotWidth - barWidth) / 2f
             val top = topMargin + (chartHeight - barH)
 
-            // Rounded top corners on bar
             drawRoundRect(
                 color = if (isHighlighted) highlightColor else barColor,
                 topLeft = Offset(left, top),
@@ -187,11 +280,10 @@ fun ListeningStatsBarChart(
                 cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f),
             )
 
-            // Callout value text above highlighted/peak bar
             if (isHighlighted) {
                 val calloutLayout = textMeasurer.measure(item.valueLabel, calloutStyle)
                 val calloutLeft = (left + barWidth / 2f - calloutLayout.size.width / 2f)
-                    .coerceIn(4f, size.width - calloutLayout.size.width - 4f)
+                    .coerceIn(4f, (size.width - calloutLayout.size.width - 4f).coerceAtLeast(4f))
                 val calloutTop = (top - calloutLayout.size.height - 6.dp.toPx()).coerceAtLeast(0f)
                 drawText(
                     textMeasurer = textMeasurer,
@@ -201,7 +293,6 @@ fun ListeningStatsBarChart(
                 )
             }
 
-            // Bottom X-axis label
             val textLayout = textMeasurer.measure(item.label, labelStyle)
             val textLeft = left + (barWidth - textLayout.size.width) / 2f
             val textTop = size.height - bottomMargin + 6.dp.toPx()
@@ -241,7 +332,6 @@ fun DonutConcentrationChart(
             val arcSize = Size(diameter, diameter)
             val topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f)
 
-            // Background full track circle
             drawArc(
                 color = trackColor,
                 startAngle = 0f,
@@ -252,7 +342,6 @@ fun DonutConcentrationChart(
                 style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
             )
 
-            // Highlight arc
             drawArc(
                 color = accentColor,
                 startAngle = -90f,
@@ -334,17 +423,20 @@ fun HabitItemRow(
 @Composable
 fun RankedCategoryRow(
     item: RankedCategoryItem,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Surface(
+        onClick = { onClick?.invoke() },
+        enabled = onClick != null,
         shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f),
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -352,7 +444,7 @@ fun RankedCategoryRow(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center,
@@ -364,11 +456,23 @@ fun RankedCategoryRow(
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 }
-                Spacer(Modifier.width(14.dp))
+                if (!item.artworkUrl.isNullOrBlank()) {
+                    Spacer(Modifier.width(10.dp))
+                    AsyncImage(
+                        model = item.artworkUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = item.title,
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -383,7 +487,7 @@ fun RankedCategoryRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(10.dp))
                 Text(
                     text = item.durationLabel,
                     style = MaterialTheme.typography.labelMedium,
@@ -392,13 +496,12 @@ fun RankedCategoryRow(
                 )
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
 
-            // Rounded Progress bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(6.dp)
+                    .height(5.dp)
                     .clip(RoundedCornerShape(3.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
             ) {
@@ -417,9 +520,12 @@ fun RankedCategoryRow(
 @Composable
 fun RankedTrackCard(
     track: RankedTrackItem,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Surface(
+        onClick = { onClick?.invoke() },
+        enabled = onClick != null,
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier.fillMaxWidth(),
@@ -471,7 +577,13 @@ fun RankedTrackCard(
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = "${track.playCount} plays \u2022 ${track.artist}",
+                        text = buildString {
+                            append("${track.playCount} plays \u00b7 ${track.artist}")
+                            if (track.sourceSummary.isNotBlank()) {
+                                append(" \u00b7 ")
+                                append(track.sourceSummary)
+                            }
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -489,7 +601,6 @@ fun RankedTrackCard(
 
             Spacer(Modifier.height(10.dp))
 
-            // Rounded Progress bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -549,8 +660,8 @@ fun PersonalRecordsCard(records: PersonalRecordsData) {
                 icon = Icons.Filled.Bolt,
                 iconContainer = MaterialTheme.colorScheme.errorContainer,
                 iconTint = MaterialTheme.colorScheme.onErrorContainer,
-                title = "Longest streak",
-                value = "${records.longestStreakDays} days",
+                title = "Streaks",
+                value = "${records.currentStreakDays}d now \u00b7 ${records.longestStreakDays}d best",
             )
         }
     }
@@ -728,152 +839,6 @@ fun MonthComparisonCard(comparison: MonthComparisonData) {
 }
 
 @Composable
-fun HourlyRhythmChart(bars: List<HourlyRhythmBar>) {
-    Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Text(
-                text = "Hourly rhythm",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = "Listening frequency by hour across all recorded sessions.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(18.dp))
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(80.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                bars.forEach { bar ->
-                    val barColor = if (bar.isPeak) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(bar.fraction)
-                            .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                            .background(barColor),
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                listOf("00", "06", "12", "18", "24").forEach { hourLabel ->
-                    Text(
-                        text = hourLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ActivityHeatmapGrid(days: List<HeatmapDay>) {
-    Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Text(
-                text = "Last 12 weeks",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = "Daily listening activity across the past 3 months.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(18.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                for (w in 0 until 12) {
-                    val weekDays = days.filter { it.weekIndex == w }
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        for (d in 0 until 7) {
-                            val day = weekDays.firstOrNull { it.dayOfWeek == d }
-                            val intensity = day?.intensity ?: 0
-                            val dotColor = when (intensity) {
-                                0 -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                1 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                                2 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                                3 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                                else -> MaterialTheme.colorScheme.primary
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(dotColor),
-                            )
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Less",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(6.dp))
-                listOf(0, 1, 2, 3, 4).forEach { level ->
-                    val color = when (level) {
-                        0 -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                        1 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                        2 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                        3 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                        else -> MaterialTheme.colorScheme.primary
-                    }
-                    Box(
-                        modifier = Modifier
-                            .padding(horizontal = 2.dp)
-                            .size(10.dp)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(color),
-                    )
-                }
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = "More",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
 fun ConsistencyScoreCard(
     data: ConsistencyScoreData,
     modifier: Modifier = Modifier,
@@ -911,7 +876,7 @@ fun ConsistencyScoreCard(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        text = "Sleep tracker inspired flow analysis",
+                        text = "Daily streak and listening cadence",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -935,7 +900,6 @@ fun ConsistencyScoreCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                // Circular Score Ring
                 Box(
                     modifier = Modifier.size(110.dp),
                     contentAlignment = Alignment.Center,
@@ -984,53 +948,13 @@ fun ConsistencyScoreCard(
                     }
                 }
 
-                // 3 Quick metrics
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text("Avg. Session", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${data.avgSessionMinutes}m", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text("Streak", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${data.streakDays} days", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text("Active Days", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${data.activeDaysThisWeek} / 7", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    MetricLinePill("Avg. Session", "${data.avgSessionMinutes}m")
+                    MetricLinePill("Streak", "${data.streakDays} days")
+                    MetricLinePill("Active Days", "${data.activeDaysThisWeek} / 7")
                 }
             }
 
@@ -1039,6 +963,24 @@ fun ConsistencyScoreCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun MetricLinePill(label: String, value: String) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1067,13 +1009,12 @@ fun ListeningStagesCard(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "Deep focus vs. daily flow vs. discovery",
+                    text = "Heavy rotation vs. steady plays vs. discovery",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
-            // Multi-segment horizontal bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1102,20 +1043,10 @@ fun ListeningStagesCard(
                 )
             }
 
-            // Legend & Details
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                StageDetailRow(
-                    stage = stages.deepFocus,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                StageDetailRow(
-                    stage = stages.flowState,
-                    color = MaterialTheme.colorScheme.tertiary,
-                )
-                StageDetailRow(
-                    stage = stages.discovery,
-                    color = MaterialTheme.colorScheme.secondary,
-                )
+                StageDetailRow(stage = stages.deepFocus, color = MaterialTheme.colorScheme.primary)
+                StageDetailRow(stage = stages.flowState, color = MaterialTheme.colorScheme.tertiary)
+                StageDetailRow(stage = stages.discovery, color = MaterialTheme.colorScheme.secondary)
             }
         }
     }
