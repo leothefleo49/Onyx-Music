@@ -41,7 +41,11 @@ build() {
   local name="$1"; shift
   echo
   echo "════════ $name ════════"
-  if ./gradlew :app:assembleRelease --no-daemon "$@" >/tmp/onyx-build-$name.log 2>&1; then
+  # --no-configuration-cache: the signing key is read from local.properties at
+  # configuration time, which the configuration cache does not track. A cached
+  # entry stored while the key was absent would otherwise keep rejecting every
+  # release build with "No release signing key found".
+  if ./gradlew :app:assembleRelease --no-daemon --no-configuration-cache "$@" >/tmp/onyx-build-$name.log 2>&1; then
     local apk
     apk="$(find app/build/outputs/apk -name '*release*.apk' -newermt '-10 minutes' | head -1)"
     if [ -z "$apk" ]; then apk="$(find app/build/intermediates/apk -name '*release*.apk' | head -1)"; fi
