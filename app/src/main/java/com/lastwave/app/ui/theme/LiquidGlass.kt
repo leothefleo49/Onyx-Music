@@ -827,6 +827,20 @@ private fun LiquidGlassPreset.isGlassTarget(): Boolean = when (this) {
     LiquidGlassPreset.Card -> false
 }
 
+/** Per-surface opt-outs, e.g. opaque queue text over glass. Default: all on. */
+val LocalGlassSurfaces = androidx.compose.runtime.compositionLocalOf<Set<String>> {
+    com.lastwave.app.data.local.GlassSurface.allIds
+}
+
+private fun LiquidGlassPreset.glassSurfaceId(): String? = when (this) {
+    LiquidGlassPreset.BottomNavigation -> com.lastwave.app.data.local.GlassSurface.NAVIGATION.id
+    LiquidGlassPreset.MiniPlayer -> com.lastwave.app.data.local.GlassSurface.MINI_PLAYER.id
+    LiquidGlassPreset.PlayerControls -> com.lastwave.app.data.local.GlassSurface.PLAYER_CONTROLS.id
+    LiquidGlassPreset.FloatingControls -> com.lastwave.app.data.local.GlassSurface.FLOATING.id
+    LiquidGlassPreset.Header -> com.lastwave.app.data.local.GlassSurface.HEADER.id
+    else -> null
+}
+
 /**
  * Compat shim: old liquidGlassChrome now delegates to drawInteractiveGlass
  * for allowed targets only; all other presets return unmodified (opaque fallback).
@@ -844,7 +858,8 @@ fun Modifier.liquidGlassChrome(
     onPointerPosition: ((Offset?) -> Unit)? = null,
     forceDark: Boolean = false,
 ): Modifier {
-    if (!enabled || !preset.isGlassTarget() || backdrop == null || !isLiquidGlassBackdropSupported()) {
+    val surfaceEnabled = preset.glassSurfaceId()?.let { it in LocalGlassSurfaces.current } ?: true
+    if (!enabled || !surfaceEnabled || !preset.isGlassTarget() || backdrop == null || !isLiquidGlassBackdropSupported()) {
         return this
     }
     // PlayerControls and FloatingControls in Now Playing always use dark-glass

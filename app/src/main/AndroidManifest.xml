@@ -73,6 +73,27 @@
     <uses-feature
         android:name="android.hardware.usb.host"
         android:required="false" />
+    <!-- Meta Quest 3 / Horizon OS 2D panels: no touchscreen, camera or
+         telephony. Left required, the headset would filter Onyx out; with
+         them optional it installs as a resizable 2D panel. -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
 
     <application
         android:name=".LastWaveApplication"
@@ -90,6 +111,7 @@
         android:localeConfig="@xml/locales_config"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
+        android:resizeableActivity="true"
         android:enableOnBackInvokedCallback="true">
 
         <meta-data
@@ -107,7 +129,8 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.LastWave.Splash"
-            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden|uiMode"
+            android:resizeableActivity="true"
             android:windowSoftInputMode="adjustResize">
 
             <!-- Music app discovery and external playback requests -->

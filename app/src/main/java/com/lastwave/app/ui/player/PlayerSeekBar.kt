@@ -391,7 +391,17 @@ internal fun PlayerProgressSlider(
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                if (effectiveStyle == SeekbarStyle.WAVY) WavyProgressTrack(
+                if (effectiveStyle == SeekbarStyle.AURORA) AuroraProgressTrack(
+                    fraction = { fraction },
+                    rhythm = { if (isPlaying) com.lastwave.app.playback.rhythm.FluidRhythmEngine.currentRhythmValue.coerceAtLeast(0.16f) else 0f },
+                    isPlaying = isPlaying,
+                    dragging = dragged,
+                    isTranslucent = true,
+                    primaryColor = primaryColor,
+                    secondaryColor = secondaryColor,
+                    tertiaryColor = tertiaryColor,
+                    modifier = Modifier.fillMaxSize(),
+                ) else if (effectiveStyle == SeekbarStyle.WAVY) WavyProgressTrack(
                     fraction = { fraction },
                     isPlaying = isPlaying,
                     dragging = dragged,
@@ -761,7 +771,17 @@ internal fun SeekBar(
                     modifier = Modifier.fillMaxWidth().height(44.dp),
                 )
             } else {
-                if (effectiveStyle == SeekbarStyle.WAVY) WavyProgressTrack(
+                if (effectiveStyle == SeekbarStyle.AURORA) AuroraProgressTrack(
+                    fraction = { dragFraction ?: progressFraction.floatValue },
+                    rhythm = { if (isPlaying) com.lastwave.app.playback.rhythm.FluidRhythmEngine.currentRhythmValue.coerceAtLeast(0.16f) else 0f },
+                    isPlaying = isPlaying,
+                    dragging = isInteracting || dragFraction != null,
+                    isTranslucent = isTranslucent,
+                    primaryColor = primaryColor,
+                    secondaryColor = secondaryColor,
+                    tertiaryColor = tertiaryColor,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                ) else if (effectiveStyle == SeekbarStyle.WAVY) WavyProgressTrack(
                     fraction = { dragFraction ?: progressFraction.floatValue },
                     isPlaying = isPlaying,
                     dragging = isInteracting || dragFraction != null,

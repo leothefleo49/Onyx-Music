@@ -389,6 +389,9 @@ fun PlayerHost(
         onDispose { com.lastwave.app.playback.PlaybackUiDemand.needsHighFrequency = false }
     }
     var playlistTrack by remember { mutableStateOf<PlayableTrack?>(null) }
+    // Always-on display overlay (full-screen clock/artwork/lyrics).
+    var aodActive by rememberSaveable { mutableStateOf(false) }
+    val lyricsState by viewModel.lyricsState.collectAsStateWithLifecycle()
     // Smart-Previous ask: a played user-queued track is waiting on a choice.
     var previousChoice by remember { mutableStateOf<MusicPlayer.PreviousChoice?>(null) }
     LaunchedEffect(viewModel) {
@@ -716,6 +719,7 @@ fun PlayerHost(
                                 },
                                 onDragStatusChange = { isPlayerDragging = it },
                                 isOpen = expanded,
+                                onEnterAod = { aodActive = true },
                             )
                         }
                     }
@@ -740,6 +744,32 @@ fun PlayerHost(
                 }
             }
             
+            if (aodActive) {
+                val aodLyrics = lyricsState
+                val aodGlowFallback = viewModel.player.state.value.current
+                AlwaysOnDisplayOverlay(
+                    track = aodGlowFallback,
+                    isPlaying = playbackState.isPlaying,
+                    showLyrics = settings.aodShowLyrics,
+                    lines = (aodLyrics as? LyricsUiState.Success)?.lines.orEmpty(),
+                    isSynced = (aodLyrics as? LyricsUiState.Success)?.isSynced == true,
+                    plainLyrics = (aodLyrics as? LyricsUiState.Success)?.plainLyrics,
+                    positionMs = playbackState.positionMs,
+                    lyricsOffsetMs = settings.lyricsOffsetMs,
+                    glow = EdgeGlowConfig(
+                        enabled = settings.edgeGlowEnabled,
+                        mode = settings.edgeGlowMode,
+                        motion = settings.edgeGlowMotion,
+                        intensity = settings.edgeGlowIntensity,
+                        thickness = settings.edgeGlowThickness,
+                        color1 = parseHexColor(settings.edgeGlowColor1, MaterialTheme.colorScheme.primary),
+                        color2 = parseHexColor(settings.edgeGlowColor2, MaterialTheme.colorScheme.secondary),
+                    ),
+                    onExit = { aodActive = false },
+                )
+                androidx.activity.compose.BackHandler { aodActive = false }
+            }
+
             playlistTrack?.let { track ->
                 AddToPlaylistDialogHost(
                     viewModel = viewModel,
@@ -784,6 +814,7 @@ internal fun ExpandedPlayer(
     onOpenArtist: (String) -> Unit,
     onDragStatusChange: (Boolean) -> Unit = {},
     isOpen: Boolean = true,
+    onEnterAod: (() -> Unit)? = null,
 ) {
     val state by viewModel.fullPlayerState.collectAsStateWithLifecycle()
     val lyricsState by viewModel.lyricsState.collectAsStateWithLifecycle()
@@ -797,6 +828,9 @@ internal fun ExpandedPlayer(
         currentTrack.toGeneratedTrack().isLikedIn(likedTrackKeys)
     val youTubeLiked by viewModel.youTubeLiked.collectAsStateWithLifecycle()
     val lyricsOffsetMs by viewModel.liveLyricsOffsetMs.collectAsStateWithLifecycle()
+    // Theme fallbacks captured outside remember{}: its calculation is not composable.
+    val themePrimary = MaterialTheme.colorScheme.primary
+    val themeSecondary = MaterialTheme.colorScheme.secondary
     val previewQueues by viewModel.previewQueues.collectAsStateWithLifecycle()
     FullPlayer(
         state = state,
@@ -846,6 +880,43 @@ internal fun ExpandedPlayer(
         onTryAnotherLyricsSource = viewModel::tryAnotherLyricsSource,
         previewQueues = previewQueues,
         onPlayPreviewQueue = viewModel::playPreviewQueue,
+        edgeGlow = remember(
+            settings.edgeGlowEnabled,
+            settings.edgeGlowMode,
+            settings.edgeGlowMotion,
+            settings.edgeGlowIntensity,
+            settings.edgeGlowThickness,
+            settings.edgeGlowColor1,
+            settings.edgeGlowColor2,
+            themePrimary,
+            themeSecondary,
+        ) {
+            EdgeGlowConfig(
+                enabled = settings.edgeGlowEnabled,
+                mode = settings.edgeGlowMode,
+                motion = settings.edgeGlowMotion,
+                intensity = settings.edgeGlowIntensity,
+                thickness = settings.edgeGlowThickness,
+                color1 = parseHexColor(settings.edgeGlowColor1, themePrimary),
+                color2 = parseHexColor(settings.edgeGlowColor2, themeSecondary),
+            )
+        },
+        seekbarColorsOverride = remember(
+            settings.seekbarMatchTrackColors,
+            settings.seekbarCustomColor1,
+            settings.seekbarCustomColor2,
+            themePrimary,
+            themeSecondary,
+        ) {
+            if (settings.seekbarMatchTrackColors) {
+                null
+            } else {
+                val first = parseHexColor(settings.seekbarCustomColor1, themePrimary)
+                val second = parseHexColor(settings.seekbarCustomColor2, themeSecondary)
+                Triple(first, second, androidx.compose.ui.graphics.lerp(first, second, 0.5f))
+            }
+        },
+        onEnterAod = onEnterAod,
     )
 }
 
