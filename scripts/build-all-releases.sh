@@ -23,8 +23,24 @@ OUT_DIR="builds/release/$VERSION"
 mkdir -p "$OUT_DIR"
 
 export ANDROID_HOME="${ANDROID_HOME:-C:/Android/Sdk}"
-JV="$(ls -d "$HOME"/.jdks/jdk-21* 2>/dev/null | head -1 || true)"
-if [ -n "${JV:-}" ]; then export JAVA_HOME="$JV"; fi
+# The project needs a Java 17 toolchain. Prefer a real JDK 17 for the daemon
+# (and hand its path to Gradle's toolchain resolver as well); fall back to 21.
+find_jdk() {
+  for c in "$1"; do
+    [ -x "$c/bin/java" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+JDK17="$(find_jdk "$HOME/.jdks/jdk-17"* 2>/dev/null || true)"
+[ -z "$JDK17" ] && [ -x /c/jdk-17/bin/java ] && JDK17="C:/jdk-17"
+if [ -n "$JDK17" ]; then
+  export JAVA_HOME="${JAVA_HOME:-$JDK17}"
+  export GRADLE_TOOLCHAIN_ARGS="-Porg.gradle.java.installations.paths=$JDK17"
+else
+  JV="$(find_jdk "$HOME/.jdks/jdk-21"* 2>/dev/null || true)"
+  [ -n "${JV:-}" ] && export JAVA_HOME="${JAVA_HOME:-$JV}"
+  export GRADLE_TOOLCHAIN_ARGS=""
+fi
 
 WORK="$SRC"
 if [[ "$SRC" == *" "* ]]; then
@@ -45,7 +61,8 @@ build() {
   # configuration time, which the configuration cache does not track. A cached
   # entry stored while the key was absent would otherwise keep rejecting every
   # release build with "No release signing key found".
-  if ./gradlew :app:assembleRelease --no-daemon --no-configuration-cache "$@" >/tmp/onyx-build-$name.log 2>&1; then
+  if ./gradlew :app:assembleRelease --no-daemon --no-configuration-cache \
+      ${GRADLE_TOOLCHAIN_ARGS:-} "$@" >/tmp/onyx-build-$name.log 2>&1; then
     local apk
     apk="$(find app/build/outputs/apk -name '*release*.apk' -newermt '-10 minutes' | head -1)"
     if [ -z "$apk" ]; then apk="$(find app/build/intermediates/apk -name '*release*.apk' | head -1)"; fi
