@@ -98,3 +98,6 @@ plan.md
 
 .agents/
 builds/
+
+# Local debug builds (large binaries)
+builds/*.apk
