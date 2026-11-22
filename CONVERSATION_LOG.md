@@ -205,3 +205,10 @@ Reported the Last.fm callback being rejected as invalid, custom colours shifting
 - Library header search/recognition/profile/create + sort pill beside filters.
 - Onyx Wrapped ranges: 7 days, 30 days, this year, all time.
 - Version 1.2.2 (versionCode 5), signed universal APK.
+
+---
+
+## Session 6 — 2026-11-21 (1.2.3 public callback)
+
+### Change
+- GitHub Pages is unavailable on the private main repo, so the Last.fm HTTPS redirect is hosted in the public `leothefleo49/Onyx-Music-Callback` repo. Version 1.2.3 points Last.fm setup at `https://leothefleo49.github.io/Onyx-Music-Callback/auth-callback.html`.

@@ -19,8 +19,16 @@ cd "$(dirname "$0")/.."
 SRC="$(pwd)"
 
 export ANDROID_HOME="${ANDROID_HOME:-C:/Android/Sdk}"
-JV="$(ls -d "$HOME"/.jdks/jdk-21* 2>/dev/null | head -1 || true)"
-if [ -n "${JV:-}" ]; then export JAVA_HOME="$JV"; fi
+JDK17="$(ls -d "/c/Program Files/Microsoft/jdk-17"* 2>/dev/null | head -1 || true)"
+[ -z "$JDK17" ] && JDK17="$(ls -d "$HOME"/.jdks/jdk-17* 2>/dev/null | head -1 || true)"
+if [ -n "${JDK17:-}" ]; then
+  export JAVA_HOME="$JDK17"
+  TOOLCHAIN_ARGS="-Porg.gradle.java.installations.paths=$JDK17"
+else
+  JV="$(ls -d "$HOME"/.jdks/jdk-21* 2>/dev/null | head -1 || true)"
+  [ -n "${JV:-}" ] && export JAVA_HOME="$JV"
+  TOOLCHAIN_ARGS=""
+fi
 
 VERSION="$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')"
 mkdir -p builds

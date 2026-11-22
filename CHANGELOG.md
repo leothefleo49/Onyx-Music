@@ -1,9 +1,14 @@
 # Changelog
 
+## [1.2.3] - 2026-11-21
+
+### 🛠️ Fixed
+* **Last.fm callback URL:** hosted on a public redirect page (`leothefleo49.github.io/Onyx-Music-Callback/auth-callback.html`) because GitHub Pages is unavailable on the private app repository. Last.fm’s account form now accepts it.
+
 ## [1.2.2] - 2026-11-21
 
 ### 🛠️ Fixed
-* **Last.fm setup:** the callback is now a valid HTTPS URL (`https://leothefleo49.github.io/Onyx-Music/auth-callback.html`) that forwards the token into the app, so Last.fm’s account form accepts it.
+* **Last.fm setup:** the callback is now a valid HTTPS URL (`https://leothefleo49.github.io/Onyx-Music-Callback/auth-callback.html`) that forwards the token into the app, so Last.fm’s account form accepts it.
 * **Custom colours stay put:** a custom four-colour palette now wins over the per-song artwork theme, the picker reopens with the palette already in use, and secondary/tertiary roles use the picked colours instead of generated tones.
 * **Spotify playlists no longer say “YouTube Music”** in the detail header, and Spotify playlist lists/details are cached for 10 minutes so reopening the library is much faster.
 * **Cast icon:** both cast quick actions use the themed accent glyph; the hidden MediaRouteButton is fully transparent and zero-sized.

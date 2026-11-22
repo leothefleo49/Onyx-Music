@@ -12,7 +12,7 @@ import javax.inject.Singleton
  * is a real HTTPS page that immediately forwards `?token=` into the app.
  */
 const val LAST_FM_AUTH_CALLBACK_URI =
-    "https://leothefleo49.github.io/Onyx-Music/auth-callback.html"
+    "https://leothefleo49.github.io/Onyx-Music-Callback/auth-callback.html"
 
 /** Carries the browser redirect safely into the login ViewModel. */
 @Singleton
