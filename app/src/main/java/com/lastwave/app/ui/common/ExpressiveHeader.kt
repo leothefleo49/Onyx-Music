@@ -45,6 +45,7 @@ import com.lastwave.app.ui.theme.isLiquidGlassBackdropSupported
 import com.lastwave.app.ui.theme.headerLiquidGlass
 import com.lastwave.app.ui.theme.liquidGlassSource
 import com.lastwave.app.ui.theme.rememberLayerBackdrop
+import com.lastwave.app.ui.theme.LocalGlassSurfaces
 
 /** Only the bottom corners are rounded (24dp) for smooth full-bleed top alignment. */
 private val HeaderShape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)
@@ -85,7 +86,8 @@ fun ExpressiveHeader(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val liquidGlass = LocalLiquidGlass.current
-    val isGlass = liquidGlass && isLiquidGlassBackdropSupported()
+    val isGlass = liquidGlass && isLiquidGlassBackdropSupported() &&
+        com.lastwave.app.data.local.GlassSurface.HEADER.id in LocalGlassSurfaces.current
     val isDark = LocalIsDarkTheme.current
     val backgroundColor = MaterialTheme.colorScheme.background
     val isCustomColor = containerColor != Color.Unspecified

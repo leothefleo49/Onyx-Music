@@ -50,6 +50,10 @@ data class ThemePrefs(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val accentColor: String = "#E03030",
     val accentLight: String = "#FF6060",
+    /** Optional custom four-colour palette, written by the Custom picker.
+     *  Null keeps the generated Material palette derived from [accentColor]. */
+    val accentContainer: String? = null,
+    val accentHighlight: String? = null,
     val accentMode: AccentMode = AccentMode.MANUAL,
     val amoled: Boolean = false,
     /** iOS-style liquid-glass materials. Enabled by default. */
@@ -76,6 +80,8 @@ class ThemePreferences @Inject constructor(
         val THEME_MODE = stringPreferencesKey("lw_themeMode")
         val ACCENT_COLOR = stringPreferencesKey("lw_accent")
         val ACCENT_LIGHT = stringPreferencesKey("lw_accentLight")
+        val ACCENT_CONTAINER = stringPreferencesKey("lw_accentContainer")
+        val ACCENT_HIGHLIGHT = stringPreferencesKey("lw_accentHighlight")
         val ACCENT_MODE = stringPreferencesKey("lw_accentMode")
         val AMOLED = booleanPreferencesKey("lw_amoled")
         val LIQUID_GLASS = booleanPreferencesKey("lw_liquidGlass")
@@ -95,6 +101,8 @@ class ThemePreferences @Inject constructor(
                 themeMode = ThemeMode.fromStorage(p.readSafely(Keys.THEME_MODE)),
                 accentColor = p.readSafely(Keys.ACCENT_COLOR) ?: "#E03030",
                 accentLight = p.readSafely(Keys.ACCENT_LIGHT) ?: "#FF6060",
+                accentContainer = p.readSafely(Keys.ACCENT_CONTAINER),
+                accentHighlight = p.readSafely(Keys.ACCENT_HIGHLIGHT),
                 accentMode = AccentMode.fromStorage(p.readSafely(Keys.ACCENT_MODE)),
                 amoled = p.readSafely(Keys.AMOLED) ?: false,
                 liquidGlass = p.readSafely(Keys.LIQUID_GLASS) ?: true,
@@ -118,6 +126,27 @@ class ThemePreferences @Inject constructor(
         dataStore.edit {
             it[Keys.ACCENT_COLOR] = color
             it[Keys.ACCENT_LIGHT] = light
+            // A preset/single-colour pick discards an older custom palette.
+            it.remove(Keys.ACCENT_CONTAINER)
+            it.remove(Keys.ACCENT_HIGHLIGHT)
+            it[Keys.ACCENT_MODE] = AccentMode.MANUAL.storageValue
+            it[Keys.LASTWAVE_THEME] = false
+        }
+    }
+
+    /** Four explicitly picked roles: accent, light tone, dark container,
+     *  highlight. Stored as-is so the UI can show exactly what was chosen. */
+    suspend fun setManualAccent(
+        color: String,
+        light: String,
+        container: String,
+        highlight: String,
+    ) {
+        dataStore.edit {
+            it[Keys.ACCENT_COLOR] = color
+            it[Keys.ACCENT_LIGHT] = light
+            it[Keys.ACCENT_CONTAINER] = container
+            it[Keys.ACCENT_HIGHLIGHT] = highlight
             it[Keys.ACCENT_MODE] = AccentMode.MANUAL.storageValue
             it[Keys.LASTWAVE_THEME] = false
         }
@@ -172,6 +201,8 @@ class ThemePreferences @Inject constructor(
             if (enabled) {
                 it[Keys.ACCENT_COLOR] = "#C9FB00"
                 it[Keys.ACCENT_LIGHT] = "#C9FB00"
+                it.remove(Keys.ACCENT_CONTAINER)
+                it.remove(Keys.ACCENT_HIGHLIGHT)
                 it[Keys.ACCENT_MODE] = AccentMode.MANUAL.storageValue
             }
         }

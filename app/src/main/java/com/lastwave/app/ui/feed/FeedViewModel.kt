@@ -97,7 +97,7 @@ class FeedViewModel @Inject constructor(
         previewQueueRepository?.previewQueues ?: MutableStateFlow(emptyList())
 
     fun playPreviewQueue(queue: com.lastwave.app.data.queue.PreviewQueue) {
-        musicPlayer.playQueue(queue.tracks, 0, sourceLabel = queue.title)
+        musicPlayer.playQueue(queue.tracks, queue.startIndex, sourceLabel = queue.title)
     }
 
     private val recommendationExclusionKeys = discoverRepository.observeRecommendationExclusions()

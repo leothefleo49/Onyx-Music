@@ -9,6 +9,7 @@ import com.google.android.material.color.utilities.DynamicScheme
 import com.google.android.material.color.utilities.Hct
 import com.google.android.material.color.utilities.MaterialDynamicColors
 import com.google.android.material.color.utilities.SchemeNeutral
+import com.google.android.material.color.utilities.SchemeVibrant
 import com.google.android.material.color.utilities.TonalPalette
 import com.google.android.material.color.utilities.Variant
 import kotlin.math.abs
@@ -98,7 +99,7 @@ object Md3SchemeBuilder {
             val surfContainerHighest = if (useLegacyColors) Color(mdc.surfaceContainerHighest().getArgb(this)) else DarkSurfaceContainerHighest
             val surfVariant = if (useLegacyColors) Color(mdc.surfaceVariant().getArgb(this)) else DarkSurfaceVariant
             ColorScheme(
-                primary = Color(primaryPalette.tone(72)),
+                primary = Color(primaryPalette.tone(66)),
                 onPrimary = Color(primaryPalette.tone(10)),
                 primaryContainer = Color(primaryPalette.tone(22)),
                 onPrimaryContainer = Color(primaryPalette.tone(85)),
@@ -117,7 +118,7 @@ object Md3SchemeBuilder {
                 onSurface = Color(neutralPalette.tone(90)),
                 surfaceVariant = surfVariant,
                 onSurfaceVariant = Color(neutralVariantPalette.tone(75)),
-                surfaceTint = Color(primaryPalette.tone(72)),
+                surfaceTint = Color(primaryPalette.tone(66)),
                 inverseSurface = Color(neutralPalette.tone(90)),
                 inverseOnSurface = Color(neutralPalette.tone(20)),
                 error = Color(errorPalette.tone(70)),
@@ -180,6 +181,10 @@ object Md3SchemeBuilder {
     private fun generateDynamicScheme(
         seedHex: String,
         isDark: Boolean,
+        /** Manual accents keep the picked hue's real chroma instead of the
+         *  deliberately muted 8..16 clamp below, so a vivid colour looks vivid
+         *  in the app. Wallpaper/artwork seeds stay muted. */
+        vivid: Boolean = false,
     ): DynamicScheme {
         val argb = parseColor(seedHex)
         if (isAchromatic(seedHex)) {
@@ -194,6 +199,9 @@ object Md3SchemeBuilder {
             )
         }
         val hct = Hct.fromInt(argb)
+        if (vivid) {
+            return SchemeVibrant(hct, isDark, 0.0)
+        }
         val baseScheme = SchemeNeutral(hct, isDark, 0.0)
         // Allow vivid covers to slightly influence primary chroma (8..16) while keeping it deeply muted
         val priChroma = hct.chroma.coerceIn(8.0, 16.0)
@@ -241,6 +249,33 @@ object Md3SchemeBuilder {
     )
 
     /**
+     * Overlays the four colours the user explicitly picked in the custom
+     * palette. Unspecified roles keep the generated scheme, so older builds
+     * that only stored one accent still get a coherent palette.
+     */
+    fun applyCustomAccent(
+        scheme: ColorScheme,
+        accentHex: String,
+        lightHex: String?,
+        containerHex: String?,
+        highlightHex: String?,
+        isDark: Boolean,
+    ): ColorScheme {
+        val accent = Color(parseColor(accentHex))
+        val light = lightHex?.let { Color(parseColor(it)) } ?: scheme.inversePrimary
+        val container = containerHex?.let { Color(parseColor(it)) } ?: scheme.primaryContainer
+        val highlight = highlightHex?.let { Color(parseColor(it)) } ?: scheme.onPrimaryContainer
+        return scheme.copy(
+            primary = accent,
+            onPrimary = if (accent.luminance() > 0.5f) Color.Black else Color.White,
+            primaryContainer = if (isDark) container else light,
+            onPrimaryContainer = if (isDark) highlight else container,
+            inversePrimary = light,
+            surfaceTint = accent,
+        )
+    }
+
+    /**
      * (dark, light) schemes for now-playing artwork using a single major dominant color.
      */
     fun buildArtworkSchemes(
@@ -264,14 +299,14 @@ object Md3SchemeBuilder {
     /** Dark scheme, seeded from [hex]. */
     @Suppress("UNUSED_PARAMETER")
     fun buildDarkScheme(hex: String, amoled: Boolean, liquidGlass: Boolean = false, useLegacyColors: Boolean = false): ColorScheme {
-        val darkScheme = generateDynamicScheme(hex, isDark = true).toComposeColorScheme(useLegacyColors)
+        val darkScheme = generateDynamicScheme(hex, isDark = true, vivid = true).toComposeColorScheme(useLegacyColors)
         return if (amoled) applyAmoledTheme(darkScheme) else darkScheme
     }
 
     /** Full dynamic light scheme, seeded from [hex]. */
     @Suppress("UNUSED_PARAMETER")
     fun buildLightScheme(hex: String, liquidGlass: Boolean = false): ColorScheme =
-        generateDynamicScheme(hex, isDark = false).toComposeColorScheme()
+        generateDynamicScheme(hex, isDark = false, vivid = true).toComposeColorScheme()
 
     /** Pure grayscale dark scheme. */
     @Suppress("UNUSED_PARAMETER")

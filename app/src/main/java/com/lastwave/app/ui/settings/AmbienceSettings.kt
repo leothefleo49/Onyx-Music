@@ -57,13 +57,11 @@ internal fun AmbienceSettingsDialog(
     onEdgeGlowThickness: (Float) -> Unit,
     onEdgeGlowColor: (Int, String) -> Unit,
     onAodLyrics: (Boolean) -> Unit,
+    onAodVisualizerMode: (String) -> Unit,
+    onAodShowControls: (Boolean) -> Unit,
+    onAodShowArtwork: (Boolean) -> Unit,
     onSeekbarMatch: (Boolean) -> Unit,
     onSeekbarColor: (Int, String) -> Unit,
-    onSpatialMode: (SpatialAudioMode) -> Unit,
-    onCrossfeed: (Float) -> Unit,
-    onWidth: (Float) -> Unit,
-    onBassMono: (Boolean) -> Unit,
-    onRecenter: () -> Unit,
     onBackground: (AppBackgroundStyle) -> Unit,
     glassSurfaces: Set<String>,
     onGlassSurface: (com.lastwave.app.data.local.GlassSurface, Boolean) -> Unit,
@@ -76,7 +74,7 @@ internal fun AmbienceSettingsDialog(
         },
         title = {
             Text(
-                "Ambience & spatial audio",
+                "Visuals, AOD & glass",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -186,46 +184,27 @@ internal fun AmbienceSettingsDialog(
                     checked = settings.aodShowLyrics,
                     onChange = onAodLyrics,
                 )
-
-                Divider()
-                // ── Spatial audio ──
-                SectionHeader(stringResource(R.string.settings_spatial_audio))
                 OptionRow(
-                    label = stringResource(R.string.settings_spatial_mode),
+                    label = "Edge animation",
                     options = listOf(
-                        SpatialAudioMode.OFF to stringResource(R.string.settings_spatial_off),
-                        SpatialAudioMode.STATIC to stringResource(R.string.settings_spatial_static),
-                        SpatialAudioMode.HEAD_TRACKED to stringResource(R.string.settings_spatial_head_tracked),
+                        "glow" to "Glow",
+                        "bars" to "Bars",
+                        "wave" to "Wave",
+                        "off" to "Off",
                     ),
-                    selected = settings.spatialAudioMode,
-                    onSelect = onSpatialMode,
+                    selected = settings.aodVisualizerMode,
+                    onSelect = onAodVisualizerMode,
                 )
-                if (settings.spatialAudioMode != SpatialAudioMode.OFF) {
-                    SliderRow(
-                        label = stringResource(R.string.settings_spatial_crossfeed),
-                        value = settings.spatialCrossfeed,
-                        range = 0f..1f,
-                        valueLabel = "${(settings.spatialCrossfeed * 100).toInt()}%",
-                        onChange = onCrossfeed,
-                    )
-                    SliderRow(
-                        label = stringResource(R.string.settings_spatial_width),
-                        value = settings.spatialWidth,
-                        range = 0.3f..2f,
-                        valueLabel = String.format("%.2f\u00d7", settings.spatialWidth),
-                        onChange = onWidth,
-                    )
-                    ToggleRow(
-                        label = stringResource(R.string.settings_spatial_bass_mono),
-                        checked = settings.spatialBassMono,
-                        onChange = onBassMono,
-                    )
-                    if (settings.spatialAudioMode == SpatialAudioMode.HEAD_TRACKED) {
-                        TextButton(onClick = onRecenter) {
-                            Text(stringResource(R.string.settings_spatial_recenter))
-                        }
-                    }
-                }
+                ToggleRow(
+                    label = "Show playback controls",
+                    checked = settings.aodShowControls,
+                    onChange = onAodShowControls,
+                )
+                ToggleRow(
+                    label = "Show artwork",
+                    checked = settings.aodShowArtwork,
+                    onChange = onAodShowArtwork,
+                )
 
                 Divider()
                 // ── App background ──
@@ -283,7 +262,7 @@ private fun Divider() {
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -298,7 +277,7 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 }
 
 @Composable
-private fun <T> OptionRow(
+internal fun <T> OptionRow(
     label: String,
     options: List<Pair<T, String>>,
     selected: T,

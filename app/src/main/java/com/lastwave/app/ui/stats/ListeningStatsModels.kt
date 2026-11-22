@@ -231,6 +231,9 @@ data class ListeningStatsUiState(
     val customRange: CustomDateRange? = null,
     val selectedTimelineMetric: TimelineMetric = TimelineMetric.LISTENING_TIME,
     val selectedCategory: CategoryFilter = CategoryFilter.SONG,
+    /** null = every source app (the default). */
+    val selectedSource: String? = null,
+    val availableSources: List<String> = emptyList(),
     val heroKpis: HeroKpiSummary = HeroKpiSummary(),
     val totalListeningLabel: String = "0m",
     val totalPlays: Int = 0,

@@ -388,7 +388,10 @@ internal fun RecommendationSourceDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.settings_recommendations_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 Text(
                     stringResource(R.string.settings_recommendations_dialog_desc),
                     style = MaterialTheme.typography.bodySmall,
@@ -533,6 +536,8 @@ internal fun SeekbarStyleDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState())
                     .padding(20.dp)
             ) {
                 Text(
@@ -919,7 +924,13 @@ internal fun PreviousNavigationDialog(
             tonalElevation = 6.dp,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
         ) {
-            Column(Modifier.fillMaxWidth().padding(20.dp)) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp)
+            ) {
                 Text(
                     text = stringResource(com.lastwave.app.R.string.settings_previous_navigation),
                     style = MaterialTheme.typography.headlineSmall,

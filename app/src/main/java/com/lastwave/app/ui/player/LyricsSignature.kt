@@ -302,7 +302,7 @@ internal fun LyricsSignatureCard(
 }
 
 /**
- * "LastWave" with a soft artwork-coloured glow around the letters and a light
+ * "Onyx" with a soft artwork-coloured glow around the letters and a light
  * sweep across them. The sweep is read in a draw lambda only, so it never
  * recomposes anything, and it stops with "remove animations" on.
  */
@@ -337,7 +337,7 @@ private fun SignatureWordmark(
             label = "lwSignatureSweep",
         )
     } else null
-    val text = "LastWave"
+    val text = "Onyx"
     Box(modifier, contentAlignment = Alignment.Center) {
         // Glow: the same glyphs with a soft shadow under the wordmark. No
         // graphicsLayer here: a layer clips the blur to the text box and

@@ -376,6 +376,13 @@ fun PlayerHost(
     val playbackState by viewModel.player.stateWithoutProgress.collectAsStateWithLifecycle()
     val activeDownloads by viewModel.activeDownloads.collectAsStateWithLifecycle()
     var expanded by rememberSaveable { mutableStateOf(false) }
+    // Swiping the mini player down hides the tray but keeps playback and the
+    // queue alive; a small draggable button (held 10s to fully stop) replaces it.
+    var miniCollapsed by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(expanded) {
+        // Reopening the player restores the normal tray for the next collapse.
+        if (expanded) miniCollapsed = false
+    }
     var currentTab by rememberSaveable { mutableStateOf(FullPlayerTab.NOW_PLAYING) }
     // Lyrics shown inline on Now Playing. Kept beside currentTab, not as a tab,
     // so the regular lyrics tab returns to it on back.
@@ -483,7 +490,8 @@ fun PlayerHost(
             }
         }
     }
-    val miniPlayerVisible = state.current != null && !expanded && !settings.buttonNowPlayingEnabled && !hideMiniPlayer
+    val miniPlayerVisible = state.current != null && !expanded && !settings.buttonNowPlayingEnabled &&
+        !hideMiniPlayer && !miniCollapsed
 
     // Sibling pattern: ONE backdrop capturing feed content,
     // consumed by the sibling MiniPlayer. Unconditional remember keeps composition stable.
@@ -492,7 +500,9 @@ fun PlayerHost(
         drawRect(miniBackdropColor)
         drawContent()
     }
-    val miniGlass = LocalLiquidGlass.current && isLiquidGlassBackdropSupported() && !webContentScreen
+    val miniGlass = LocalLiquidGlass.current && isLiquidGlassBackdropSupported() && !webContentScreen &&
+        com.lastwave.app.data.local.GlassSurface.MINI_PLAYER.id in
+        com.lastwave.app.ui.theme.LocalGlassSurfaces.current
 
     // Player presentation (open / close): driven by sheet expansion progress (0..1).
     // The player slides smoothly from the bottom over the content like a native
@@ -556,7 +566,7 @@ fun PlayerHost(
     CompositionLocalProvider(
         LocalMusicPlayer provides viewModel.player,
         LocalAddToPlaylist provides requestAddToPlaylist,
-        LocalMiniPlayerScrollClearance provides if (state.current != null && !settings.buttonNowPlayingEnabled && !hideMiniPlayer) 98.dp else 0.dp,
+        LocalMiniPlayerScrollClearance provides if (state.current != null && !settings.buttonNowPlayingEnabled && !hideMiniPlayer && !miniCollapsed) 98.dp else 0.dp,
         LocalMiniPlayerSnackbarClearance provides if (miniPlayerVisible) {
             // Keep snackbars clear of the tray: its bottom lift plus its ~80dp card.
             (if (hasBottomNavigation) {
@@ -596,7 +606,7 @@ fun PlayerHost(
                     }
                 }
             }
-            if (state.current != null && !settings.buttonNowPlayingEnabled && !hideMiniPlayer && showMiniPlayer) {
+            if (state.current != null && !settings.buttonNowPlayingEnabled && !hideMiniPlayer && !miniCollapsed && showMiniPlayer) {
                 val miniBottomPadding = if (hasBottomNavigation) {
                     if (material3NavigationEnabled) 84.dp else 80.dp
                 } else {
@@ -609,7 +619,7 @@ fun PlayerHost(
                     onToggle = viewModel.player::togglePlayPause,
                     onPrevious = viewModel.player::previous,
                     onNext = viewModel.player::next,
-                    onClose = viewModel.player::stopAndClear,
+                    onClose = { miniCollapsed = true },
                     bottomPadding = miniBottomPadding,
                     edgeToEdge = !hasBottomNavigation,
                     backdrop = if (miniGlass) miniBackdrop else null,
@@ -642,7 +652,7 @@ fun PlayerHost(
                 )
             }
             val currentTrack = state.current
-            if (currentTrack != null && !expanded && settings.buttonNowPlayingEnabled) {
+            if (currentTrack != null && !expanded && (settings.buttonNowPlayingEnabled || miniCollapsed)) {
                 DraggableNowPlayingButton(
                     track = currentTrack,
                     progressState = viewModel.miniProgressState,
@@ -766,6 +776,12 @@ fun PlayerHost(
                         color2 = parseHexColor(settings.edgeGlowColor2, MaterialTheme.colorScheme.secondary),
                     ),
                     onExit = { aodActive = false },
+                    onPlayPause = viewModel.player::togglePlayPause,
+                    onPrevious = viewModel.player::previous,
+                    onNext = viewModel.player::next,
+                    visualizerMode = settings.aodVisualizerMode,
+                    showControls = settings.aodShowControls,
+                    showArtwork = settings.aodShowArtwork,
                 )
                 androidx.activity.compose.BackHandler { aodActive = false }
             }
@@ -821,8 +837,14 @@ internal fun ExpandedPlayer(
     val lyricsProviderStatuses by viewModel.lyricsProviderStatuses.collectAsStateWithLifecycle()
     val canvas by viewModel.canvasState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val trackOverrides by viewModel.trackOverrides.collectAsStateWithLifecycle()
     val likedTrackKeys by viewModel.likedTrackKeys.collectAsStateWithLifecycle()
     val currentTrack = state.current
+    val currentOverride = currentTrack?.let {
+        trackOverrides[
+            com.lastwave.app.data.local.trackOverrideKey(it.title, it.artist, it.videoId)
+        ]
+    }
     // Same test Liked Songs storage uses: normalized title|artist OR YouTube id.
     val isLiked = currentTrack != null &&
         currentTrack.toGeneratedTrack().isLikedIn(likedTrackKeys)
@@ -843,9 +865,9 @@ internal fun ExpandedPlayer(
         onSetLyricsStyle = viewModel::setLyricsStyle,
         seekbarStyle = settings.seekbarStyle,
         wavySeekbarEnabled = settings.wavySeekbarEnabled,
-        rotatingBackgroundEnabled = settings.rotatingBackgroundEnabled,
-        lyricsRotatingBackgroundEnabled = settings.lyricsRotatingBackgroundEnabled,
-        fluidBeatSyncEnabled = settings.fluidBeatSyncEnabled,
+        rotatingBackgroundEnabled = settings.rotatingBackgroundEnabled && currentOverride?.animationsDisabled != true,
+        lyricsRotatingBackgroundEnabled = settings.lyricsRotatingBackgroundEnabled && currentOverride?.animationsDisabled != true,
+        fluidBeatSyncEnabled = settings.fluidBeatSyncEnabled && currentOverride?.animationsDisabled != true,
         lyricsOffsetMs = lyricsOffsetMs,
         onSetLyricsOffsetMs = viewModel::setLyricsOffsetMs,
         lyricsFontScale = settings.lyricsFontScale,
@@ -854,12 +876,13 @@ internal fun ExpandedPlayer(
         onSetLyricsCentered = viewModel::setLyricsCentered,
         lyricsButtonsAutoHideSeconds = settings.lyricsButtonsAutoHideSeconds,
         translationLanguage = settings.translationLanguage,
-        canvas = canvas,
-        canvasEnabled = settings.canvasEnabled,
+        canvas = if (currentOverride?.canvasDisabled == true) null else canvas,
+        canvasEnabled = settings.canvasEnabled && currentOverride?.canvasDisabled != true,
         canvasFullBleedEnabled = settings.canvasFullBleed,
         canvasGradientBlurEnabled = settings.canvasGradientBlurEnabled,
-        musicVideoEnabled = settings.musicVideoEnabled,
-        musicVideoNowPlayingButtonEnabled = settings.musicVideoNowPlayingButtonEnabled,
+        musicVideoEnabled = settings.musicVideoEnabled && currentOverride?.videoDisabled != true,
+        musicVideoNowPlayingButtonEnabled = settings.musicVideoNowPlayingButtonEnabled && currentOverride?.videoDisabled != true,
+        swipeToChangeTrack = settings.swipeToChangeTrack,
         showAutoEqInVolumePanel = settings.showAutoEqInVolumePanel,
         currentTab = currentTab,
         onTabChange = onTabChange,
@@ -880,6 +903,7 @@ internal fun ExpandedPlayer(
         onTryAnotherLyricsSource = viewModel::tryAnotherLyricsSource,
         previewQueues = previewQueues,
         onPlayPreviewQueue = viewModel::playPreviewQueue,
+        onSaveRecentQueue = viewModel::savePreviewQueueAsPlaylist,
         edgeGlow = remember(
             settings.edgeGlowEnabled,
             settings.edgeGlowMode,

@@ -140,6 +140,7 @@ internal fun MusicPlaybackService.detectTransition(state: MusicPlayerState) {
                         track = prevTitle,
                         album = prev.album,
                         timestampSec = prevStartedAt,
+                        durationMs = prev.durationMs ?: 0L,
                     )
                 }.onFailure { error ->
                     android.util.Log.e("MusicPlaybackService", "Deferred scrobble failed", error)
@@ -278,6 +279,8 @@ internal fun MusicPlaybackService.startDetector() {
                             track = cleanTitle,
                             album = track.album,
                             timestampSec = startedAtEpochSec,
+                            durationMs = effectiveDuration,
+                            listenedMs = accumulatedMs,
                         )) {
                             ScrobbleRepository.Result.Success -> {
 

@@ -66,26 +66,58 @@ object AutoEqIndexParser {
         )
     }.toList()
 
-    /** Every query word must appear in name, source or rig (case-insensitive). */
+    /** Matches all words first, then near-misses (e.g. "Space One Pro" also
+     *  finds the "Space One" profile). */
     fun search(entries: List<AutoEqEntry>, query: String, limit: Int = 200): List<AutoEqEntry> {
         val words = query.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
         if (words.isEmpty()) return emptyList()
+        val minimumMatches = maxOf(1, (words.size * 0.6f).toInt())
         return entries.asSequence()
-            .filter { e ->
+            .mapNotNull { e ->
                 val hay = "${e.name} ${e.source} ${e.rig.orEmpty()}".lowercase()
-                words.all { it in hay }
+                val matched = words.count { it in hay }
+                when {
+                    matched == words.size -> 0 to e
+                    matched >= minimumMatches -> 1 to e
+                    else -> null
+                }
             }
             .sortedWith(
-                compareBy<AutoEqEntry> { !it.name.lowercase().startsWith(words.first()) }
-                    .thenBy { it.name.length }
-                    .thenBy { it.name.lowercase() },
+                compareBy<Pair<Int, AutoEqEntry>> { it.first }
+                    .thenBy { !it.second.name.lowercase().startsWith(words.first()) }
+                    .thenBy { it.second.name.length }
+                    .thenBy { it.second.name.lowercase() },
             )
+            .map { it.second }
             .take(limit)
             .toList()
     }
 
-    fun parseMeasurementCsv(csv: String): AutoEqMeasurement? {
-        val lines = csv.lineSequence().filter { it.isNotBlank() }.toList()
+    /** Parses an AutoEQ `ParametricEQ.txt` (or the same lines pasted from
+     *  the AutoEQ results site). Users can import profiles for headphones
+     *  that are not in the indexed catalog (e.g. Soundcore Space One Pro). */
+    fun parseParametricEqText(text: String): PeqSettings? {
+        val preamp = Regex("""Preamp:\s*(-?[\d.]+)""", RegexOption.IGNORE_CASE)
+            .find(text)?.groupValues?.getOrNull(1)?.toDoubleOrNull() ?: 0.0
+        val filterRegex = Regex(
+            """Filter\s+\d+:\s*(ON|OFF)\s+(\w+)\s+Fc\s+([\d.]+)\s*Hz(?:\s+Gain\s+(-?[\d.]+)\s*dB)?(?:\s+Q\s+([\d.]+))?""",
+            RegexOption.IGNORE_CASE,
+        )
+        val filters = filterRegex.findAll(text).mapNotNull { match ->
+            val type = PeqFilterType.fromCode(match.groupValues[2]) ?: return@mapNotNull null
+            PeqFilter(
+                type = type,
+                frequencyHz = match.groupValues[3].toDoubleOrNull() ?: return@mapNotNull null,
+                gainDb = match.groupValues[4].toDoubleOrNull() ?: 0.0,
+                q = match.groupValues[5].toDoubleOrNull() ?: 0.7,
+                enabled = !match.groupValues[1].equals("OFF", ignoreCase = true),
+            )
+        }.take(PeqSettings.MAX_FILTERS).toList()
+        if (filters.isEmpty()) return null
+        return PeqSettings(preampDb = preamp, filters = filters)
+    }
+
+    fun parseMeasurementCsv(csv: String): AutoEqMeasurement? {        val lines = csv.lineSequence().filter { it.isNotBlank() }.toList()
         if (lines.size < 3) return null
         val header = lines.first().split(',').map { it.trim().lowercase() }
         val iF = header.indexOf("frequency")

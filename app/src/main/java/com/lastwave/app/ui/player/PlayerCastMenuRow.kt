@@ -66,9 +66,17 @@ internal fun PlayerCastMenuRow(player: MusicPlayer, modifier: Modifier = Modifie
             if (plain) Modifier.size(24.dp) else Modifier.size(40.dp).clip(GroupIconBadgeShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
             contentAlignment = Alignment.Center,
         ) {
+            // Themed glyph, like every other quick action. The framework
+            // MediaRouteButton used to paint its own stark white cast icon.
+            Icon(
+                Icons.Outlined.Cast,
+                contentDescription = null,
+                modifier = Modifier.size(if (plain) 24.dp else 20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (available) {
                 AndroidView(
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(0.dp),
                     update = { it.isEnabled = enabled },
                     factory = { viewContext ->
                         MediaRouteButton(viewContext).apply {
@@ -78,13 +86,6 @@ internal fun PlayerCastMenuRow(player: MusicPlayer, modifier: Modifier = Modifie
                             routeButton = this
                         }
                     },
-                )
-            } else {
-                Icon(
-                    Icons.Outlined.Cast,
-                    contentDescription = null,
-                    modifier = Modifier.size(if (plain) 24.dp else 20.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

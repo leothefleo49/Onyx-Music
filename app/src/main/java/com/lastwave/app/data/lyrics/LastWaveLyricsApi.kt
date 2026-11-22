@@ -132,7 +132,7 @@ class LastWaveLyricsApi @Inject constructor(
                     isWordSynced = hasWordTiming,
                     plainLyrics = ttmlLines.joinToString("\n") { it.text },
                     isInstrumental = false,
-                    source = if (hasWordTiming) "LastWave (Word-Sync)" else "LastWave (Line-Sync)",
+                    source = if (hasWordTiming) "Onyx (Word-Sync)" else "Onyx (Line-Sync)",
                 )
             }
         }
@@ -155,7 +155,7 @@ class LastWaveLyricsApi @Inject constructor(
                 isWordSynced = false,
                 plainLyrics = lrcLines.joinToString("\n") { it.text },
                 isInstrumental = false,
-                source = "LastWave (Line-Sync)",
+                source = "Onyx (Line-Sync)",
             )
         }
 
@@ -167,7 +167,7 @@ class LastWaveLyricsApi @Inject constructor(
                 isWordSynced = false,
                 plainLyrics = content.trim(),
                 isInstrumental = false,
-                source = "LastWave (Plain)",
+                source = "Onyx (Plain)",
             )
         }
 

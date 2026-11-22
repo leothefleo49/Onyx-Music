@@ -557,6 +557,7 @@ internal fun LastFmIntegrationCard(
     isHighlighted: Boolean = false,
 ) {
     var showDisconnectConfirm by remember { mutableStateOf(false) }
+    var showCreateKeyHelp by remember { mutableStateOf(false) }
     // No shared key exists, so the form starts open until a key is saved.
     var showKeyForm by remember(hasApiKey) { mutableStateOf(!hasApiKey) }
     var keyInput by remember { mutableStateOf("") }
@@ -726,11 +727,11 @@ internal fun LastFmIntegrationCard(
                             ) { Text(stringResource(R.string.set_lfm_remove)) }
                         }
                     }
-                    TextButton(onClick = onOpenCreateKeyPage) {
+                    TextButton(onClick = { showCreateKeyHelp = true }) {
                         Text(stringResource(R.string.set_lfm_get))
                     }
                 } else {
-                    TextButton(onClick = onOpenCreateKeyPage) {
+                    TextButton(onClick = { showCreateKeyHelp = true }) {
                         Text(stringResource(R.string.set_lfm_how))
                     }
                 }
@@ -753,4 +754,64 @@ internal fun LastFmIntegrationCard(
             dismissButton = { TextButton(onClick = { showDisconnectConfirm = false }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
+
+    if (showCreateKeyHelp) {
+        val context = LocalContext.current
+        fun copy(value: String, label: String) {
+            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(label, value))
+            android.widget.Toast.makeText(context, "$label copied", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        AlertDialog(
+            onDismissRequest = { showCreateKeyHelp = false },
+            title = { Text("Create a Last.fm API account") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Last.fm asks for two URLs. Use these exact values — the callback is how Onyx Music receives the approval.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("Callback URL", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        com.lastwave.app.data.repository.LAST_FM_AUTH_CALLBACK_URI,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    OutlinedButton(
+                        onClick = { copy(com.lastwave.app.data.repository.LAST_FM_AUTH_CALLBACK_URI, "Callback URL") },
+                        shape = ExpressivePillShape,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Copy callback URL") }
+                    HorizontalDivider()
+                    Text("Application homepage", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        LAST_FM_APP_HOMEPAGE,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    OutlinedButton(
+                        onClick = { copy(LAST_FM_APP_HOMEPAGE, "Homepage") },
+                        shape = ExpressivePillShape,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Copy homepage") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    copy(com.lastwave.app.data.repository.LAST_FM_AUTH_CALLBACK_URI, "Callback URL")
+                    showCreateKeyHelp = false
+                    onOpenCreateKeyPage()
+                }) { Text("Copy & open Last.fm") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateKeyHelp = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
 }
+
+internal const val LAST_FM_APP_HOMEPAGE = "https://github.com/leothefleo49/Onyx-Music"

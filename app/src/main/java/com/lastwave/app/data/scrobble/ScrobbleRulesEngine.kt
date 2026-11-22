@@ -29,7 +29,9 @@ object ScrobbleRulesEngine {
     const val MIN_SCROBBLE_PERCENT = 25
     const val MAX_SCROBBLE_PERCENT = 90
     const val DEFAULT_SCROBBLE_PERCENT = 50
-    const val DEFAULT_DEDUP_WINDOW_MS = 120_000L
+    /** Same-track events closer than this are treated as one play. Kept
+     *  short so genuinely repeated short songs still count. */
+    const val DEFAULT_DEDUP_WINDOW_MS = 45_000L
 
     /** Well-known external music players for the Pano-style app filter list. */
     val KNOWN_MUSIC_PLAYERS: LinkedHashMap<String, String> = linkedMapOf(

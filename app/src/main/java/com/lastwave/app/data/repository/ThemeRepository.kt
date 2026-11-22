@@ -286,10 +286,24 @@ class ThemeRepository @Inject constructor(
         }
         // The cover owns the palette while there is one: blended 40% into the
         // wallpaper theme and muted, every song ended up the same generic tint.
-        val (darkScheme, lightScheme) = if (nowPlayingActive) {
+        var (darkScheme, lightScheme) = if (nowPlayingActive) {
             Md3SchemeBuilder.buildArtworkSchemes(nowPlaying!!.seed, nowPlaying.second, isAmoled, useLegacy)
         } else {
             baseDark to baseLight
+        }
+        val customContainer = prefs.accentContainer
+        val customHighlight = prefs.accentHighlight
+        if (!nowPlayingActive && !isLastWave && prefs.accentMode == AccentMode.MANUAL &&
+            customContainer != null && customHighlight != null
+        ) {
+            darkScheme = Md3SchemeBuilder.applyCustomAccent(
+                darkScheme, prefs.accentColor, prefs.accentLight,
+                customContainer, customHighlight, isDark = true,
+            )
+            lightScheme = Md3SchemeBuilder.applyCustomAccent(
+                lightScheme, prefs.accentColor, prefs.accentLight,
+                customContainer, customHighlight, isDark = false,
+            )
         }
         ThemeUiState(
             darkColorScheme = darkScheme,
@@ -357,6 +371,21 @@ class ThemeRepository @Inject constructor(
     suspend fun setManualAccent(color: Color) {
         val hex = color.toHex()
         themePreferences.setManualAccent(hex, hex)
+    }
+
+    /** Custom four-colour palette from the picker. */
+    suspend fun setCustomAccentPalette(
+        accent: Color,
+        light: Color,
+        container: Color,
+        highlight: Color,
+    ) {
+        themePreferences.setManualAccent(
+            accent.toHex(),
+            light.toHex(),
+            container.toHex(),
+            highlight.toHex(),
+        )
     }
 
     suspend fun setMode(mode: AccentMode) {

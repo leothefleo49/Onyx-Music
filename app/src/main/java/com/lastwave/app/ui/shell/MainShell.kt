@@ -203,10 +203,21 @@ class MainShellViewModel @Inject constructor(
             settingsPreferences.setDismissedJoinSupportPrompt(dismissed)
         }
     }
+
+    fun markTutorialSeen() {
+        viewModelScope.launch { settingsPreferences.setHasSeenTutorial(true) }
+    }
 }
 
-private enum class MainTab(val labelRes: Int) {
-    FEED(com.lastwave.app.R.string.nav_feed),
+@Composable
+private fun TutorialRow(text: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+        Text("\u2022", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private enum class MainTab(val labelRes: Int) {    FEED(com.lastwave.app.R.string.nav_feed),
     STATS(com.lastwave.app.R.string.nav_stats),
     PLAYLISTS(com.lastwave.app.R.string.nav_playlists),
 }
@@ -312,8 +323,34 @@ fun MainShell(
         )
     }
 
+    val shouldShowTutorial = currentSettings != null &&
+        !currentSettings.hasSeenTutorial &&
+        !shouldShowJoinSupport
+
+    if (shouldShowTutorial) {
+        AlertDialog(
+            onDismissRequest = { mainShellViewModel.markTutorialSeen() },
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("Welcome to Onyx Music") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("A few things that are easy to miss:", style = MaterialTheme.typography.bodyMedium)
+                    TutorialRow("Feed, Stats and Library are tabs — tap the dock to switch. Swiping the page no longer changes tabs.")
+                    TutorialRow("Tap a song to start it. Tap the mini player to open the full player.")
+                    TutorialRow("Inside the player, the Queue tab holds the play order, recent queues, and queue lock/delete.")
+                    TutorialRow("Swipe the mini player down to collapse it to a small button instead of stopping the music.")
+                    TutorialRow("Settings holds Appearance, equalizer, spatial audio, recognition, hearing protection and more.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { mainShellViewModel.markTutorialSeen() }) { Text("Got it") }
+            },
+        )
+    }
+
     val shouldShowLoginPrompt = currentSettings != null &&
         !shouldShowJoinSupport &&
+        currentSettings.hasSeenTutorial &&
         !ytConnection.isConnected &&
         !currentSettings.suppressYouTubeLoginPrompt &&
         !promptDismissedThisSession
@@ -421,6 +458,10 @@ fun MainShell(
         if (allTabs) LaunchedEffect(Unit) { composeAllTabs = true }
         HorizontalPager(
             state = pagerState,
+            // Tabs change only by tapping the dock. A horizontal swipe here
+            // used to switch tabs accidentally while scrolling a shelf that
+            // scrolls sideways itself.
+            userScrollEnabled = false,
             beyondViewportPageCount = if (allTabs) tabs.size - 1 else 0,
             modifier = Modifier.fillMaxSize()
                 .then(if (chromeCollapse != null) Modifier.nestedScroll(chromeCollapse.connection) else Modifier)

@@ -143,3 +143,46 @@ This file is an append-only record of every user message sent across every sessi
 - **OMP-4 (PR #6):** Lumn ambient edge glow (artwork/custom/gradient, intensity, thickness, beat/breathing/static), Aurora layered-wave seekbar, custom progress colours, always-on player, app background styles (artwork gloss / glossy accent / plain), per-surface Liquid Glass toggles, headphone spatial audio with head tracking, crossfeed, width and bass-centring.
 - **OMP-6 (this branch):** one-tap bulk Spotify import (all playlists + Liked Songs, progress and failure report); cross-source search (local files inside the Tracks tab, token matching, 120 results, better ranking).
 - **OMP-10 (this branch):** Quest 3 / Horizon OS support (touchscreen/camera/telephony optional, resizable 2D panel, sidebar APK script `scripts/build-quest-apk.sh`).
+
+---
+
+## Session 3 — 2026-11-21 (1.2.0 fix pass)
+
+### Message 1 (condensed; full text in the session transcript)
+Large fix/feature list: match the top-bar outline and per-surface Liquid Glass, accent-coloured boot logo, tap-only tabs, per-app stats clarity, Last.fm API callback/homepage helper, clipped dialogs, vivid/custom four-colour accents, humming/recognition sensitivity, Onyx friends sharing/jams, Spotify logging, ad-free question, JioSaavn source, per-song animation/video overrides, mixing features, first-run tutorial, queue undo/resume, queue lock placement, shuffle play order, long queue history/save-as-playlist, mini-player collapse, cast icon, playlist delete X contrast, feed scroll jitter, LastWave branding, lyrics source fallback, AOD two-tap exit/icon/controls, “Stats” label, LUMN-style AOD, library source sort/icons, Spotify library sync, Dolby/Atmos/spatial modes, AutoEQ device search, EQ save behaviour, swipe-to-skip setting, music haptics, settings help/reorg, hearing protection, self-update, clarity/bit-perfect conflict, per-song overrides and outliers.
+
+### Delivered in 1.2.0
+- Tap-only tab pager; theme-tinted header rim; HEADER/MINI_PLAYER glass toggles now honoured.
+- Accent-coloured launch logo and transparent system splash icon; in-app LastWave copy rebranded.
+- Full-chroma manual accents, four-role custom palette, corrected palette previews.
+- Dialog scroll/inset fixes (colour picker, seekbar style, previous navigation, recommendation source, long-press help).
+- EQ sheet drafts with explicit Save/Cancel (dismiss restores the previous curve).
+- Swipe-to-change-track setting (off by default) in Experimental.
+- Recognition sensitivity + humming/instrument mode settings.
+- Hearing protection volume cap; clarity/bit-perfect confirmation dialogs.
+- Queue: lock beside Back, full shuffle play order + shuffle-aware remaining time, resume index for recent queues, configurable retention (count/days), save recent queue as playlist.
+- Mini player swipe-down collapses to a draggable button; 10-second hold fully stops.
+- AOD: distinct icon, two-tap exit, transport controls.
+- Friends: share now playing/profile and open Jam from the profile.
+- Stats: real duration/listened time, shorter duplicate window; Spotify library load failure surfaces a message.
+- AutoEQ near-miss search; themed cast row; library filter icons.
+- First-run navigation tour.
+- CMake soxr path-with-spaces fix so signed release builds configure in this checkout.
+
+---
+
+## Session 4 — 2026-11-21 (1.2.1 completion pass)
+
+### Message 1
+> Well, please make all the remaining updates that I asked for then please
+
+### Delivered in 1.2.1
+- Per-song video/Canvas/motion overrides with a searchable Settings outlier manager.
+- AOD edge visualiser modes (Glow/Bars/Wave/Off), artwork and control toggles.
+- Spatial audio split into its own sheet with Narrow/Balanced/Wide/Concert presets.
+- Queue-clear undo restoring the queue, song and position.
+- AutoEQ `ParametricEQ.txt` import for models missing from the upstream index.
+- In-app update download via PackageInstaller (Android's install confirmation still applies).
+- Stats source filter chips with All sources as the default.
+- Settings search entries for the new audio/AOD/recognition/queue settings.
+- Version 1.2.1 (versionCode 4), signed APK staged in `builds/`.

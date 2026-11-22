@@ -1157,6 +1157,9 @@ class MusicPlayer @Inject constructor(
             resetRenderWatchdog()
             val currentTrack = mediaItem.toPlayableTrack()
             val currentQueue = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).toPlayableTrack() }
+            runCatching {
+                previewQueueRepository.get().updateActiveQueuePosition(currentQueue, currentIndex)
+            }
             // The stream we staged for this exact mediaId, if any. Taken
             // before the reset so the badge survives it.
             val stagedQuality = consumePendingQuality(mediaItem.mediaId)
@@ -2698,7 +2701,7 @@ class MusicPlayer @Inject constructor(
 
     fun play(
         track: PlayableTrack,
-        sourceLabel: String = "LastWave",
+        sourceLabel: String = "Onyx",
         startRadio: Boolean = true,
         startPositionMs: Long = 0L,
         playWhenReady: Boolean = true,
@@ -2736,7 +2739,7 @@ class MusicPlayer @Inject constructor(
     fun playQueue(
         tracks: List<PlayableTrack>,
         startIndex: Int = 0,
-        sourceLabel: String = "LastWave",
+        sourceLabel: String = "Onyx",
         startShuffled: Boolean = false,
         enableRadioContinuation: Boolean = false,
     ) {
@@ -2794,13 +2797,13 @@ class MusicPlayer @Inject constructor(
         tracks: List<PlayableTrack>,
         startIndex: Int,
         endlessDiscover: Boolean,
-        sourceLabel: String = if (endlessDiscover) "Discover" else "LastWave",
+        sourceLabel: String = if (endlessDiscover) "Discover" else "Onyx",
         startShuffled: Boolean = false,
         enableRadioContinuation: Boolean = false,
     ) {
         if (tracks.isEmpty()) return
         if (tracks.size >= 2) {
-            runCatching { previewQueueRepository.get().recordQueue(tracks, sourceLabel) }
+            runCatching { previewQueueRepository.get().recordQueue(tracks, sourceLabel, startIndex) }
         }
         pendingRestoredSession = null
         discoverQueueLoadJob?.cancel()
@@ -3994,7 +3997,7 @@ class MusicPlayer @Inject constructor(
      * queue order when the engine isn't initialized yet.
      */
     fun peekUpcomingIndices(limit: Int = 3): List<Int> {
-        val safeLimit = limit.coerceIn(1, 10)
+        val safeLimit = limit.coerceIn(1, 500)
         if (playerDelegate.isInitialized() && !player.currentTimeline.isEmpty) {
             val out = mutableListOf<Int>()
             var next = player.currentTimeline.getNextWindowIndex(

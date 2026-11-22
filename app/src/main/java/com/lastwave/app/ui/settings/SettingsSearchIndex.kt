@@ -1049,7 +1049,7 @@ object SettingsSearchIndex {
                 SettingsEntry(
                     id = "youtube.shown_playlists",
                     title = "Show / Hide Account Playlists",
-                    subtitle = "Control which playlists from your YouTube account appear in LastWave",
+                    subtitle = "Control which playlists from your YouTube account appear in Onyx",
                     keywords = listOf(
                         "show playlists", "hide playlists", "visibility", "account playlists",
                         "library visibility", "filter playlists"
@@ -1566,6 +1566,110 @@ object SettingsSearchIndex {
                     iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
                     parentTab = SettingsTab.ABOUT,
                     section = "About & Community",
+                    type = EntryType.ACTION,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "audio.spatial_audio",
+                    title = "Spatial audio",
+                    subtitle = "Fixed or head-tracked soundstage, crossfeed, stereo width and bass centring",
+                    keywords = listOf(
+                        "spatial", "soundstage", "head tracking", "crossfeed", "width", "surround",
+                        "3d", "audio", "headphones"
+                    ),
+                    icon = Icons.Filled.Tune,
+                    iconContainer = { MaterialTheme.colorScheme.primaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onPrimaryContainer },
+                    parentTab = SettingsTab.AUDIO,
+                    section = "Output & Loudness",
+                    type = EntryType.ACTION,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "audio.track_overrides",
+                    title = "Per-song overrides",
+                    subtitle = "Songs with their own video, Canvas or motion settings",
+                    keywords = listOf(
+                        "per song", "override", "outlier", "video", "canvas", "motion",
+                        "individual", "exception"
+                    ),
+                    icon = Icons.Filled.Tune,
+                    iconContainer = { MaterialTheme.colorScheme.tertiaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onTertiaryContainer },
+                    parentTab = SettingsTab.AUDIO,
+                    section = "Output & Loudness",
+                    type = EntryType.ACTION,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "audio.hearing_protection",
+                    title = "Hearing protection",
+                    subtitle = "Cap in-app volume and set a 40–100% limit",
+                    keywords = listOf("hearing", "volume limit", "volume cap", "safe", "protection", "max volume"),
+                    icon = Icons.Filled.Tune,
+                    iconContainer = { MaterialTheme.colorScheme.tertiaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onTertiaryContainer },
+                    parentTab = SettingsTab.AUDIO,
+                    section = "Output & Loudness",
+                    type = EntryType.TOGGLE,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "appearance.swipe_to_change_track",
+                    title = "Swipe to change tracks",
+                    subtitle = "Artwork swipe gesture; off by default",
+                    keywords = listOf("swipe", "gesture", "skip", "track", "next", "previous", "accidental"),
+                    icon = Icons.Filled.Tune,
+                    iconContainer = { MaterialTheme.colorScheme.tertiaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onTertiaryContainer },
+                    parentTab = SettingsTab.APPEARANCE,
+                    section = "Experimental & Features",
+                    type = EntryType.TOGGLE,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "appearance.recognition",
+                    title = "Music recognition",
+                    subtitle = "Sensitivity and humming / instrument mode",
+                    keywords = listOf("recognition", "humming", "identify", "shazam", "sensitivity", "instrument", "singing"),
+                    icon = Icons.Filled.GraphicEq,
+                    iconContainer = { MaterialTheme.colorScheme.primaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onPrimaryContainer },
+                    parentTab = SettingsTab.APPEARANCE,
+                    section = "Experimental & Features",
+                    type = EntryType.ACTION,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "appearance.queue_history",
+                    title = "Recent queue history",
+                    subtitle = "How many past queues to keep and for how long",
+                    keywords = listOf("queue", "history", "recent", "retention", "days", "save queue"),
+                    icon = Icons.Filled.History,
+                    iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
+                    parentTab = SettingsTab.APPEARANCE,
+                    section = "Experimental & Features",
+                    type = EntryType.ACTION,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "appearance.aod",
+                    title = "AOD visuals",
+                    subtitle = "Edge animation, lyrics, controls and artwork for the always-on player",
+                    keywords = listOf("aod", "always on", "visualizer", "bars", "wave", "glow", "clock", "ambient"),
+                    icon = Icons.Filled.Tune,
+                    iconContainer = { MaterialTheme.colorScheme.primaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onPrimaryContainer },
+                    parentTab = SettingsTab.APPEARANCE,
+                    section = "Experimental & Features",
                     type = EntryType.ACTION,
                 )
             )

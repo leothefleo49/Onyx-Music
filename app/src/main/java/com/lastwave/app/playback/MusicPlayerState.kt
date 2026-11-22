@@ -180,7 +180,7 @@ internal data class PersistedPlaybackSession(
     val queue: List<PlayableTrack>,
     val currentIndex: Int,
     val positionMs: Long,
-    val sourceLabel: String = "LastWave",
+    val sourceLabel: String = "Onyx",
     val isEndlessQueue: Boolean = false,
     val shuffleEnabled: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
@@ -197,7 +197,7 @@ data class MusicPlayerState(
     val current: PlayableTrack? = null,
     val queue: List<PlayableTrack> = emptyList(),
     val currentIndex: Int = -1,
-    val sourceLabel: String = "LastWave",
+    val sourceLabel: String = "Onyx",
     val isEndlessQueue: Boolean = false,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
@@ -237,7 +237,7 @@ class QualitySwitch(val upgrade: Boolean, val title: String)
 @androidx.compose.runtime.Immutable
 data class PlaybackChromeState(
     val current: PlayableTrack? = null,
-    val sourceLabel: String = "LastWave",
+    val sourceLabel: String = "Onyx",
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
     val queueSize: Int = 0,
@@ -256,7 +256,7 @@ data class PlaybackChromeState(
 @androidx.compose.runtime.Immutable
 data class ListPlaybackState(
     val current: PlayableTrack? = null,
-    val sourceLabel: String = "LastWave",
+    val sourceLabel: String = "Onyx",
     val isPlaying: Boolean = false,
     val shuffleEnabled: Boolean = false,
 )

@@ -72,6 +72,7 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.colorControls
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.highlight.HighlightStyle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.sign
@@ -571,11 +572,24 @@ fun Modifier.headerLiquidGlass(
     shape: Shape,
 ): Modifier {
     if (!LocalLiquidGlass.current || !isLiquidGlassBackdropSupported()) return this
+    if (com.lastwave.app.data.local.GlassSurface.HEADER.id !in LocalGlassSurfaces.current) return this
     val isDark = LocalIsDarkTheme.current
+    // The stock highlight is a hard white 1dp rim; over a dark app frame it
+    // reads as a stray white outline. Tint it with the theme outline so the
+    // header edge belongs to the same palette as the rest of the surface.
+    val rim = Highlight(
+        HeaderGlassRecipe.RIM_WIDTH,
+        HeaderGlassRecipe.RIM_BLUR,
+        0.55f,
+        HighlightStyle.Plain(
+            color = MaterialTheme.colorScheme.outlineVariant,
+            blendMode = BlendMode.SrcOver,
+        ),
+    )
     return this.drawBackdrop(
         backdrop = backdrop,
         shape = { lensSafeGlassShape(shape) },
-        highlight = { HeaderGlassRecipe.RIM },
+        highlight = { rim },
         effects = {
             colorControls(
                 brightness = if (isDark) HeaderGlassRecipe.BRIGHTNESS_DARK else HeaderGlassRecipe.BRIGHTNESS_LIGHT,
@@ -616,7 +630,8 @@ private object HeaderGlassRecipe {
     const val TINT_LIGHT = 0.46f
     const val LENS_HEIGHT_DP = 14f
     const val LENS_AMOUNT_DP = 28f
-    val RIM = Highlight(width = 1.dp)
+    val RIM_WIDTH = 1.dp
+    val RIM_BLUR = 0.5.dp
 }
 
 /**

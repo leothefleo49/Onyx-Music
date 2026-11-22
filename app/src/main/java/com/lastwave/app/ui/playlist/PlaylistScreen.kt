@@ -47,6 +47,8 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.foundation.clickable
@@ -308,14 +310,31 @@ fun PlaylistScreen(
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
-                                modifier = Modifier.padding(horizontal = 14.dp),
+                                modifier = Modifier.padding(horizontal = 12.dp),
                             ) {
-                                Text(
-                                    text = filter.label,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                val chipTint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    val icon = when (filter) {
+                                        PlaylistFilter.ALL -> Icons.Filled.LibraryMusic
+                                        PlaylistFilter.GENERATED -> Icons.Filled.AutoAwesome
+                                        PlaylistFilter.YTMUSIC -> Icons.Filled.PlayCircle
+                                        PlaylistFilter.SPOTIFY -> com.lastwave.app.ui.player.QualityGlyphs.Spotify
+                                        PlaylistFilter.IMPORTED -> Icons.Filled.Download
+                                        PlaylistFilter.PINNED -> Icons.Filled.PushPin
+                                    }
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = chipTint,
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                    Text(
+                                        text = filter.label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = chipTint,
+                                    )
+                                }
                             }
                         }
                     }

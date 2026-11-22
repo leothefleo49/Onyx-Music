@@ -1541,6 +1541,8 @@
     <string name="autoeq_retry">Retry</string>
     <string name="autoeq_search_empty">No profile matches. Try fewer words.</string>
     <string name="autoeq_msg_loaded">AutoEQ profile applied</string>
+    <string name="autoeq_msg_imported">Imported profile applied</string>
+    <string name="autoeq_msg_import_failed">Couldn\u2019t read that profile file</string>
     <string name="autoeq_msg_download_failed">Couldn\'t download this profile</string>
     <string name="autoeq_msg_device_saved">Profile saved for this device</string>
     <string name="signal_label_autoeq">AutoEQ</string>

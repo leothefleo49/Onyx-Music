@@ -192,6 +192,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -203,6 +204,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.painter.Painter
@@ -228,6 +230,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -375,12 +379,19 @@ internal fun accentShades(hex: String): List<Color> {
     val argb = runCatching {
         android.graphics.Color.parseColor(if (hex.startsWith("#")) hex else "#$hex")
     }.getOrDefault(0xFFE03030.toInt())
-    val core = com.google.android.material.color.utilities.CorePalette.of(argb)
+    // The theme itself now uses SchemeVibrant for manual accents; preview the
+    // same palette so a tile cannot promise a muted colour the app won't show.
+    val scheme = com.google.android.material.color.utilities.SchemeVibrant(
+        com.google.android.material.color.utilities.Hct.fromInt(argb),
+        true,
+        0.0,
+    )
+    val palette = scheme.primaryPalette
     return listOf(
-        Color(core.a1.tone(24)), // dark container tone
-        Color(core.a1.tone(45)), // medium tone
-        Color(core.a1.tone(68)), // muted dark accent tone
-        Color(core.a1.tone(85)), // highlight tone
+        Color(palette.tone(24)), // dark container tone
+        Color(palette.tone(45)), // medium tone
+        Color(palette.tone(68)), // muted dark accent tone
+        Color(palette.tone(85)), // highlight tone
     )
 }
 
@@ -499,43 +510,132 @@ internal fun ColorTile(
     }
 }
 
+private data class HsvSlot(val hue: Float, val saturation: Float, val value: Float) {
+    fun color(): Color = Color.hsv(hue, saturation, value)
+}
+
+private fun Color.toHsvSlot(): HsvSlot {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(toArgb(), hsv)
+    return HsvSlot(hsv[0], hsv[1], hsv[2])
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ColorWheelSheet(onDismiss: () -> Unit, onApply: (Color) -> Unit) {
-    val sheetState = rememberModalBottomSheetState()
-    var hue by remember { mutableStateOf(4f) }
-    var saturation by remember { mutableStateOf(0.75f) }
-    var lightness by remember { mutableStateOf(0.5f) }
-    val previewColor = Color.hsl(hue, saturation, lightness)
+internal fun ColorWheelSheet(
+    onDismiss: () -> Unit,
+    onApply: (accent: Color, light: Color, container: Color, highlight: Color) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Custom palettes expose the same four roles the preset tiles preview.
+    // Start from the default crimson palette so every slot has a usable value.
+    val defaults = remember {
+        val shades = accentShades("#E03030")
+        listOf(shades[1], shades[3], shades[0], shades[2])
+    }
+    val slots = remember {
+        androidx.compose.runtime.mutableStateListOf<HsvSlot>().apply {
+            addAll(defaults.map { it.toHsvSlot() })
+        }
+    }
+    var selected by remember { mutableIntStateOf(0) }
+    val current = slots[selected]
+    val labels = listOf("Accent", "Light", "Deep", "Highlight")
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .adaptiveContentWidth(maxWidth = 560.dp)
                 .align(Alignment.CenterHorizontally)
-                .padding(20.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp)
+                .navigationBarsPadding()
+                .imePadding(),
         ) {
             Text(stringResource(R.string.set_color_title), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Pick the four colours used across the theme. Tap a role, then tune it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                labels.forEachIndexed { index, label ->
+                    val color = slots[index].color()
+                    Column(
+                        modifier = Modifier.weight(1f).clickable { selected = index },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(color)
+                                .border(
+                                    width = if (selected == index) 3.dp else 1.dp,
+                                    color = if (selected == index) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = RoundedCornerShape(16.dp),
+                                ),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(18.dp))
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(80.dp)
+                    .height(64.dp)
                     .clip(RoundedCornerShape(20.dp))
-                    .background(previewColor),
+                    .background(current.color()),
             )
-            Spacer(Modifier.height(20.dp))
-            Text(stringResource(R.string.set_hue), style = MaterialTheme.typography.labelLarge)
-            Slider(value = hue, onValueChange = { hue = it }, valueRange = 0f..360f)
+            Spacer(Modifier.height(16.dp))
+            Text("${labels[selected]} • ${stringResource(R.string.set_hue)}", style = MaterialTheme.typography.labelLarge)
+            Slider(
+                value = current.hue,
+                onValueChange = { slots[selected] = current.copy(hue = it) },
+                valueRange = 0f..360f,
+            )
             Text(stringResource(R.string.set_sat), style = MaterialTheme.typography.labelLarge)
-            Slider(value = saturation, onValueChange = { saturation = it }, valueRange = 0f..1f)
+            Slider(
+                value = current.saturation,
+                onValueChange = { slots[selected] = current.copy(saturation = it) },
+                valueRange = 0f..1f,
+            )
             Text(stringResource(R.string.set_light), style = MaterialTheme.typography.labelLarge)
-            Slider(value = lightness, onValueChange = { lightness = it }, valueRange = 0.15f..0.85f)
+            Slider(
+                value = current.value,
+                onValueChange = { slots[selected] = current.copy(value = it) },
+                valueRange = 0.12f..1f,
+            )
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = onDismiss, shape = ExpressivePillShape, modifier = Modifier.weight(1f).height(48.dp)) { Text(stringResource(R.string.common_cancel)) }
-                Button(onClick = { onApply(previewColor) }, shape = ExpressivePillShape, modifier = Modifier.weight(1f).height(48.dp)) { Text(stringResource(R.string.common_apply)) }
+                Button(
+                    onClick = {
+                        onApply(
+                            slots[0].color(),
+                            slots[1].color(),
+                            slots[2].color(),
+                            slots[3].color(),
+                        )
+                    },
+                    shape = ExpressivePillShape,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                ) { Text(stringResource(R.string.common_apply)) }
             }
             Spacer(Modifier.height(8.dp))
         }

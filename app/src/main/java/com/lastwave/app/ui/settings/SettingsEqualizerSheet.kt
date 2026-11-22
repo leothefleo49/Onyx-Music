@@ -436,9 +436,12 @@ internal fun EqualizerSheet(
     onSetEnabled: (Boolean) -> Unit,
     onPickPreset: (String) -> Unit,
     onBandPreview: (Int, Float) -> Unit,
-    onBandChange: (Int, Float) -> Unit,
+    onPreviewAll: (FloatArray) -> Unit = {},
+    onSaveDraft: (String, FloatArray) -> Unit = { _, _ -> },
+    onCancelDraft: () -> Unit = {},
     onOpenAutoEq: () -> Unit = {},
     onSavePreset: (String) -> Unit = {},
+    onSaveAsPreset: (String, FloatArray) -> Unit = { _, _ -> },
     onRenamePreset: (String, String) -> Unit = { _, _ -> },
     onDeletePreset: (String) -> Unit = {},
 ) {
@@ -458,9 +461,16 @@ internal fun EqualizerSheet(
             },
         )
     }
+    // Draft only: nothing is persisted until Save. Dismissing restores the
+    // curve that was playing before the sheet opened.
+    var draftName by remember(eq.presetName) { mutableStateOf(eq.presetName) }
+    fun dismissWithoutSaving() {
+        onCancelDraft()
+        onDismiss()
+    }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { dismissWithoutSaving() },
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -651,15 +661,17 @@ internal fun EqualizerSheet(
             ) {
                 EqualizerPresets.ALL.forEach { preset ->
                     FilterChip(
-                        selected = eq.presetName.equals(preset.name, ignoreCase = true),
+                        selected = draftName.equals(preset.name, ignoreCase = true),
                         onClick = {
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.ContextClick)
-                            onPickPreset(preset.name)
+                            draftName = preset.name
+                            gains = preset.gainsDb.toFloatArray()
+                            onPreviewAll(gains)
                         },
                         label = { Text(preset.name, style = MaterialTheme.typography.labelMedium) },
                     )
                 }
-                if (eq.presetName == EqualizerPresets.CUSTOM_NAME) {
+                if (draftName == EqualizerPresets.CUSTOM_NAME) {
                     FilterChip(selected = true, onClick = {}, label = { Text(stringResource(R.string.set_eq_custom), style = MaterialTheme.typography.labelMedium) })
                 }
             }
@@ -674,10 +686,12 @@ internal fun EqualizerSheet(
             ) {
                 eq.userPresets.forEach { preset ->
                     FilterChip(
-                        selected = eq.presetName == preset.name,
+                        selected = draftName == preset.name,
                         onClick = {
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.ContextClick)
-                            onPickPreset(preset.name)
+                            draftName = preset.name
+                            gains = preset.gainsDb.toFloatArray()
+                            onPreviewAll(gains)
                         },
                         label = { Text(preset.name, style = MaterialTheme.typography.labelMedium) },
                     )
@@ -703,7 +717,7 @@ internal fun EqualizerSheet(
             if (eq.isUserPreset(eq.presetName)) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        "Edits save into “${eq.presetName}” automatically",
+                        "Changes are a preview until you tap Save",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -721,7 +735,13 @@ internal fun EqualizerSheet(
                     renaming = renaming.ifEmpty { null },
                     onDismiss = { nameDialogFor = null },
                     onConfirm = { name ->
-                        if (renaming.isEmpty()) onSavePreset(name) else onRenamePreset(renaming, name)
+                        if (renaming.isEmpty()) {
+                            // The new preset captures the curve currently on
+                            // screen, not whatever was last persisted.
+                            onSaveAsPreset(name, gains)
+                        } else {
+                            onRenamePreset(renaming, name)
+                        }
                         nameDialogFor = null
                     },
                 )
@@ -802,9 +822,10 @@ internal fun EqualizerSheet(
                                 enabled = eq.enabled,
                                 onGainChange = { value ->
                                     gains = gains.copyOf().also { it[index] = value }
+                                    draftName = EqualizerPresets.CUSTOM_NAME
                                     onBandPreview(index, value)
                                 },
-                                onChangeFinished = { onBandChange(index, gains[index]) },
+                                onChangeFinished = { },
                             )
                         }
                     }
@@ -814,14 +835,33 @@ internal fun EqualizerSheet(
             Text(
                 text = when {
                     !eq.enabled -> "Turn on to apply equalization live"
-                    eq.presetName == EqualizerPresets.CUSTOM_NAME -> "Custom profile \u2022 touch and drag any bar up/down"
-                    else -> "${eq.presetName} preset active \u2022 touch any bar to customize"
+                    draftName == EqualizerPresets.CUSTOM_NAME -> "Custom profile \u2022 touch and drag any bar up/down"
+                    else -> "$draftName preset \u2022 tap Save to keep it"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
             )
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { dismissWithoutSaving() },
+                    shape = ExpressivePillShape,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                ) { Text(stringResource(com.lastwave.app.R.string.common_cancel)) }
+                Button(
+                    onClick = {
+                        onSaveDraft(draftName, gains)
+                        onDismiss()
+                    },
+                    shape = ExpressivePillShape,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                ) { Text("Save") }
+            }
         }
     }
 }

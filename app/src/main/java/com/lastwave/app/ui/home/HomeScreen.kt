@@ -210,7 +210,7 @@ fun HomeScreen(
         topBar = {
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 ExpressiveHeader(
-                    title = "Statistics",
+                    title = "Stats",
                     modifier = Modifier.adaptiveContentWidth(maxWidth = 860.dp),
                     actions = {
                         HeaderActionIcon(

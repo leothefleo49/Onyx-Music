@@ -2,6 +2,7 @@ package com.lastwave.app.data.update
 
 import android.content.Context
 import android.content.Intent
+import android.app.PendingIntent
 import android.net.Uri
 import android.os.Build
 import com.lastwave.app.BuildConfig
@@ -38,6 +39,10 @@ data class UpdateInfo(
     val downloadSizeBytes: Long = 0L,
     /** The in-app update dialog is open (on launch, or from Settings / the banner). */
     val showDialog: Boolean = false,
+    /** PackageInstaller download/commit state; -1 = idle. */
+    val installProgress: Float = -1f,
+    val isInstalling: Boolean = false,
+    val installMessage: String? = null,
 )
 
 data class ReleaseAsset(
@@ -251,6 +256,96 @@ class AppUpdateManager @Inject constructor(
         } catch (_: Exception) { }
     }
 
+    /**
+     * Downloads the release APK into a PackageInstaller session and commits
+     * it, so the update happens inside Onyx Music instead of a browser tab.
+     * Android still shows its own "install/update this app" confirmation —
+     * that prompt cannot be skipped by a normal app.
+     */
+    fun downloadAndInstall(context: Context) {
+        val url = _updateInfo.value.downloadUrl?.takeIf { it.isNotBlank() }
+            ?: return openReleasePage(context)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            _updateInfo.update {
+                it.copy(installMessage = "Allow Onyx Music to install unknown apps, then tap Update again.")
+            }
+            runCatching {
+                context.startActivity(
+                    Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${context.packageName}"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+            return
+        }
+        if (_updateInfo.value.isInstalling) return
+        scope.launch {
+            _updateInfo.update {
+                it.copy(isInstalling = true, installProgress = 0f, installMessage = "Downloading update…")
+            }
+            var session: android.content.pm.PackageInstaller.Session? = null
+            try {
+                val installer = context.packageManager.packageInstaller
+                val params = android.content.pm.PackageInstaller.SessionParams(
+                    android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL,
+                ).apply {
+                    setAppPackageName(context.packageName)
+                }
+                val sessionId = installer.createSession(params)
+                session = installer.openSession(sessionId)
+                val request = Request.Builder().url(url).header("User-Agent", "OnyxMusic-Android").build()
+                val response = okHttpClient.newCall(request).execute()
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                val body = response.body ?: error("Empty update file")
+                val total = body.contentLength()
+                body.byteStream().use { input ->
+                    session.openWrite("onyx-update.apk", 0L, if (total > 0L) total else -1L).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var copied = 0L
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            output.write(buffer, 0, read)
+                            copied += read
+                            if (total > 0L) {
+                                _updateInfo.update { it.copy(installProgress = (copied.toFloat() / total).coerceIn(0f, 0.98f)) }
+                            }
+                        }
+                        output.flush()
+                    }
+                }
+                val callback = PendingIntent.getBroadcast(
+                    context,
+                    sessionId,
+                    Intent(context, UpdateInstallReceiver::class.java)
+                        .setAction(UpdateInstallReceiver.ACTION_INSTALL_RESULT),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+                )
+                _updateInfo.update {
+                    it.copy(installProgress = 1f, installMessage = "Opening the installer…")
+                }
+                session.commit(callback.intentSender)
+                _updateInfo.update {
+                    it.copy(isInstalling = false, installMessage = "Opening the installer…")
+                }
+            } catch (error: Exception) {
+                runCatching { session?.abandon() }
+                _updateInfo.update {
+                    it.copy(
+                        isInstalling = false,
+                        installProgress = -1f,
+                        installMessage = "Update download failed: ${error.message ?: "unknown error"}",
+                    )
+                }
+            } finally {
+                runCatching { session?.close() }
+            }
+        }
+    }
+
     fun isNewerVersion(remote: String, local: String): Boolean {
         if (remote.isBlank() || local.isBlank()) return false
         val cleanRemote = remote.removePrefix("v").removePrefix("V").substringBefore("-")
@@ -336,5 +431,34 @@ class AppUpdateManager @Inject constructor(
                 ApkVariant.VIVO_ORIGIN -> apkAssets.firstOrNull()
             }
         }
+    }
+}
+
+/** Receives PackageInstaller's result for the in-app update session. */
+class UpdateInstallReceiver : android.content.BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val status = intent.getIntExtra(
+            android.content.pm.PackageInstaller.EXTRA_STATUS,
+            android.content.pm.PackageInstaller.STATUS_FAILURE,
+        )
+        val message = intent.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE)
+        val text = when (status) {
+            android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION -> "Confirm the update in the system dialog"
+            android.content.pm.PackageInstaller.STATUS_SUCCESS -> "Update installed"
+            else -> "Update failed${message?.let { ": $it" }.orEmpty()}"
+        }
+        if (status == android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            @Suppress("DEPRECATION")
+            val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+            runCatching {
+                confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (confirm != null) context.startActivity(confirm)
+            }
+        }
+        android.widget.Toast.makeText(context.applicationContext, text, android.widget.Toast.LENGTH_LONG).show()
+    }
+
+    companion object {
+        const val ACTION_INSTALL_RESULT = "com.leothefleo49.onyxmusic.INSTALL_RESULT"
     }
 }

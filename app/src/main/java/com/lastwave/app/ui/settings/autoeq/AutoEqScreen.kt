@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Refresh
@@ -142,6 +143,15 @@ fun AutoEqScreen(
     val autoPerDevice by viewModel.autoPerDevice.collectAsStateWithLifecycle()
     var searchOpen by remember { mutableStateOf(false) }
     var expandedFilter by remember { mutableStateOf(-1) }
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()?.let(viewModel::importProfile)
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { res -> Toast.makeText(context, context.getString(res), Toast.LENGTH_SHORT).show() }
@@ -168,6 +178,12 @@ fun AutoEqScreen(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
+                IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                    Icon(
+                        Icons.Filled.FileDownload,
+                        contentDescription = "Import ParametricEQ.txt",
+                    )
+                }
                 Switch(checked = enabled, onCheckedChange = viewModel::setEnabled)
             }
             if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))

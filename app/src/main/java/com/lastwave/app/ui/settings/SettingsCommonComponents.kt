@@ -178,6 +178,7 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ripple
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -584,21 +585,30 @@ internal fun SettingsActionCard(
     val scale = rememberPressScale(interactionSource)
     val titleColor = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
     val shape = groupShape(position)
+    val detailViewer = LocalToggleDetailViewer.current
 
     Card(
-        onClick = onClick,
         shape = shape,
         colors = CardDefaults.cardColors(
             containerColor = if (isHighlighted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceContainerHigh
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        interactionSource = interactionSource,
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = ripple(),
+                onClick = onClick,
+                // Action rows open a sheet/dialog; long-press explains what
+                // that screen changes, same as the toggle cards.
+                onLongClick = {
+                    detailViewer?.invoke(ToggleDetailInfo(title, subtitle, false))
+                },
+            )
             .settingHighlightGlow(isHighlighted = isHighlighted, shape = shape),
     ) {
         Row(
@@ -609,7 +619,7 @@ internal fun SettingsActionCard(
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = titleColor, maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
             Icon(
                 Icons.Filled.ChevronRight,

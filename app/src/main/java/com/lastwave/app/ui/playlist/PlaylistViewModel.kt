@@ -246,7 +246,20 @@ class PlaylistViewModel @Inject constructor(
                 trackCount = likedCount,
             )
             val fullList = listOf(likedSummary) + raw
-            _uiState.update { it.copy(spotifyPlaylists = fullList, isSpotifyLoading = false) }
+            _uiState.update {
+                it.copy(
+                    spotifyPlaylists = fullList,
+                    isSpotifyLoading = false,
+                    // A connected account with zero playlists and no liked
+                    // count usually means the token/API failed; say so instead
+                    // of silently showing an empty Spotify tab.
+                    toastMessage = if (raw.isEmpty() && likedCount == null) {
+                        "Couldn't load Spotify playlists. Reconnect Spotify and try again."
+                    } else {
+                        it.toastMessage
+                    },
+                )
+            }
         }
     }
 

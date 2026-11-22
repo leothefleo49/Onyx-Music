@@ -352,6 +352,8 @@ internal fun FullPlayerLandscape(
     canvas: com.lastwave.app.data.canvas.CanvasArtwork?,
     /** Off = framed sleeve in the left pane, like the single-column layout. */
     canvasFullBleed: Boolean = true,
+    /** Horizontal artwork swipe skips tracks (settings, off by default). */
+    swipeToChangeTrack: Boolean = false,
     ambientColor: Color,
     ambientCompanion: Color,
     ambientDeep: Color,
@@ -386,6 +388,7 @@ internal fun FullPlayerLandscape(
             player = player,
             canvas = if (showSleeveCanvas) canvas else null,
             fullBleed = canvasFullBleed,
+            swipeToChangeTrack = swipeToChangeTrack,
             resolvedArtworkUrl = resolvedArtworkUrl,
             onDoubleTapLike = onDoubleTapLike,
             shownDismissY = shownDismissY,
@@ -580,6 +583,8 @@ internal fun LandscapeArtworkPane(
     onEnterFullscreen: () -> Unit,
     /** On = edge-to-edge art behind the controls; off = framed sleeve card. */
     fullBleed: Boolean,
+    /** Horizontal artwork swipe skips tracks (settings, off by default). */
+    swipeToChangeTrack: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -685,7 +690,9 @@ internal fun LandscapeArtworkPane(
                                 val dx = change.position.x - initialX
                                 val dy = change.position.y - initialY
                                 if (!isDrag) {
-                                    if (kotlin.math.abs(dx) > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                                    if (swipeToChangeTrack &&
+                                        kotlin.math.abs(dx) > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy)
+                                    ) {
                                         isDrag = true
                                         isArtworkDragging = true
                                         lastLikeTapTimestamp = 0L

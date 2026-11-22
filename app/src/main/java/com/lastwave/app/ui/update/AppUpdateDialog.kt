@@ -67,8 +67,7 @@ fun AppUpdateDialogHost(viewModel: AppUpdateDialogViewModel = hiltViewModel()) {
     AppUpdateDialog(
         info = info,
         onUpdate = {
-            manager.openDownload(context)
-            manager.hideDialog()
+            manager.downloadAndInstall(context)
         },
         onOpenGitHub = { manager.openReleasePage(context) },
         onClose = { skipThisVersion ->
@@ -152,6 +151,24 @@ private fun AppUpdateDialog(
                     Text("Don't show again for this version", style = MaterialTheme.typography.bodyMedium)
                 }
 
+                if (info.isInstalling) {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { info.installProgress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        info.installMessage ?: "Downloading update…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else if (info.installMessage != null) {
+                    Text(
+                        info.installMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
@@ -159,7 +176,9 @@ private fun AppUpdateDialog(
                 ) {
                     TextButton(onClick = onOpenGitHub) { Text("GitHub") }
                     TextButton(onClick = { onClose(skipThisVersion) }) { Text("Remind me later") }
-                    Button(onClick = onUpdate) { Text("Update now") }
+                    Button(onClick = onUpdate, enabled = !info.isInstalling) {
+                        Text(if (info.isInstalling) "Updating…" else "Update now")
+                    }
                 }
             }
         }

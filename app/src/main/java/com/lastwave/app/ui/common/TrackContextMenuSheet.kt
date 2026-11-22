@@ -59,6 +59,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Person
@@ -113,6 +114,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lastwave.app.playback.toPlayableTrack
 import com.lastwave.app.playback.PlayableTrack
+import com.lastwave.app.data.local.TrackOverride
+import com.lastwave.app.data.local.trackOverrideKey
+import com.lastwave.app.ui.settings.TrackOverridesViewModel
 import com.lastwave.app.playback.MusicPlayer
 import com.lastwave.app.ui.navigation.ArtistAlbumNavigator
 import com.lastwave.app.ui.player.LocalMusicPlayer
@@ -381,7 +385,7 @@ fun TrackContextMenuSheet(
     capabilities: TrackMenuCapabilities,
     playableTrack: PlayableTrack? = null,
     onDismiss: () -> Unit,
-    playbackSourceLabel: String = "LastWave",
+    playbackSourceLabel: String = "Onyx",
     onPlayInLastWave: (() -> Unit)? = null,
     onStartMix: ((trackName: String, artistName: String) -> Unit)? = null,
     onExploreGenre: ((genre: String) -> Unit)? = null,
@@ -979,6 +983,9 @@ private fun ColumnScope.ModernTrackMenuContent(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val overrideViewModel: TrackOverridesViewModel = hiltViewModel()
+    val overrideState by overrideViewModel.state.collectAsStateWithLifecycle()
+    var showOverrideDialog by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -995,6 +1002,14 @@ private fun ColumnScope.ModernTrackMenuContent(
             val isSong = playable.mediaType == com.lastwave.app.playback.MediaType.SONG
             val isLocalFile = com.lastwave.app.data.generate.LocalAudioFormats
                 .importedPathOrNull(playable.playbackUrl) != null
+            val overrideId = trackOverrideKey(t.name, t.artist, playable.videoId)
+            if (showOverrideDialog) {
+                TrackOverrideDialog(
+                    track = overrideState.all.firstOrNull { it.id == overrideId }
+                        ?: TrackOverride(id = overrideId, title = t.name, artist = t.artist),
+                    onDismiss = { showOverrideDialog = false },
+                )
+            }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 ArtworkImage(
                     name = t.name,
@@ -1014,7 +1029,13 @@ private fun ColumnScope.ModernTrackMenuContent(
                     }
                 }
                 IconButton(onClick = dismissMenu, enabled = !dismissing) {
-                    Icon(Icons.Outlined.Close, stringResource(R.string.common_close))
+                    Icon(
+                        Icons.Outlined.Close,
+                        stringResource(R.string.common_close),
+                        // Explicit high-contrast tint: the default onSurfaceVariant
+                        // vanished against the glass sheet.
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
             FlowRow(
@@ -1120,6 +1141,16 @@ private fun ColumnScope.ModernTrackMenuContent(
                 add {
                     ModernMenuActionRow(Icons.Outlined.Info, stringResource(R.string.menu_audio_details), enabled = !dismissing) {
                         openDetails()
+                    }
+                }
+                if (isSong) add {
+                    ModernMenuActionRow(
+                        Icons.Outlined.Tune,
+                        "Per-song settings",
+                        supportingText = "Video, Canvas and motion just for this song",
+                        enabled = !dismissing,
+                    ) {
+                        showOverrideDialog = true
                     }
                 }
                 if (capabilities.showPlayAction) add {

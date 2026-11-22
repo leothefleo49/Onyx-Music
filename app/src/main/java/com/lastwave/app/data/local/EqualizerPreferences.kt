@@ -158,6 +158,16 @@ class EqualizerPreferences @Inject constructor(
         }
     }
 
+    /** Commits a curve the user auditioned in the sheet (explicit Save),
+     *  without silently enabling the EQ. */
+    suspend fun applyDraft(name: String, gainsDb: FloatArray) {
+        if (gainsDb.size != EQ_BAND_FREQS_HZ.size) return
+        dataStore.edit {
+            it[Keys.PRESET_NAME] = name
+            it[Keys.GAINS_DB] = encodeGains(gainsDb.toList())
+        }
+    }
+
     /**
      * A manual band edit. On one of the listener's own presets it is saved
      * straight into that preset; on a built-in one the curve becomes Custom.

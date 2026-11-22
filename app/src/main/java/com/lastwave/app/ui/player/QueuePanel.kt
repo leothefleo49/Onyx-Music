@@ -338,6 +338,7 @@ internal fun QueuePanel(
     onBack: (() -> Unit)? = null,
     previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
     onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
+    onSaveRecentQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
 ) {
     val isQueueLocked = isQueueLockedState
     val listState = rememberLazyListState()
@@ -422,11 +423,15 @@ internal fun QueuePanel(
     // below stays in playlist order, so without this strip you can never tell
     // what plays next â€” and Play-next adds look "lost".
     val shuffleUpcoming = remember(state.queue, state.currentIndex, state.shuffleEnabled, state.repeatMode) {
-        if (state.shuffleEnabled) runCatching { player.peekUpcomingIndices(3) }.getOrDefault(emptyList())
-        else emptyList()
+        if (state.shuffleEnabled) {
+            runCatching { player.peekUpcomingIndices(state.queue.size.coerceAtLeast(1)) }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
     }.filter { it in state.queue.indices && it != state.currentIndex }
 
     var recentlyRemoved by remember { mutableStateOf<Pair<PlayableTrack, Int>?>(null) }
+    var clearedQueue by remember { mutableStateOf<ClearedQueueSnapshot?>(null) }
     var undoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     Box(modifier = modifier) {
@@ -449,8 +454,26 @@ internal fun QueuePanel(
                         tint = Color.White.copy(alpha = 0.90f),
                     )
                 }
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(8.dp))
             }
+            // Lock sits beside Back, not over the "Up next" title.
+            IconButton(
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                    isQueueLockedState = !isQueueLockedState
+                },
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White.copy(alpha = 0.14f)),
+            ) {
+                Icon(
+                    imageVector = if (isQueueLocked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                    contentDescription = if (isQueueLocked) "Unlock queue" else "Lock queue",
+                    tint = if (isQueueLocked) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.90f),
+                )
+            }
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     "Up next",
@@ -459,7 +482,11 @@ internal fun QueuePanel(
                     color = Color.White,
                 )
                 if (state.queue.isNotEmpty()) {
-                    val upcomingTracks = state.queue.drop(state.currentIndex.coerceAtLeast(0) + 1)
+                    val upcomingTracks = if (state.shuffleEnabled && shuffleUpcoming.isNotEmpty()) {
+                        shuffleUpcoming.mapNotNull { state.queue.getOrNull(it) }
+                    } else {
+                        state.queue.drop(state.currentIndex.coerceAtLeast(0) + 1)
+                    }
                     val remainingStats = QueueStatsFormatter.formatQueueStats(upcomingTracks)
                     Text(
                         "${state.currentIndex.coerceAtLeast(0) + 1} playing" +
@@ -508,6 +535,11 @@ internal fun QueuePanel(
             IconButton(
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                    clearedQueue = ClearedQueueSnapshot(
+                        tracks = state.queue.toList(),
+                        index = state.currentIndex.coerceAtLeast(0),
+                        positionMs = player.state.value.positionMs,
+                    )
                     player.clearQueueKeepCurrent()
                 },
                 enabled = state.queue.size > 1 && !isQueueLocked,
@@ -566,6 +598,17 @@ internal fun QueuePanel(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White.copy(alpha = 0.55f),
                             )
+                            IconButton(
+                                onClick = { onSaveRecentQueue(queue) },
+                                modifier = Modifier.size(24.dp),
+                            ) {
+                                Icon(
+                                    Icons.Filled.PlaylistAdd,
+                                    contentDescription = "Save queue as playlist",
+                                    tint = Color.White.copy(alpha = 0.70f),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -575,13 +618,15 @@ internal fun QueuePanel(
             Column(
                 Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 260.dp)
                     .clip(RoundedCornerShape(18.dp))
                     .background(Color.White.copy(alpha = 0.08f))
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    "Up next in shuffle order",
+                    "Play order \u2022 ${shuffleUpcoming.size} up next",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.60f),
                     fontWeight = FontWeight.Bold,
@@ -925,7 +970,59 @@ internal fun QueuePanel(
             }
         }
     }
-}
+    AnimatedVisibility(
+        visible = clearedQueue != null,
+        enter = slideInVertically { it } + fadeIn(),
+        exit = slideOutVertically { it } + fadeOut(),
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 16.dp + bottomPadding)
+            .padding(horizontal = 20.dp),
+    ) {
+        val cleared = clearedQueue
+        if (cleared != null) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.95f),
+                contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "Queue cleared",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp),
+                    )
+                    TextButton(
+                        onClick = {
+                            player.playQueue(
+                                cleared.tracks,
+                                cleared.index.coerceIn(0, cleared.tracks.lastIndex.coerceAtLeast(0)),
+                            )
+                            player.seekTo(cleared.positionMs)
+                            clearedQueue = null
+                            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                        },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.inversePrimary,
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Text("Undo", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+    }
 
     menuIndex?.let { index ->
         val itemTrack = state.queue.getOrNull(index)
@@ -942,3 +1039,9 @@ internal fun QueuePanel(
         }
     }
 }
+
+private data class ClearedQueueSnapshot(
+    val tracks: List<PlayableTrack>,
+    val index: Int,
+    val positionMs: Long,
+)

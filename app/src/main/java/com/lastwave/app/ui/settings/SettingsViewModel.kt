@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -526,10 +527,40 @@ class SettingsViewModel @Inject constructor(
         dismissColorWheel()
     }
 
+    /** Four explicit colours from the Custom palette picker. */
+    fun applyCustomPalette(accent: Color, light: Color, container: Color, highlight: Color) {
+        launchSettingsAction("update accent palette") {
+            themeRepository.setCustomAccentPalette(accent, light, container, highlight)
+        }
+        dismissColorWheel()
+    }
+
     fun setDynamicNowPlaying(enabled: Boolean) = launchSettingsAction("update dynamic theme") { themeRepository.setDynamicNowPlaying(enabled) }
     fun setUseCustomFont(enabled: Boolean) = launchSettingsAction("update the app font") { settingsPreferences.setUseCustomFont(enabled) }
     fun setUseBoldFont(enabled: Boolean) = launchSettingsAction("update font weight") { settingsPreferences.setUseBoldFont(enabled) }
     fun setCollapsingNavBar(enabled: Boolean) = launchSettingsAction("update nav bar collapse") { settingsPreferences.setCollapsingNavBar(enabled) }
+    fun setSwipeToChangeTrack(enabled: Boolean) = launchSettingsAction("update swipe gestures") { settingsPreferences.setSwipeToChangeTrack(enabled) }
+    fun setRecognitionSensitivity(value: Int) = launchSettingsAction("update recognition sensitivity") { settingsPreferences.setRecognitionSensitivity(value) }
+    fun setRecognitionHumMode(enabled: Boolean) = launchSettingsAction("update recognition mode") { settingsPreferences.setRecognitionHumMode(enabled) }
+    fun setHearingProtectionEnabled(enabled: Boolean) = launchSettingsAction("update hearing protection") {
+        settingsPreferences.setHearingProtectionEnabled(enabled)
+        if (enabled) {
+            val limit = settingsPreferences.settings.first().hearingProtectionLimitPercent / 100f
+            if (musicPlayer.state.value.appVolume > limit) musicPlayer.setAppVolume(limit)
+        }
+    }
+    fun setHearingProtectionLimit(percent: Int) = launchSettingsAction("update hearing limit") {
+        settingsPreferences.setHearingProtectionLimit(percent)
+        if (settingsPreferences.settings.first().hearingProtectionEnabled) {
+            val limit = percent.coerceIn(40, 100) / 100f
+            if (musicPlayer.state.value.appVolume > limit) musicPlayer.setAppVolume(limit)
+        }
+    }
+    fun setQueueHistoryLimit(limit: Int) = launchSettingsAction("update queue history") { settingsPreferences.setQueueHistoryLimit(limit) }
+    fun setQueueHistoryDays(days: Int) = launchSettingsAction("update queue history") { settingsPreferences.setQueueHistoryDays(days) }
+    fun setAodVisualizerMode(mode: String) = launchSettingsAction("update AOD visuals") { settingsPreferences.setAodVisualizerMode(mode) }
+    fun setAodShowControls(enabled: Boolean) = launchSettingsAction("update AOD visuals") { settingsPreferences.setAodShowControls(enabled) }
+    fun setAodShowArtwork(enabled: Boolean) = launchSettingsAction("update AOD visuals") { settingsPreferences.setAodShowArtwork(enabled) }
     fun setLegacyTrackMenu(enabled: Boolean) = launchSettingsAction("update classic song menu") { settingsPreferences.setLegacyTrackMenu(enabled) }
     fun setMenuBlur(enabled: Boolean) = launchSettingsAction("update menu blur") { settingsPreferences.setMenuBlur(enabled) }
     fun setPreferLosslessStreaming(enabled: Boolean) = launchSettingsAction("update streaming preference") { settingsPreferences.setPreferLosslessStreaming(enabled) }
@@ -925,6 +956,16 @@ class SettingsViewModel @Inject constructor(
         launchSettingsAction("save the equalizer preset") { equalizerPreferences.saveUserPreset(name) }
     }
 
+    /** Saves the on-screen draft first, then captures it as a named preset —
+     *  one coroutine so the preset can never snapshot the old curve. */
+    fun saveEqPresetFromDraft(presetName: String, curveName: String, gains: FloatArray) {
+        previewEqGains(gains)
+        launchSettingsAction("save the equalizer preset") {
+            equalizerPreferences.applyDraft(curveName, gains)
+            equalizerPreferences.saveUserPreset(presetName)
+        }
+    }
+
     fun renameEqPreset(oldName: String, newName: String) {
         launchSettingsAction("rename the equalizer preset") { equalizerPreferences.renameUserPreset(oldName, newName) }
     }
@@ -938,6 +979,33 @@ class SettingsViewModel @Inject constructor(
         if (bandIndex !in immediateEqGains.indices) return
         previewEqBandGain(bandIndex, gainDb)
         launchSettingsAction("update the equalizer band") { equalizerPreferences.setBandGain(bandIndex, gainDb) }
+    }
+
+    /** Auditions a whole curve (preset tap / band drag) without persisting. */
+    fun previewEqGains(gains: FloatArray) {
+        if (gains.size != immediateEqGains.size) return
+        immediateEqGains = FloatArray(gains.size) { index ->
+            gains[index].takeIf { it.isFinite() }
+                ?.coerceIn(-com.lastwave.app.data.local.EQ_MAX_GAIN_DB, com.lastwave.app.data.local.EQ_MAX_GAIN_DB)
+                ?: 0f
+        }
+        eqPreviews.trySend(immediateEqEnabled to immediateEqGains.copyOf())
+    }
+
+    /** Explicit Save in the EQ sheet: commit the curve the user auditioned. */
+    fun saveEqDraft(name: String, gains: FloatArray) {
+        previewEqGains(gains)
+        launchSettingsAction("save the equalizer curve") {
+            equalizerPreferences.applyDraft(name, gains)
+        }
+    }
+
+    /** Sheet dismissed without Save: restore the persisted curve in the engine. */
+    fun cancelEqDraft() {
+        val persisted = equalizer.value
+        immediateEqEnabled = persisted.enabled
+        immediateEqGains = persisted.gainsDb.toFloatArray()
+        eqPreviews.trySend(immediateEqEnabled to immediateEqGains.copyOf())
     }
 
     // ── Data management (§8.5) ──

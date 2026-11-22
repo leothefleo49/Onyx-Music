@@ -125,6 +125,17 @@ class AutoEqViewModel @Inject constructor(
     fun setTilt(value: Double) = viewModelScope.launch { controller.setTilt(value) }
     fun resetToProfile() = viewModelScope.launch { controller.resetToProfile() }
     fun startManual() = viewModelScope.launch { controller.startManual() }
+
+    /** Imports an AutoEQ ParametricEQ.txt for a model missing from the index. */
+    fun importProfile(text: String) = viewModelScope.launch {
+        val parsed = AutoEqIndexParser.parseParametricEqText(text)
+        if (parsed == null) {
+            _messages.tryEmit(R.string.autoeq_msg_import_failed)
+        } else {
+            controller.setCustomSettings(parsed)
+            _messages.tryEmit(R.string.autoeq_msg_imported)
+        }
+    }
     fun clearProfile() = viewModelScope.launch { controller.clearProfile() }
 
     fun updateFilter(index: Int, filter: PeqFilter) = editSettings { settings ->

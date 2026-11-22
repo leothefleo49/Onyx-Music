@@ -102,6 +102,11 @@ class ListeningStatsViewModel @Inject constructor(
         recalculate()
     }
 
+    fun setSource(source: String?) {
+        _uiState.update { it.copy(selectedSource = source) }
+        recalculate()
+    }
+
     fun refresh() {
         _uiState.update { it.copy(isRefreshing = true) }
         loadAuxiliaryData()
@@ -414,12 +419,19 @@ class ListeningStatsViewModel @Inject constructor(
     private fun recalculate() {
         val state = _uiState.value
         val fullPool = effectiveEvents()
+        val sourceNames = fullPool
+            .map { it.sourceAppName.ifBlank { "Onyx Music" } }
+            .distinct()
+            .sorted()
+        val sourcePool = state.selectedSource?.let { selected ->
+            fullPool.filter { it.sourceAppName.ifBlank { "Onyx Music" } == selected }
+        } ?: fullPool
         val (startMs, endMs) = getWindowBounds(state.selectedRange, state.customRange)
 
         val inWindow = if (startMs > 0L || endMs < Long.MAX_VALUE) {
-            fullPool.filter { it.scrobbledAtMs in startMs..endMs }
+            sourcePool.filter { it.scrobbledAtMs in startMs..endMs }
         } else {
-            fullPool
+            sourcePool
         }
 
         val totalListeningMs = inWindow.sumOf { effectiveListenMs(it) }
@@ -538,6 +550,7 @@ class ListeningStatsViewModel @Inject constructor(
                 totalListeningLabel = totalListeningLabel,
                 totalPlays = totalPlays,
                 sourceBreakdown = sources,
+                availableSources = sourceNames,
                 timelineBars = bars,
                 peakSegmentName = peakName,
                 peakSegmentDuration = peakDuration,

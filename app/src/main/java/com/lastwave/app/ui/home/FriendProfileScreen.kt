@@ -41,6 +41,8 @@ import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -117,6 +119,8 @@ fun FriendProfileScreen(
     val addToPlaylist = LocalAddToPlaylist.current
     val listState = rememberLazyListState()
     var menuTrack by remember { mutableStateOf<HomeTrack?>(null) }
+    var showJamSheet by remember { mutableStateOf(false) }
+    val jamViewModel: com.lastwave.app.ui.jam.LastWaveJamViewModel = hiltViewModel()
 
     LaunchedEffect(username) {
         viewModel.loadFriend(username, initialDisplayName, initialAvatarUrl)
@@ -140,6 +144,33 @@ fun FriendProfileScreen(
                 subtitle = "@$username",
                 onBack = onBack,
                 actions = {
+                    HeaderActionIcon(
+                        icon = Icons.Filled.Share,
+                        contentDescription = "Share music",
+                        onClick = {
+                            val now = uiState.nowPlaying
+                            val text = if (now != null) {
+                                "Listening to ${now.name} by ${now.artist} with $displayTitle on Onyx Music\nhttps://www.last.fm/user/$username"
+                            } else {
+                                "Follow $displayTitle on Last.fm\nhttps://www.last.fm/user/$username"
+                            }
+                            context.startActivity(
+                                Intent.createChooser(
+                                    Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, "Music from $displayTitle")
+                                        putExtra(Intent.EXTRA_TEXT, text)
+                                    },
+                                    "Share music",
+                                ),
+                            )
+                        },
+                    )
+                    HeaderActionIcon(
+                        icon = Icons.Filled.Group,
+                        contentDescription = "Start a jam",
+                        onClick = { showJamSheet = true },
+                    )
                     HeaderActionIcon(
                         icon = Icons.Filled.PushPin,
                         contentDescription = if (uiState.isPinned) stringResource(R.string.fr_unpin_cd) else stringResource(R.string.fr_pin_cd),
@@ -378,6 +409,13 @@ fun FriendProfileScreen(
             }
         }
         }
+    }
+
+    if (showJamSheet) {
+        com.lastwave.app.ui.jam.LastWaveJamSheet(
+            viewModel = jamViewModel,
+            onDismiss = { showJamSheet = false },
+        )
     }
 
     menuTrack?.let { track ->

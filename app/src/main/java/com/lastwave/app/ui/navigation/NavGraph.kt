@@ -793,7 +793,14 @@ private fun LaunchGate() {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Surface(
                 shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
+                // The glyph itself is tinted with the user's accent so the
+                // first frame after the system splash is already "their"
+                // colour instead of flashing the stock lime logo.
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                ),
                 tonalElevation = 6.dp,
                 shadowElevation = 10.dp,
                 modifier = Modifier.size(88.dp),
@@ -801,11 +808,17 @@ private fun LaunchGate() {
                 androidx.compose.foundation.Image(
                     painter = painterResource(com.lastwave.app.R.drawable.ic_launcher_foreground),
                     contentDescription = null,
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                        MaterialTheme.colorScheme.primary,
+                    ),
                     modifier = Modifier.fillMaxSize(),
                 )
             }
             Spacer(Modifier.height(18.dp))
-            Text("LastWave", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                androidx.compose.ui.res.stringResource(com.lastwave.app.R.string.app_name),
+                style = MaterialTheme.typography.headlineSmall,
+            )
             Spacer(Modifier.height(20.dp))
             ExpressiveLoadingIndicator(message = "Preparing your music")
         }

@@ -79,6 +79,7 @@ fun ListeningStatsScreen(
     var showHistorySheet by remember { mutableStateOf(false) }
     var showScrobblerControls by remember { mutableStateOf(false) }
     var showCustomDatePicker by remember { mutableStateOf(false) }
+    var showWrapped by remember { mutableStateOf(false) }
 
     if (showScrobblerControls) {
         ScrobblerSettingsScreen(
@@ -123,6 +124,13 @@ fun ListeningStatsScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    IconButton(onClick = { showWrapped = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.AutoAwesome,
+                            contentDescription = "Onyx Wrapped",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     IconButton(onClick = { showHistorySheet = true }) {
                         Icon(
                             imageVector = Icons.Filled.History,
@@ -293,6 +301,28 @@ fun ListeningStatsScreen(
                                     }
                                 },
                             )
+                        }
+                    }
+
+                    if (uiState.availableSources.size > 1) {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            item {
+                                StatsFilterChip(
+                                    label = "All sources",
+                                    selected = uiState.selectedSource == null,
+                                    onClick = { viewModel.setSource(null) },
+                                )
+                            }
+                            items(uiState.availableSources) { source ->
+                                StatsFilterChip(
+                                    label = source,
+                                    selected = uiState.selectedSource == source,
+                                    onClick = { viewModel.setSource(source) },
+                                )
+                            }
                         }
                     }
 
@@ -736,6 +766,10 @@ fun ListeningStatsScreen(
                 modifier = Modifier.height(420.dp),
             )
         }
+    }
+
+    if (showWrapped) {
+        OnyxWrappedScreen(onClose = { showWrapped = false })
     }
 }
 

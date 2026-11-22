@@ -348,7 +348,7 @@ class JamPlaybackSync @Inject constructor(
 
             musicPlayer.play(
                 track = playable,
-                sourceLabel = "LastWave Jam",
+                sourceLabel = "Onyx Jam",
                 startRadio = false,
                 startPositionMs = positionMs,
                 playWhenReady = isPlaying,

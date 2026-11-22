@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.2.1] - 2026-11-21
+
+### ✨ What's New
+* **Onyx Wrapped:** a yearly recap built from Onyx's own scrobble history — minutes, plays, unique tracks/artists/albums, top artists, top songs, top albums, peak listening time, most-used source and longest streak, with sharing.
+* **Per-song overrides:** any song can disable its synced video, Canvas and motion independently of the global defaults. Manage them in Settings → Output & Loudness → Per-song overrides with search, toggles and delete.
+* **AOD visualizer modes:** Glow, Bars, Wave or Off, plus switches for artwork and playback controls, under Visuals, AOD & glass.
+* **Spatial audio has its own sheet** with fixed/head-tracked modes, Narrow / Balanced / Wide / Concert presets, crossfeed, width and bass centring.
+* **Queue clear undo:** clearing the queue shows an Undo that restores the queue at the same song and position.
+* **AutoEQ profile import:** import any AutoEQ `ParametricEQ.txt` for headphones missing from the index (e.g. Soundcore Space One Pro).
+* **In-app updates:** Onyx now downloads the release APK into a PackageInstaller session and opens the system installer directly (the Android confirmation prompt remains).
+* **Stats source filter:** All sources is still the default; chips let you narrow every stat to one app/source.
+
+### ⚡ Improved
+* Settings search now indexes spatial audio, per-song overrides, hearing protection, recognition, AOD, queue history and the swipe gesture.
+* Signed release build path handling and in-app installer progress.
+
+## [1.2.0] - 2026-11-21
+
+### ✨ What's New
+* **Per-surface Liquid Glass control now actually applies to headers and the mini player**, with a theme-tinted header rim instead of the stock white outline.
+* **Custom accent palettes:** the Custom tile now exposes all four theme roles (Accent, Light, Deep, Highlight) and manual accents use the full-chroma palette instead of the muted 8–16 chroma clamp.
+* **Music recognition settings:** default sensitivity slider plus a humming / solo-instrument mode with a longer, more lenient capture.
+* **Hearing protection:** optional in-app volume cap with an adjustable 40–100% limit.
+* **Recent queue history:** retention is configurable (count and days), recent queues resume at the song you were on, and any recent queue can be saved as a playlist with one tap.
+* **Queue panel:** lock button moved beside Back; shuffle now shows the full play order with shuffle-aware remaining time.
+* **Always-on player:** distinct icon, two-tap exit, and playback controls.
+* **Friends:** share what a friend is playing, or open a Jam from their profile.
+* **First-run tour** covering tabs, queue access, mini-player collapse and settings.
+
+### ⚡ Improved
+* Tab switching is tap-only; the horizontal pager no longer changes tabs on accidental swipes.
+* EQ changes are a preview until you tap Save; dismissing restores the previous curve.
+* Swipe-to-change-track is now a setting, off by default.
+* Cast uses the themed quick-action icon instead of the framework's white glyph.
+* AutoEQ search accepts near-miss model names (e.g. “Space One Pro” finds “Space One”).
+* Stats listening time now records real track duration/listened time instead of a fixed 3m30s, and the duplicate window is shorter so repeated short songs count.
+* Settings action rows support long-press explanations and two-line subtitles.
+* Boot logo follows the chosen accent colour; leftover LastWave labels in user-facing text were rebranded.
+* Signed release builds now configure with checkout paths that contain spaces (libsoxr CMake fix).
+
 ## [1.1.0] - 2026-11-21
 
 ### ✨ What's New

@@ -157,6 +157,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Lock
@@ -373,6 +374,8 @@ internal fun FullPlayer(
     canvasGradientBlurEnabled: Boolean = false,
     musicVideoEnabled: Boolean = true,
     musicVideoNowPlayingButtonEnabled: Boolean = false,
+    /** Horizontal artwork swipe skips tracks. Off by default (settings). */
+    swipeToChangeTrack: Boolean = false,
     showAutoEqInVolumePanel: Boolean = true,
     currentTab: FullPlayerTab,
     onTabChange: (FullPlayerTab) -> Unit,
@@ -394,6 +397,7 @@ internal fun FullPlayer(
     onTryAnotherLyricsSource: (() -> Unit)? = null,
     previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
     onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
+    onSaveRecentQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
     /** Null follows the artwork palette; otherwise progress bars use these. */
     seekbarColorsOverride: Triple<Color, Color, Color>? = null,
     edgeGlow: EdgeGlowConfig = EdgeGlowConfig(),
@@ -1203,7 +1207,7 @@ internal fun FullPlayer(
                                     if (currentTab == FullPlayerTab.LYRICS) {
                                         "${track.title} • ${track.artist}"
                                     } else {
-                                        state.sourceLabel.takeIf { it.isNotBlank() } ?: "LastWave"
+                                        state.sourceLabel.takeIf { it.isNotBlank() } ?: "Onyx"
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (isThemeLight) Color(0xFF444448) else Color.White.copy(alpha = 0.70f),
@@ -1237,30 +1241,6 @@ internal fun FullPlayer(
                                         )
                                     }
                                 }
-                                if (currentTab == FullPlayerTab.QUEUE) {
-                                    LiquidGlassSurface(
-                                        onClick = hapticClick {
-                                            isQueueLockedState = !isQueueLockedState
-                                        },
-                                        shape = CircleShape,
-                                        color = if (isQueueLockedState) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                                        else liquidGlassContainerColor(if (isThemeLight) Color.Black.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.14f)),
-                                        contentColor = if (isQueueLockedState) MaterialTheme.colorScheme.primary
-                                        else (if (isThemeLight) Color(0xFF222226) else Color.White.copy(alpha = 0.94f)),
-                                        glassModifier = Modifier.liquidGlassChrome(
-                                            CircleShape,
-                                            LocalLiquidGlass.current,
-                                            LiquidGlassPreset.FloatingControls,
-                                        ),
-                                        modifier = Modifier.size(44.dp),
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isQueueLockedState) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                                            contentDescription = if (isQueueLockedState) "Unlock queue" else "Lock queue",
-                                            modifier = Modifier.size(22.dp),
-                                        )
-                                    }
-                                }
                                 if (onEnterAod != null) {
                                     LiquidGlassSurface(
                                         onClick = hapticClick { onEnterAod() },
@@ -1275,7 +1255,7 @@ internal fun FullPlayer(
                                         modifier = Modifier.size(44.dp),
                                     ) {
                                         Icon(
-                                            Icons.Filled.Bedtime,
+                                            Icons.Filled.NightsStay,
                                             contentDescription = "Always-on player",
                                             modifier = Modifier.size(21.dp),
                                         )
@@ -1396,6 +1376,7 @@ internal fun FullPlayer(
                                         onCloseVideo = { syncedVideoVm.setVideoActive(false) },
                                         onEnterFullscreen = { isVideoFullscreen = true },
                                         fullBleed = canvasFullBleedEnabled,
+                                        swipeToChangeTrack = swipeToChangeTrack,
                                         modifier = Modifier.weight(1f),
                                     )
                                 }
@@ -1468,6 +1449,7 @@ internal fun FullPlayer(
                                     onBack = { onTabChange(FullPlayerTab.NOW_PLAYING) },
                                     previewQueues = previewQueues,
                                     onPlayPreviewQueue = onPlayPreviewQueue,
+                                    onSaveRecentQueue = onSaveRecentQueue,
                                 )
                             }
                         }
@@ -1545,7 +1527,7 @@ internal fun FullPlayer(
                                                 }
                                                 if (rootPos.y != heroTopPx) heroTopPx = rootPos.y
                                             }
-                                            .pointerInput(track.videoId, track.title, isVideoActive, playerLyricsActive) {
+                                                            .pointerInput(track.videoId, track.title, isVideoActive, playerLyricsActive, swipeToChangeTrack) {
                                                 // Lyric rows own taps in Player Lyrics: a double tap
                                                 // there must not seek 5 s or like the song.
                                                 if (isVideoActive || playerLyricsActive) return@pointerInput
@@ -1634,7 +1616,9 @@ internal fun FullPlayer(
                                                         val dx = change.position.x - initialX
                                                         val dy = change.position.y - initialY
                                                         if (!isDrag) {
-                                                            if (kotlin.math.abs(dx) > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                                                            if (swipeToChangeTrack &&
+                                                                kotlin.math.abs(dx) > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy)
+                                                            ) {
                                                                 isDrag = true
                                                                 isArtworkDragging = true
                                                                 lastLikeTapTimestamp = 0L

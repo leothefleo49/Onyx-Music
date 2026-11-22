@@ -18,6 +18,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -35,6 +36,7 @@ sealed interface RecognitionState {
 class MusicRecognitionViewModel @Inject constructor(
     private val client: RecognitionClient,
     private val routeNavigator: AppRouteNavigator,
+    private val settingsPreferences: com.lastwave.app.data.local.SettingsPreferences,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<RecognitionState>(RecognitionState.Idle)
@@ -48,8 +50,18 @@ class MusicRecognitionViewModel @Inject constructor(
         job = viewModelScope.launch {
             _state.value = RecognitionState.Listening
             _state.value = try {
-                val clip = MicCapture.record(LISTEN_MS)
-                if (MicCapture.isSilent(clip.samples)) {
+                val settings = settingsPreferences.settings.first()
+                val sensitivity = settings.recognitionSensitivity.coerceIn(0, 100)
+                // 700 at "strict" down to 100 at "very lenient". Humming and
+                // solo instruments are quiet, so the hum mode floor is lower.
+                val silenceThreshold = if (settings.recognitionHumMode) {
+                    (350 - sensitivity * 2).coerceIn(80, 350)
+                } else {
+                    (700 - sensitivity * 6).coerceIn(100, 700)
+                }
+                val listenMs = if (settings.recognitionHumMode) HUM_LISTEN_MS else LISTEN_MS
+                val clip = MicCapture.record(listenMs)
+                if (MicCapture.isSilent(clip.samples, silenceThreshold)) {
                     RecognitionState.Failed(RecognitionError.SILENCE)
                 } else {
                     _state.value = RecognitionState.Identifying
@@ -90,5 +102,6 @@ class MusicRecognitionViewModel @Inject constructor(
 
     private companion object {
         const val LISTEN_MS = 10_000L
+        const val HUM_LISTEN_MS = 15_000L
     }
 }

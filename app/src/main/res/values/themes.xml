@@ -23,12 +23,13 @@
 
     <!-- Splash theme: matches the app's dark hue-0 background (the md
          background token at hue 0, chroma 5%, lightness 6%) so there's no
-         flash before Compose draws. -->
+         flash before Compose draws. The icon is intentionally transparent:
+         the launch gate draws the logo tinted with the user's accent. -->
     <style name="Theme.LastWave.Splash" parent="Theme.LastWave">
         <item name="android:windowSplashScreenBackground" tools:targetApi="s">@color/splash_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="s">@mipmap/ic_launcher</item>
+        <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="s">@drawable/ic_splash_transparent</item>
         <item name="postSplashScreenTheme">@style/Theme.LastWave</item>
         <item name="windowSplashScreenBackground">@color/splash_background</item>
-        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_transparent</item>
     </style>
 </resources>

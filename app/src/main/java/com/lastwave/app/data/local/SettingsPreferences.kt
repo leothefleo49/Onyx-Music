@@ -56,7 +56,7 @@ data class CacheClearHistory(
  *  proper nouns — no localization needed. */
 enum class LyricsProvider(val id: String, val title: String, val subtitle: String) {
     AUTO("auto", "Auto", "Fastest word-sync wins, LRCLIB fallback"),
-    LASTWAVE("lastwave", "LastWave", "Syllable & line-synced Apple lyrics first"),
+    LASTWAVE("lastwave", "Onyx", "Syllable & line-synced Apple lyrics first"),
     LRC_RED("lrc_red", "lrc.red", "ISRC-indexed syllable TTML & LRC first"),
     APPLE_MUSIC("apple_music", "Apple Music", "Syllable-synced Apple Music lyrics first"),
     BETTER_LYRICS("better_lyrics", "BetterLyrics", "Word-synced lyrics first"),
@@ -217,6 +217,24 @@ data class MiscSettings(
     val useBoldFont: Boolean = false,
     /** Scrolling a tab shrinks the nav bar to an icon pill with the mini player docked beside it. Off keeps the classic bar. */
     val collapsingNavBar: Boolean = true,
+    /** Swiping the full player's artwork sideways changes tracks. Off by
+     *  default: it fired on accidental horizontal scrolls. */
+    val swipeToChangeTrack: Boolean = false,
+    /** 0 = strict (loud, clear audio only), 100 = very lenient. Used by the
+     *  microphone recognition silence gate and match retries. */
+    val recognitionSensitivity: Int = 50,
+    /** Longer capture window and looser gate for humming/single instruments. */
+    val recognitionHumMode: Boolean = false,
+    /** Caps in-app playback volume to protect hearing. */
+    val hearingProtectionEnabled: Boolean = false,
+    /** Maximum app volume (40..100%) while hearing protection is on. */
+    val hearingProtectionLimitPercent: Int = 80,
+    /** How many past queues the queue panel keeps. */
+    val queueHistoryLimit: Int = 30,
+    /** Drop past queues older than this many days. */
+    val queueHistoryDays: Int = 30,
+    /** First-run navigation tour; dismisses forever once acknowledged. */
+    val hasSeenTutorial: Boolean = false,
     /** Last.fm usernames pinned to the top of Home's friend-switcher sheet
      *  (long-press a friend row to toggle). Order among pinned friends
      *  follows whatever order user.getfriends itself returns them in —
@@ -264,7 +282,7 @@ data class MiscSettings(
     /** Which service seeds recommendations (Settings -> Spotify). */
     val recommendationSource: RecommendationSource = RecommendationSource.YOUTUBE_MUSIC,
     /** Whether Spotify account playlists & Liked Songs are shown in the Playlists library. */
-    val spotifyPlaylistsSyncEnabled: Boolean = false,
+    val spotifyPlaylistsSyncEnabled: Boolean = true,
     val lyricsOffsetMs: Long = 0L,
     /** Scale factor applied to lyrics font size across both modern and classic views.
      *  Default 1.0f (100%), clamped between 0.7f (70%) and 1.5f (150%). */
@@ -370,7 +388,7 @@ data class MiscSettings(
     val musicHapticsMode: MusicHapticsMode = MusicHapticsMode.WHOLE_SONG,
     val musicHapticsIntensity: MusicHapticsIntensity = MusicHapticsIntensity.MEDIUM,
     val musicHapticsEngineMode: MusicHapticsEngineMode = MusicHapticsEngineMode.AUTO,
-    val musicHapticsPauseOnBatterySaver: Boolean = true,
+    val musicHapticsPauseOnBatterySaver: Boolean = false,
     /** When true, uses the classic card-based 3-dots song menu instead of the redesigned layout. */
     val useLegacyTrackMenu: Boolean = false,
     /** When true, enables blur effect behind and around song options menus. */
@@ -387,6 +405,10 @@ data class MiscSettings(
     val edgeGlowMotion: EdgeGlowMotion = EdgeGlowMotion.BEAT,
     /** Always-on display: show the current lyric line. */
     val aodShowLyrics: Boolean = true,
+    /** AOD edge animation: glow, bars, wave or off. */
+    val aodVisualizerMode: String = "glow",
+    val aodShowControls: Boolean = true,
+    val aodShowArtwork: Boolean = true,
     /** Progress-bar colours: follow artwork, or use the two custom colours below. */
     val seekbarMatchTrackColors: Boolean = true,
     val seekbarCustomColor1: String = "#8B5CF6",
@@ -542,6 +564,14 @@ class SettingsPreferences @Inject constructor(
         val USE_CUSTOM_FONT = booleanPreferencesKey("lw_use_custom_font")
         val USE_BOLD_FONT = booleanPreferencesKey("lw_use_bold_font")
         val COLLAPSING_NAV_BAR = booleanPreferencesKey("lw_collapsing_nav_bar")
+        val SWIPE_TO_CHANGE_TRACK = booleanPreferencesKey("lw_swipe_to_change_track")
+        val RECOGNITION_SENSITIVITY = androidx.datastore.preferences.core.intPreferencesKey("lw_recognition_sensitivity")
+        val RECOGNITION_HUM_MODE = booleanPreferencesKey("lw_recognition_hum_mode")
+        val HEARING_PROTECTION_ENABLED = booleanPreferencesKey("lw_hearing_protection")
+        val HEARING_PROTECTION_LIMIT = androidx.datastore.preferences.core.intPreferencesKey("lw_hearing_limit_pct")
+        val QUEUE_HISTORY_LIMIT = androidx.datastore.preferences.core.intPreferencesKey("lw_queue_history_limit")
+        val QUEUE_HISTORY_DAYS = androidx.datastore.preferences.core.intPreferencesKey("lw_queue_history_days")
+        val HAS_SEEN_TUTORIAL = booleanPreferencesKey("lw_has_seen_tutorial")
         val PINNED_FRIENDS = stringSetPreferencesKey("lw_pinned_friends")
         val PREFER_LOSSLESS_STREAMING = booleanPreferencesKey("lw_prefer_lossless_streaming")
         /** Legacy on/off toggle; read once to seed [HI_RES_START]. */
@@ -576,6 +606,9 @@ class SettingsPreferences @Inject constructor(
         val EDGE_GLOW_THICKNESS = floatPreferencesKey("lw_edge_glow_thickness")
         val EDGE_GLOW_MOTION = stringPreferencesKey("lw_edge_glow_motion")
         val AOD_SHOW_LYRICS = booleanPreferencesKey("lw_aod_show_lyrics")
+        val AOD_VISUALIZER_MODE = stringPreferencesKey("lw_aod_visualizer_mode")
+        val AOD_SHOW_CONTROLS = booleanPreferencesKey("lw_aod_show_controls")
+        val AOD_SHOW_ARTWORK = booleanPreferencesKey("lw_aod_show_artwork")
         val SEEKBAR_MATCH_TRACK_COLORS = booleanPreferencesKey("lw_seekbar_match_track_colors")
         val SEEKBAR_CUSTOM_COLOR_1 = stringPreferencesKey("lw_seekbar_custom_color_1")
         val SEEKBAR_CUSTOM_COLOR_2 = stringPreferencesKey("lw_seekbar_custom_color_2")
@@ -676,6 +709,14 @@ class SettingsPreferences @Inject constructor(
                 useCustomFont = p.readSafely(Keys.USE_CUSTOM_FONT) ?: true,
                 useBoldFont = p.readSafely(Keys.USE_BOLD_FONT) ?: false,
                 collapsingNavBar = p.readSafely(Keys.COLLAPSING_NAV_BAR) ?: true,
+                swipeToChangeTrack = p.readSafely(Keys.SWIPE_TO_CHANGE_TRACK) ?: false,
+                recognitionSensitivity = (p.readSafely(Keys.RECOGNITION_SENSITIVITY) ?: 50).coerceIn(0, 100),
+                recognitionHumMode = p.readSafely(Keys.RECOGNITION_HUM_MODE) ?: false,
+                hearingProtectionEnabled = p.readSafely(Keys.HEARING_PROTECTION_ENABLED) ?: false,
+                hearingProtectionLimitPercent = (p.readSafely(Keys.HEARING_PROTECTION_LIMIT) ?: 80).coerceIn(40, 100),
+                queueHistoryLimit = (p.readSafely(Keys.QUEUE_HISTORY_LIMIT) ?: 30).coerceIn(5, 100),
+                queueHistoryDays = (p.readSafely(Keys.QUEUE_HISTORY_DAYS) ?: 30).coerceIn(1, 365),
+                hasSeenTutorial = p.readSafely(Keys.HAS_SEEN_TUTORIAL) ?: false,
                 pinnedFriends = p.readSafely(Keys.PINNED_FRIENDS) ?: emptySet(),
                 preferLosslessStreaming = p.readSafely(Keys.PREFER_LOSSLESS_STREAMING) ?: true,
                 hiResStart = HiResStart.fromId(p.readSafely(Keys.HI_RES_START), p.readSafely(Keys.AUTO_UPGRADE_HI_RES)),
@@ -702,7 +743,7 @@ class SettingsPreferences @Inject constructor(
                 wordByWordLyrics = p.readSafely(Keys.WORD_BY_WORD_LYRICS) ?: true,
                 lyricsProvider = LyricsProvider.fromId(p.readSafely(Keys.LYRICS_PROVIDER)),
                 recommendationSource = RecommendationSource.fromId(p.readSafely(Keys.RECOMMENDATION_SOURCE)),
-                spotifyPlaylistsSyncEnabled = p.readSafely(Keys.SPOTIFY_PLAYLISTS_SYNC_ENABLED) ?: false,
+                spotifyPlaylistsSyncEnabled = p.readSafely(Keys.SPOTIFY_PLAYLISTS_SYNC_ENABLED) ?: true,
                 lyricsOffsetMs = (p.readSafely(Keys.LYRICS_OFFSET_MS) ?: 0L).coerceIn(-10000L, 10000L),
                 lyricsFontScale = (p.readSafely(Keys.LYRICS_FONT_SCALE) ?: 1.0f).coerceIn(0.7f, 1.5f),
                 lyricsCentered = p.readSafely(Keys.LYRICS_CENTERED) ?: false,
@@ -760,7 +801,7 @@ class SettingsPreferences @Inject constructor(
                 musicHapticsMode = MusicHapticsMode.fromName(p.readSafely(Keys.MUSIC_HAPTICS_MODE)),
                 musicHapticsIntensity = MusicHapticsIntensity.fromName(p.readSafely(Keys.MUSIC_HAPTICS_INTENSITY)),
                 musicHapticsEngineMode = MusicHapticsEngineMode.fromName(p.readSafely(Keys.MUSIC_HAPTICS_ENGINE_MODE)),
-                musicHapticsPauseOnBatterySaver = p.readSafely(Keys.MUSIC_HAPTICS_BATTERY_SAVER) ?: true,
+                musicHapticsPauseOnBatterySaver = p.readSafely(Keys.MUSIC_HAPTICS_BATTERY_SAVER) ?: false,
                 useLegacyTrackMenu = p.readSafely(Keys.USE_LEGACY_TRACK_MENU) ?: false,
                 useMenuBlur = p.readSafely(Keys.USE_MENU_BLUR) ?: true,
                 edgeGlowEnabled = p.readSafely(Keys.EDGE_GLOW_ENABLED) ?: false,
@@ -771,6 +812,9 @@ class SettingsPreferences @Inject constructor(
                 edgeGlowThickness = (p.readSafely(Keys.EDGE_GLOW_THICKNESS) ?: 0.38f).coerceIn(0.05f, 1f),
                 edgeGlowMotion = EdgeGlowMotion.fromId(p.readSafely(Keys.EDGE_GLOW_MOTION)),
                 aodShowLyrics = p.readSafely(Keys.AOD_SHOW_LYRICS) ?: true,
+                aodVisualizerMode = p.readSafely(Keys.AOD_VISUALIZER_MODE) ?: "glow",
+                aodShowControls = p.readSafely(Keys.AOD_SHOW_CONTROLS) ?: true,
+                aodShowArtwork = p.readSafely(Keys.AOD_SHOW_ARTWORK) ?: true,
                 seekbarMatchTrackColors = p.readSafely(Keys.SEEKBAR_MATCH_TRACK_COLORS) ?: true,
                 seekbarCustomColor1 = p.readSafely(Keys.SEEKBAR_CUSTOM_COLOR_1) ?: "#8B5CF6",
                 seekbarCustomColor2 = p.readSafely(Keys.SEEKBAR_CUSTOM_COLOR_2) ?: "#22D3EE",
@@ -979,6 +1023,38 @@ class SettingsPreferences @Inject constructor(
         dataStore.edit { it[Keys.COLLAPSING_NAV_BAR] = enabled }
     }
 
+    suspend fun setSwipeToChangeTrack(enabled: Boolean) {
+        dataStore.edit { it[Keys.SWIPE_TO_CHANGE_TRACK] = enabled }
+    }
+
+    suspend fun setRecognitionSensitivity(value: Int) {
+        dataStore.edit { it[Keys.RECOGNITION_SENSITIVITY] = value.coerceIn(0, 100) }
+    }
+
+    suspend fun setRecognitionHumMode(enabled: Boolean) {
+        dataStore.edit { it[Keys.RECOGNITION_HUM_MODE] = enabled }
+    }
+
+    suspend fun setHearingProtectionEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.HEARING_PROTECTION_ENABLED] = enabled }
+    }
+
+    suspend fun setHearingProtectionLimit(percent: Int) {
+        dataStore.edit { it[Keys.HEARING_PROTECTION_LIMIT] = percent.coerceIn(40, 100) }
+    }
+
+    suspend fun setQueueHistoryLimit(limit: Int) {
+        dataStore.edit { it[Keys.QUEUE_HISTORY_LIMIT] = limit.coerceIn(5, 100) }
+    }
+
+    suspend fun setQueueHistoryDays(days: Int) {
+        dataStore.edit { it[Keys.QUEUE_HISTORY_DAYS] = days.coerceIn(1, 365) }
+    }
+
+    suspend fun setHasSeenTutorial(seen: Boolean) {
+        dataStore.edit { it[Keys.HAS_SEEN_TUTORIAL] = seen }
+    }
+
     suspend fun setPodcastsEnabled(enabled: Boolean) {
         dataStore.edit { it[Keys.PODCASTS_ENABLED] = enabled }
     }
@@ -1133,7 +1209,14 @@ class SettingsPreferences @Inject constructor(
     val appVolume: Flow<Float> = dataStore.data.map { it[Keys.APP_VOLUME] ?: 1.0f }
 
     suspend fun setAppVolume(volume: Float) {
-        dataStore.edit { it[Keys.APP_VOLUME] = volume.coerceIn(0f, 1f) }
+        dataStore.edit {
+            val limit = if (it[Keys.HEARING_PROTECTION_ENABLED] == true) {
+                ((it[Keys.HEARING_PROTECTION_LIMIT] ?: 80).coerceIn(40, 100)) / 100f
+            } else {
+                1f
+            }
+            it[Keys.APP_VOLUME] = volume.coerceIn(0f, limit)
+        }
     }
 
     /**
@@ -1446,6 +1529,18 @@ class SettingsPreferences @Inject constructor(
 
     suspend fun setAodShowLyrics(enabled: Boolean) {
         dataStore.edit { it[Keys.AOD_SHOW_LYRICS] = enabled }
+    }
+
+    suspend fun setAodVisualizerMode(mode: String) {
+        dataStore.edit { it[Keys.AOD_VISUALIZER_MODE] = mode }
+    }
+
+    suspend fun setAodShowControls(enabled: Boolean) {
+        dataStore.edit { it[Keys.AOD_SHOW_CONTROLS] = enabled }
+    }
+
+    suspend fun setAodShowArtwork(enabled: Boolean) {
+        dataStore.edit { it[Keys.AOD_SHOW_ARTWORK] = enabled }
     }
 
     suspend fun setSeekbarMatchTrackColors(enabled: Boolean) {

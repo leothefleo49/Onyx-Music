@@ -49,11 +49,20 @@ class ScrobbleRepository @Inject constructor(
             sourceAppName = "Onyx Music",
         ).toLegacyResult()
 
-    suspend fun scrobble(artist: String, track: String, album: String?, timestampSec: Long): Result =
+    suspend fun scrobble(
+        artist: String,
+        track: String,
+        album: String?,
+        timestampSec: Long,
+        durationMs: Long = 0L,
+        listenedMs: Long = 0L,
+    ): Result =
         syncEngine.recordAndSyncScrobble(
             artist = artist,
             track = track,
             album = album,
+            durationMs = durationMs,
+            listenedMs = listenedMs,
             startedAtSec = timestampSec,
             sourcePackage = context.packageName,
             sourceAppName = "Onyx Music",

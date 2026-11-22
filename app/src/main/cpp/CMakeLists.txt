@@ -23,8 +23,27 @@ FetchContent_Declare(
     URL_HASH SHA256=db6ca1b1e8405c6ef92f8294fc123d910abf0a114003b3f0f13fa57a95fd62d0
 )
 FetchContent_GetProperties(soxr_source)
+# soxr 0.1.3's BUILD_LSR_TESTS option embeds an unquoted source path, which
+# splits at spaces in a Windows checkout path ("Obsidian Music Plus") and
+# fails configuration. Replace that option with a plain cached OFF.
+function(onyx_patch_soxr_options soxr_dir)
+    set(cmakelists "${soxr_dir}/CMakeLists.txt")
+    if(NOT EXISTS "${cmakelists}")
+        return()
+    endif()
+    file(READ "${cmakelists}" original)
+    string(REGEX REPLACE
+        "cmake_dependent_option \\(BUILD_LSR_TESTS[^)]*\\)"
+        "set(BUILD_LSR_TESTS OFF CACHE BOOL \"\" FORCE)"
+        patched "${original}")
+    if(NOT original STREQUAL patched)
+        file(WRITE "${cmakelists}" "${patched}")
+    endif()
+endfunction()
+onyx_patch_soxr_options("${soxr_source_SOURCE_DIR}")
 if(NOT soxr_source_POPULATED)
     FetchContent_Populate(soxr_source)
+    onyx_patch_soxr_options("${soxr_source_SOURCE_DIR}")
     list(APPEND CMAKE_MODULE_PATH "${soxr_source_SOURCE_DIR}/cmake/Modules")
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

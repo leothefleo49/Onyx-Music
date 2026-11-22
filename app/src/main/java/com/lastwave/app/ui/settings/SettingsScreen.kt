@@ -125,6 +125,8 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BubbleChart
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Hearing
+import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Lyrics
@@ -170,6 +172,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.SmartDisplay
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.SwitchAccount
 import androidx.compose.material.icons.filled.History
@@ -459,6 +462,13 @@ fun SettingsScreen(
     var showLyricsSizeDialog by remember { mutableStateOf(false) }
     var showLyricsAutoHideDialog by remember { mutableStateOf(false) }
     var showTranslationLanguageDialog by remember { mutableStateOf(false) }
+    var showRecognitionSettings by remember { mutableStateOf(false) }
+    var showHearingLimit by remember { mutableStateOf(false) }
+    var showQueueHistorySettings by remember { mutableStateOf(false) }
+    var showTrackOverrides by remember { mutableStateOf(false) }
+    var showSpatialDialog by remember { mutableStateOf(false) }
+    var showBitPerfectConflict by remember { mutableStateOf(false) }
+    var showClarityConflict by remember { mutableStateOf(false) }
     var showLoudnessDialog by remember { mutableStateOf(false) }
     var showSyncPlaylistsSheet by remember { mutableStateOf(false) }
     var showYtLibraryVisibilitySheet by remember { mutableStateOf(false) }
@@ -884,7 +894,13 @@ fun SettingsScreen(
                                     stringResource(R.string.settings_bit_perfect_off_detail)
                                 },
                                 checked = misc.isBitPerfectEnabled,
-                                onCheckedChange = viewModel::setBitPerfectEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && misc.isStudioMasterClarityEnabled) {
+                                        showBitPerfectConflict = true
+                                    } else {
+                                        viewModel.setBitPerfectEnabled(enabled)
+                                    }
+                                },
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "audio.bit_perfect"),
                             )
@@ -977,20 +993,10 @@ fun SettingsScreen(
                                 icon = Icons.Filled.AutoAwesome,
                                 iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                title = "Ambience & spatial audio",
+                                title = "Visuals, AOD & glass",
                                 subtitle = buildString {
-                                    if (misc.edgeGlowEnabled) append("Ambient glow on")
-                                    else append("Glow, progress colours, always-on player")
-                                    if (misc.spatialAudioMode != com.lastwave.app.data.local.SpatialAudioMode.OFF) {
-                                        append(" \u2022 Spatial ")
-                                        append(
-                                            when (misc.spatialAudioMode) {
-                                                com.lastwave.app.data.local.SpatialAudioMode.HEAD_TRACKED -> "head-tracked"
-                                                com.lastwave.app.data.local.SpatialAudioMode.STATIC -> "fixed stage"
-                                                else -> "off"
-                                            }
-                                        )
-                                    }
+                                    if (misc.edgeGlowEnabled) append("Ambient glow on") else append("Glow, AOD visuals, progress colours")
+                                    append(" \u2022 AOD ${misc.aodVisualizerMode}")
                                 },
                                 onClick = { showAmbienceDialog = true },
                                 position = position,
@@ -1114,7 +1120,7 @@ fun SettingsScreen(
                         LoudnessMode.ALBUM -> "Album \u2022 Keep intentional album dynamics"
                         else -> "Off \u2022 Play tagged tracks at original level"
                     }
-                    SettingsGroup(rowCount = 9) { index, position ->
+                    SettingsGroup(rowCount = 13) { index, position ->
                         when (index) {
                             0 -> SettingsToggleCard(
                                 icon = Icons.Filled.Usb,
@@ -1227,7 +1233,13 @@ fun SettingsScreen(
                                     stringResource(R.string.settings_studio_clarity_off)
                                 },
                                 checked = misc.isStudioMasterClarityEnabled,
-                                onCheckedChange = viewModel::setStudioMasterClarity,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && misc.isBitPerfectEnabled) {
+                                        showClarityConflict = true
+                                    } else {
+                                        viewModel.setStudioMasterClarity(enabled)
+                                    }
+                                },
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "audio.studio_clarity"),
                             )
@@ -1251,6 +1263,59 @@ fun SettingsScreen(
                                 onCheckedChange = viewModel::setShowAutoEqInVolumePanel,
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "audio.show_autoeq_in_volume_panel"),
+                            )
+                            9 -> SettingsToggleCard(
+                                icon = Icons.Filled.Hearing,
+                                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                title = "Hearing protection",
+                                subtitle = if (misc.hearingProtectionEnabled) {
+                                    "Volume capped at ${misc.hearingProtectionLimitPercent}%"
+                                } else {
+                                    "No cap — full volume available"
+                                },
+                                checked = misc.hearingProtectionEnabled,
+                                onCheckedChange = viewModel::setHearingProtectionEnabled,
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "audio.hearing_protection"),
+                            )
+                            10 -> SettingsActionCard(
+                                icon = Icons.Filled.VolumeMute,
+                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                title = "Volume limit",
+                                subtitle = if (misc.hearingProtectionEnabled) {
+                                    "${misc.hearingProtectionLimitPercent}% maximum in-app volume"
+                                } else {
+                                    "Enable hearing protection to set a limit"
+                                },
+                                onClick = { showHearingLimit = true },
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "audio.volume_limit"),
+                            )
+                            11 -> SettingsActionCard(
+                                icon = Icons.Filled.Tune,
+                                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                title = "Per-song overrides",
+                                subtitle = "Songs that differ from your video, Canvas and motion defaults",
+                                onClick = { showTrackOverrides = true },
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "audio.track_overrides"),
+                            )
+                            12 -> SettingsActionCard(
+                                icon = Icons.Filled.SurroundSound,
+                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                title = "Spatial audio",
+                                subtitle = when (misc.spatialAudioMode) {
+                                    com.lastwave.app.data.local.SpatialAudioMode.HEAD_TRACKED -> "Head tracked \u2022 ${String.format("%.2f", misc.spatialWidth)}\u00d7 width"
+                                    com.lastwave.app.data.local.SpatialAudioMode.STATIC -> "Fixed stage \u2022 ${String.format("%.2f", misc.spatialWidth)}\u00d7 width"
+                                    else -> "Off \u2022 headphone soundstage, crossfeed and width"
+                                },
+                                onClick = { showSpatialDialog = true },
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "audio.spatial_audio"),
                             )
                         }
                     }
@@ -1484,7 +1549,7 @@ fun SettingsScreen(
                         item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SectionLabel(stringResource(R.string.settings_section_experimental))
-                    val experimentalRowCount = if (misc.musicVideoEnabled) 10 else 9
+                    val experimentalRowCount = 13
                     SettingsGroup(rowCount = experimentalRowCount) { index, position ->
                         when (index) {
                             0 -> SettingsToggleCard(
@@ -1572,7 +1637,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = false,
                             )
-                            9 -> SettingsActionCard(
+                            6 -> SettingsActionCard(
                                 icon = Icons.Filled.Translate,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1586,7 +1651,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.translation_language"),
                             )
-                            10 -> SettingsToggleCard(
+                            7 -> SettingsToggleCard(
                                 icon = Icons.Filled.SmartDisplay,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1601,36 +1666,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.music_video"),
                             )
-                            11 -> if (misc.musicVideoEnabled) {
-                                SettingsToggleCard(
-                                    icon = Icons.Filled.SmartDisplay,
-                                    iconContainer = MaterialTheme.colorScheme.secondaryContainer,
-                                    iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    title = stringResource(R.string.settings_music_video_np_button),
-                                    subtitle = stringResource(R.string.settings_music_video_np_button_desc),
-                                    checked = misc.musicVideoNowPlayingButtonEnabled,
-                                    onCheckedChange = viewModel::setMusicVideoNowPlayingButtonEnabled,
-                                    position = position,
-                                    isHighlighted = (highlightedSettingId == "appearance.music_video_np_button"),
-                                )
-                            } else {
-                                SettingsToggleCard(
-                                    icon = Icons.Filled.PlayCircle,
-                                    iconContainer = MaterialTheme.colorScheme.secondaryContainer,
-                                    iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    title = "Button Now playing",
-                                    subtitle = if (misc.buttonNowPlayingEnabled) {
-                                        "Floating button mode active • Card hidden"
-                                    } else {
-                                        "Classic bottom now playing card"
-                                    },
-                                    checked = misc.buttonNowPlayingEnabled,
-                                    onCheckedChange = viewModel::setButtonNowPlayingEnabled,
-                                    position = position,
-                                    isHighlighted = (highlightedSettingId == "appearance.button_now_playing"),
-                                )
-                            }
-                            12 -> SettingsToggleCard(
+                            8 -> SettingsToggleCard(
                                 icon = Icons.Filled.PlayCircle,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -1644,6 +1680,53 @@ fun SettingsScreen(
                                 onCheckedChange = viewModel::setButtonNowPlayingEnabled,
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.button_now_playing"),
+                            )
+                            9 -> SettingsToggleCard(
+                                icon = Icons.Filled.SwapHoriz,
+                                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                title = "Swipe to change tracks",
+                                subtitle = if (misc.swipeToChangeTrack) {
+                                    "Swipe the player artwork left or right to skip"
+                                } else {
+                                    "Off • avoids accidental track changes"
+                                },
+                                checked = misc.swipeToChangeTrack,
+                                onCheckedChange = viewModel::setSwipeToChangeTrack,
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "appearance.swipe_to_change_track"),
+                            )
+                            10 -> SettingsToggleCard(
+                                icon = Icons.Filled.SmartDisplay,
+                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                title = stringResource(R.string.settings_music_video_np_button),
+                                subtitle = stringResource(R.string.settings_music_video_np_button_desc),
+                                checked = misc.musicVideoNowPlayingButtonEnabled,
+                                onCheckedChange = viewModel::setMusicVideoNowPlayingButtonEnabled,
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "appearance.music_video_np_button"),
+                            )
+                            11 -> SettingsActionCard(
+                                icon = Icons.Filled.GraphicEq,
+                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                title = "Music recognition",
+                                subtitle = "${misc.recognitionSensitivity}% sensitivity \u2022 " +
+                                    if (misc.recognitionHumMode) "Humming / instrument mode" else "Songs & speakers",
+                                onClick = { showRecognitionSettings = true },
+                                position = position,
+                                isHighlighted = false,
+                            )
+                            12 -> SettingsActionCard(
+                                icon = Icons.Filled.History,
+                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                title = "Recent queue history",
+                                subtitle = "Keep ${misc.queueHistoryLimit} queues for ${misc.queueHistoryDays} days",
+                                onClick = { showQueueHistorySettings = true },
+                                position = position,
+                                isHighlighted = false,
                             )
                         }
                     }
@@ -2466,7 +2549,7 @@ fun SettingsScreen(
 
     // -- Custom color wheel dialog (par 8.4) --
     if (state.showColorWheel) {
-        ColorWheelSheet(onDismiss = viewModel::dismissColorWheel, onApply = viewModel::applyCustomColor)
+        ColorWheelSheet(onDismiss = viewModel::dismissColorWheel, onApply = viewModel::applyCustomPalette)
     }
 
     // -- Clear-all-data confirm --
@@ -2776,6 +2859,176 @@ fun SettingsScreen(
         )
     }
 
+    if (showBitPerfectConflict) {
+        AlertDialog(
+            onDismissRequest = { showBitPerfectConflict = false },
+            title = { Text("Turn off Studio Master Clarity?") },
+            text = {
+                Text(
+                    "Bit-Perfect and Studio Master Clarity cannot run together. Enabling Bit-Perfect also turns off Clarity and switches to exclusive USB output.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBitPerfectConflict = false
+                    viewModel.setBitPerfectEnabled(true)
+                }) { Text("Enable Bit-Perfect") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBitPerfectConflict = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showClarityConflict) {
+        AlertDialog(
+            onDismissRequest = { showClarityConflict = false },
+            title = { Text("Turn off Bit-Perfect?") },
+            text = {
+                Text(
+                    "Studio Master Clarity cannot run while Bit-Perfect is active. Enabling Clarity will turn Bit-Perfect and exclusive USB output off.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClarityConflict = false
+                    viewModel.setStudioMasterClarity(true)
+                }) { Text("Enable Clarity") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClarityConflict = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showSpatialDialog) {
+        SpatialAudioSettingsDialog(
+            settings = misc,
+            onMode = viewModel::setSpatialAudioMode,
+            onCrossfeed = viewModel::setSpatialCrossfeed,
+            onWidth = viewModel::setSpatialWidth,
+            onBassMono = viewModel::setSpatialBassMono,
+            onRecenter = viewModel::recenterHeadTracking,
+            onDismiss = { showSpatialDialog = false },
+        )
+    }
+
+    if (showTrackOverrides) {
+        TrackOverridesScreen(onBack = { showTrackOverrides = false })
+    }
+
+    // -- Recent queue history retention --
+    if (showQueueHistorySettings) {
+        var historyCount by remember(misc.queueHistoryLimit) { mutableStateOf(misc.queueHistoryLimit.toFloat()) }
+        var historyDays by remember(misc.queueHistoryDays) { mutableStateOf(misc.queueHistoryDays.toFloat()) }
+        AlertDialog(
+            onDismissRequest = { showQueueHistorySettings = false },
+            title = { Text("Recent queue history") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Recent queues stay available even after playback stops, and can be saved as playlists from the queue panel.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("Keep ${historyCount.toInt()} queues", style = MaterialTheme.typography.labelLarge)
+                    androidx.compose.material3.Slider(
+                        value = historyCount,
+                        onValueChange = { historyCount = it },
+                        onValueChangeFinished = { viewModel.setQueueHistoryLimit(historyCount.toInt()) },
+                        valueRange = 5f..100f,
+                    )
+                    Text("For ${historyDays.toInt()} days", style = MaterialTheme.typography.labelLarge)
+                    androidx.compose.material3.Slider(
+                        value = historyDays,
+                        onValueChange = { historyDays = it },
+                        onValueChangeFinished = { viewModel.setQueueHistoryDays(historyDays.toInt()) },
+                        valueRange = 1f..365f,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showQueueHistorySettings = false }) { Text("Done") }
+            },
+        )
+    }
+
+    // -- Hearing protection volume limit --
+    if (showHearingLimit) {
+        var limitPercent by remember(misc.hearingProtectionLimitPercent) {
+            mutableStateOf(misc.hearingProtectionLimitPercent.toFloat())
+        }
+        AlertDialog(
+            onDismissRequest = { showHearingLimit = false },
+            title = { Text("Volume limit") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Caps the in-app player volume. The phone's own volume keys can still raise media volume outside Onyx Music.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("Limit: ${limitPercent.toInt()}%", style = MaterialTheme.typography.labelLarge)
+                    androidx.compose.material3.Slider(
+                        value = limitPercent,
+                        onValueChange = { limitPercent = it },
+                        onValueChangeFinished = {
+                            viewModel.setHearingProtectionLimit(limitPercent.toInt())
+                        },
+                        valueRange = 40f..100f,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHearingLimit = false }) { Text("Done") }
+            },
+        )
+    }
+
+    // -- Music recognition: sensitivity + humming mode --
+    if (showRecognitionSettings) {
+        var sensitivity by remember(misc.recognitionSensitivity) {
+            mutableStateOf(misc.recognitionSensitivity.toFloat())
+        }
+        AlertDialog(
+            onDismissRequest = { showRecognitionSettings = false },
+            title = { Text("Music recognition") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        "Higher sensitivity keeps listening through quiet or noisy rooms. Humming mode listens longer and accepts much quieter input, but works best for a single clear melody.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("Default sensitivity: ${sensitivity.toInt()}%", style = MaterialTheme.typography.labelLarge)
+                    androidx.compose.material3.Slider(
+                        value = sensitivity,
+                        onValueChange = { sensitivity = it },
+                        onValueChangeFinished = { viewModel.setRecognitionSensitivity(sensitivity.toInt()) },
+                        valueRange = 0f..100f,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Humming / instrument mode", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "More lenient listening for humming, whistling or solo instruments",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = misc.recognitionHumMode,
+                            onCheckedChange = viewModel::setRecognitionHumMode,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showRecognitionSettings = false }) { Text("Done") }
+            },
+        )
+    }
+
     // -- Experimental 15-band equalizer --
     if (showEqSheet) {
         EqualizerSheet(
@@ -2784,12 +3037,15 @@ fun SettingsScreen(
             onSetEnabled = viewModel::setEqualizerEnabled,
             onPickPreset = viewModel::applyEqPreset,
             onBandPreview = viewModel::previewEqBandGain,
-            onBandChange = viewModel::setEqBandGain,
+            onPreviewAll = viewModel::previewEqGains,
+            onSaveDraft = viewModel::saveEqDraft,
+            onCancelDraft = viewModel::cancelEqDraft,
             onOpenAutoEq = {
                 showEqSheet = false
                 showAutoEq = true
             },
             onSavePreset = viewModel::saveEqPreset,
+            onSaveAsPreset = { name, gains -> viewModel.saveEqPresetFromDraft(name, name, gains) },
             onRenamePreset = viewModel::renameEqPreset,
             onDeletePreset = viewModel::deleteEqPreset,
         )
@@ -2900,13 +3156,11 @@ fun SettingsScreen(
             onEdgeGlowThickness = viewModel::setEdgeGlowThickness,
             onEdgeGlowColor = viewModel::setEdgeGlowColor,
             onAodLyrics = viewModel::setAodShowLyrics,
+            onAodVisualizerMode = viewModel::setAodVisualizerMode,
+            onAodShowControls = viewModel::setAodShowControls,
+            onAodShowArtwork = viewModel::setAodShowArtwork,
             onSeekbarMatch = viewModel::setSeekbarMatchTrackColors,
             onSeekbarColor = viewModel::setSeekbarCustomColor,
-            onSpatialMode = viewModel::setSpatialAudioMode,
-            onCrossfeed = viewModel::setSpatialCrossfeed,
-            onWidth = viewModel::setSpatialWidth,
-            onBassMono = viewModel::setSpatialBassMono,
-            onRecenter = viewModel::recenterHeadTracking,
             onBackground = viewModel::setAppBackgroundStyle,
             glassSurfaces = theme?.glassSurfaces ?: com.lastwave.app.data.local.GlassSurface.allIds,
             onGlassSurface = viewModel::setGlassSurface,
@@ -3435,7 +3689,10 @@ fun SettingsScreen(
                         ),
                 ) {
                     Column(
-                        modifier = Modifier.padding(24.dp),
+                        modifier = Modifier
+                            .heightIn(max = 520.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(24.dp),
                         horizontalAlignment = Alignment.Start,
                     ) {
                         Row(

@@ -358,6 +358,7 @@ class PlayerViewModel @Inject constructor(
     private val localMusicLibrary: com.lastwave.app.data.localmusic.LocalMusicLibrary,
     private val localOfflineRepository: com.lastwave.app.data.localmusic.LocalOfflineRepository,
     private val previewQueueRepository: com.lastwave.app.data.queue.PreviewQueueRepository,
+    private val trackOverridesRepository: com.lastwave.app.data.local.TrackOverridesRepository,
 ) : ViewModel() {
     val navEvents = navigator.events
     val state = player.state
@@ -368,9 +369,40 @@ class PlayerViewModel @Inject constructor(
         previewQueueRepository.previewQueues
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** Keyed by video id (or title|artist for local tracks). */
+    val trackOverrides: StateFlow<Map<String, com.lastwave.app.data.local.TrackOverride>> =
+        trackOverridesRepository.overrides
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     fun playPreviewQueue(queue: com.lastwave.app.data.queue.PreviewQueue) {
         if (queue.tracks.isEmpty()) return
-        player.playQueue(queue.tracks, 0, sourceLabel = queue.title)
+        player.playQueue(queue.tracks, queue.startIndex, sourceLabel = queue.title)
+    }
+
+    /** Snapshots a recent queue into a normal library playlist. */
+    fun savePreviewQueueAsPlaylist(queue: com.lastwave.app.data.queue.PreviewQueue) {
+        if (queue.tracks.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                val base = queue.title.take(60).ifBlank { "Recent queue" }
+                val existingTitles = playlistRepository.titles()
+                var title = base
+                var suffix = 2
+                while (existingTitles.any { it.equals(title, ignoreCase = true) }) {
+                    title = "$base (${suffix++})"
+                }
+                val tracks = queue.tracks.map { it.toGeneratedTrack() }
+                playlistRepository.save(
+                    title = title,
+                    subtitle = "${tracks.size} songs \u2022 saved from a recent queue",
+                    mode = "custom",
+                    tracks = tracks,
+                )
+                _toastMessage.emit("Saved as \"$title\"")
+            }.onFailure {
+                _toastMessage.emit("Couldn't save that queue")
+            }
+        }
     }
     /**
      * Sampled copy for the collapsed player's 3 dp bar / ring. Collecting the
