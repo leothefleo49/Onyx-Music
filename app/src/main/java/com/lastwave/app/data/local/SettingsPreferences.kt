@@ -108,7 +108,10 @@ enum class RecommendationSource(val id: String, val titleRes: Int, val subtitleR
 enum class SeekbarStyle(val id: String) {
     DEFAULT("default"),
     WAVY("wavy"),
-    WAVEFORM("waveform");
+    WAVEFORM("waveform"),
+
+    /** Layered multi-colour waves rising from a flat baseline. */
+    AURORA("aurora");
 
     companion object {
         fun fromId(id: String?, legacyWavyEnabled: Boolean?): SeekbarStyle {
@@ -118,6 +121,54 @@ enum class SeekbarStyle(val id: String) {
             }
             return if (legacyWavyEnabled == true) WAVY else DEFAULT
         }
+    }
+}
+
+/** Where the Lumn-style ambient edge glow takes its colours from. */
+enum class EdgeGlowMode(val id: String) {
+    ART("art"),
+    CUSTOM("custom"),
+    GRADIENT("gradient"),
+    OFF("off");
+
+    companion object {
+        fun fromId(id: String?): EdgeGlowMode = entries.firstOrNull { it.id == id } ?: ART
+    }
+}
+
+/** How the ambient edge glow moves while music plays. */
+enum class EdgeGlowMotion(val id: String) {
+    BEAT("beat"),
+    IDLE("idle"),
+    STATIC("static");
+
+    companion object {
+        fun fromId(id: String?): EdgeGlowMotion = entries.firstOrNull { it.id == id } ?: BEAT
+    }
+}
+
+/** Headphone spatial rendering: off, fixed stage, or head-tracked. */
+enum class SpatialAudioMode(val id: String) {
+    OFF("off"),
+    STATIC("static"),
+    HEAD_TRACKED("head_tracked");
+
+    companion object {
+        fun fromId(id: String?): SpatialAudioMode = entries.firstOrNull { it.id == id } ?: OFF
+    }
+}
+
+/** App background outside the immersive player. */
+enum class AppBackgroundStyle(val id: String) {
+    /** Now-playing artwork colours with a slow glossy drift (default). */
+    ARTWORK("artwork"),
+    /** Slowly drifting glossy gradient from the app accent colours. */
+    GLOSSY("glossy"),
+    /** Flat Material surface, no animation. */
+    PLAIN("plain");
+
+    companion object {
+        fun fromId(id: String?): AppBackgroundStyle = entries.firstOrNull { it.id == id } ?: ARTWORK
     }
 }
 
@@ -324,6 +375,32 @@ data class MiscSettings(
     val useLegacyTrackMenu: Boolean = false,
     /** When true, enables blur effect behind and around song options menus. */
     val useMenuBlur: Boolean = true,
+    /** Lumn-style ambient glow around the screen edge while music plays. */
+    val edgeGlowEnabled: Boolean = false,
+    val edgeGlowMode: EdgeGlowMode = EdgeGlowMode.ART,
+    val edgeGlowColor1: String = "#8B5CF6",
+    val edgeGlowColor2: String = "#22D3EE",
+    /** 0.2 .. 2.0; 1.0 = default. */
+    val edgeGlowIntensity: Float = 1f,
+    /** 0 .. 1: hairline to broad band. */
+    val edgeGlowThickness: Float = 0.38f,
+    val edgeGlowMotion: EdgeGlowMotion = EdgeGlowMotion.BEAT,
+    /** Always-on display: show the current lyric line. */
+    val aodShowLyrics: Boolean = true,
+    /** Progress-bar colours: follow artwork, or use the two custom colours below. */
+    val seekbarMatchTrackColors: Boolean = true,
+    val seekbarCustomColor1: String = "#8B5CF6",
+    val seekbarCustomColor2: String = "#22D3EE",
+    /** Headphone spatial rendering. */
+    val spatialAudioMode: SpatialAudioMode = SpatialAudioMode.OFF,
+    /** 0 = no crossfeed, 1 = maximum blending between the ears. */
+    val spatialCrossfeed: Float = 0.25f,
+    /** 0.5 = mono-ish, 1 = untouched, 1.5 = wide. */
+    val spatialWidth: Float = 1f,
+    /** Collapse bass to the centre so low end stays tight on headphones. */
+    val spatialBassMono: Boolean = false,
+    /** App background treatment outside the player. */
+    val appBackgroundStyle: AppBackgroundStyle = AppBackgroundStyle.ARTWORK,
 )
 
 val MiscSettings.musicHapticsConfig: MusicHapticsConfig
@@ -491,6 +568,22 @@ class SettingsPreferences @Inject constructor(
         val CROSSFADE_ENABLED = booleanPreferencesKey("lw_crossfade_enabled")
         val AUTOPLAY_SIMILAR_ENABLED = booleanPreferencesKey("lw_autoplay_similar_enabled")
         val PREVIOUS_NAVIGATION_MODE = stringPreferencesKey("lw_previous_navigation_mode")
+        val EDGE_GLOW_ENABLED = booleanPreferencesKey("lw_edge_glow_enabled")
+        val EDGE_GLOW_MODE = stringPreferencesKey("lw_edge_glow_mode")
+        val EDGE_GLOW_COLOR_1 = stringPreferencesKey("lw_edge_glow_color_1")
+        val EDGE_GLOW_COLOR_2 = stringPreferencesKey("lw_edge_glow_color_2")
+        val EDGE_GLOW_INTENSITY = floatPreferencesKey("lw_edge_glow_intensity")
+        val EDGE_GLOW_THICKNESS = floatPreferencesKey("lw_edge_glow_thickness")
+        val EDGE_GLOW_MOTION = stringPreferencesKey("lw_edge_glow_motion")
+        val AOD_SHOW_LYRICS = booleanPreferencesKey("lw_aod_show_lyrics")
+        val SEEKBAR_MATCH_TRACK_COLORS = booleanPreferencesKey("lw_seekbar_match_track_colors")
+        val SEEKBAR_CUSTOM_COLOR_1 = stringPreferencesKey("lw_seekbar_custom_color_1")
+        val SEEKBAR_CUSTOM_COLOR_2 = stringPreferencesKey("lw_seekbar_custom_color_2")
+        val SPATIAL_AUDIO_MODE = stringPreferencesKey("lw_spatial_audio_mode")
+        val SPATIAL_CROSSFEED = floatPreferencesKey("lw_spatial_crossfeed")
+        val SPATIAL_WIDTH = floatPreferencesKey("lw_spatial_width")
+        val SPATIAL_BASS_MONO = booleanPreferencesKey("lw_spatial_bass_mono")
+        val APP_BACKGROUND_STYLE = stringPreferencesKey("lw_app_background_style")
         val CROSSFADE_SECONDS = intPreferencesKey("lw_crossfade_seconds")
         val LYRICS_STYLE = stringPreferencesKey("lw_lyrics_style")
         val SEEKBAR_STYLE = stringPreferencesKey("lw_seekbar_style")
@@ -670,6 +763,22 @@ class SettingsPreferences @Inject constructor(
                 musicHapticsPauseOnBatterySaver = p.readSafely(Keys.MUSIC_HAPTICS_BATTERY_SAVER) ?: true,
                 useLegacyTrackMenu = p.readSafely(Keys.USE_LEGACY_TRACK_MENU) ?: false,
                 useMenuBlur = p.readSafely(Keys.USE_MENU_BLUR) ?: true,
+                edgeGlowEnabled = p.readSafely(Keys.EDGE_GLOW_ENABLED) ?: false,
+                edgeGlowMode = EdgeGlowMode.fromId(p.readSafely(Keys.EDGE_GLOW_MODE)),
+                edgeGlowColor1 = p.readSafely(Keys.EDGE_GLOW_COLOR_1) ?: "#8B5CF6",
+                edgeGlowColor2 = p.readSafely(Keys.EDGE_GLOW_COLOR_2) ?: "#22D3EE",
+                edgeGlowIntensity = (p.readSafely(Keys.EDGE_GLOW_INTENSITY) ?: 1f).coerceIn(0.2f, 2f),
+                edgeGlowThickness = (p.readSafely(Keys.EDGE_GLOW_THICKNESS) ?: 0.38f).coerceIn(0.05f, 1f),
+                edgeGlowMotion = EdgeGlowMotion.fromId(p.readSafely(Keys.EDGE_GLOW_MOTION)),
+                aodShowLyrics = p.readSafely(Keys.AOD_SHOW_LYRICS) ?: true,
+                seekbarMatchTrackColors = p.readSafely(Keys.SEEKBAR_MATCH_TRACK_COLORS) ?: true,
+                seekbarCustomColor1 = p.readSafely(Keys.SEEKBAR_CUSTOM_COLOR_1) ?: "#8B5CF6",
+                seekbarCustomColor2 = p.readSafely(Keys.SEEKBAR_CUSTOM_COLOR_2) ?: "#22D3EE",
+                spatialAudioMode = SpatialAudioMode.fromId(p.readSafely(Keys.SPATIAL_AUDIO_MODE)),
+                spatialCrossfeed = (p.readSafely(Keys.SPATIAL_CROSSFEED) ?: 0.25f).coerceIn(0f, 1f),
+                spatialWidth = (p.readSafely(Keys.SPATIAL_WIDTH) ?: 1f).coerceIn(0.3f, 2f),
+                spatialBassMono = p.readSafely(Keys.SPATIAL_BASS_MONO) ?: false,
+                appBackgroundStyle = AppBackgroundStyle.fromId(p.readSafely(Keys.APP_BACKGROUND_STYLE)),
             )
         }
         // Cold, every one of ~60 collectors (mostly on Main) re-ran this mapping and
@@ -1302,6 +1411,74 @@ class SettingsPreferences @Inject constructor(
 
     suspend fun setMenuBlur(enabled: Boolean) {
         dataStore.edit { it[Keys.USE_MENU_BLUR] = enabled }
+    }
+
+    // ── Ambient visuals, always-on player, spatial audio ──
+
+    suspend fun setEdgeGlowEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.EDGE_GLOW_ENABLED] = enabled }
+    }
+
+    suspend fun setEdgeGlowMode(mode: EdgeGlowMode) {
+        dataStore.edit { it[Keys.EDGE_GLOW_MODE] = mode.id }
+    }
+
+    suspend fun setEdgeGlowColor(index: Int, hex: String) {
+        dataStore.edit {
+            when (index) {
+                1 -> it[Keys.EDGE_GLOW_COLOR_1] = hex
+                else -> it[Keys.EDGE_GLOW_COLOR_2] = hex
+            }
+        }
+    }
+
+    suspend fun setEdgeGlowIntensity(value: Float) {
+        dataStore.edit { it[Keys.EDGE_GLOW_INTENSITY] = value.coerceIn(0.2f, 2f) }
+    }
+
+    suspend fun setEdgeGlowThickness(value: Float) {
+        dataStore.edit { it[Keys.EDGE_GLOW_THICKNESS] = value.coerceIn(0.05f, 1f) }
+    }
+
+    suspend fun setEdgeGlowMotion(motion: EdgeGlowMotion) {
+        dataStore.edit { it[Keys.EDGE_GLOW_MOTION] = motion.id }
+    }
+
+    suspend fun setAodShowLyrics(enabled: Boolean) {
+        dataStore.edit { it[Keys.AOD_SHOW_LYRICS] = enabled }
+    }
+
+    suspend fun setSeekbarMatchTrackColors(enabled: Boolean) {
+        dataStore.edit { it[Keys.SEEKBAR_MATCH_TRACK_COLORS] = enabled }
+    }
+
+    suspend fun setSeekbarCustomColor(index: Int, hex: String) {
+        dataStore.edit {
+            when (index) {
+                1 -> it[Keys.SEEKBAR_CUSTOM_COLOR_1] = hex
+                else -> it[Keys.SEEKBAR_CUSTOM_COLOR_2] = hex
+            }
+        }
+    }
+
+    suspend fun setSpatialAudioMode(mode: SpatialAudioMode) {
+        dataStore.edit { it[Keys.SPATIAL_AUDIO_MODE] = mode.id }
+    }
+
+    suspend fun setSpatialCrossfeed(value: Float) {
+        dataStore.edit { it[Keys.SPATIAL_CROSSFEED] = value.coerceIn(0f, 1f) }
+    }
+
+    suspend fun setSpatialWidth(value: Float) {
+        dataStore.edit { it[Keys.SPATIAL_WIDTH] = value.coerceIn(0.3f, 2f) }
+    }
+
+    suspend fun setSpatialBassMono(enabled: Boolean) {
+        dataStore.edit { it[Keys.SPATIAL_BASS_MONO] = enabled }
+    }
+
+    suspend fun setAppBackgroundStyle(style: AppBackgroundStyle) {
+        dataStore.edit { it[Keys.APP_BACKGROUND_STYLE] = style.id }
     }
     private companion object {
         val STREAMING_QUALITIES = setOf(-1, 4, 5, 6, 27, 28)

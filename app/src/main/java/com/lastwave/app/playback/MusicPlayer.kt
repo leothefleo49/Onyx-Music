@@ -201,6 +201,7 @@ class MusicPlayer @Inject constructor(
     private val ytMusicAuthManager: YtMusicAuthManager,
     private val loudnessPrefs: LoudnessPrefs,
     internal val previewQueueRepository: dagger.Lazy<com.lastwave.app.data.queue.PreviewQueueRepository>,
+    private val headTracker: com.lastwave.app.playback.spatial.HeadTracker,
 ) {
 
     private class VpnYoutubeLoginRequiredException(message: String) : java.io.IOException(message)
@@ -2540,6 +2541,7 @@ class MusicPlayer @Inject constructor(
                 }
                 autoplaySimilarEnabled = settings.autoplaySimilarEnabled
                 previousNavigationMode = settings.previousNavigationMode
+                applySpatialSettings(settings)
                 crossfadeDurationMs = settings.crossfadeSeconds.coerceIn(1, 12) * 1000L
                 stopPlaybackOnTaskRemovedPref = settings.stopPlaybackOnTaskRemoved
                 pauseOnZeroVolumePref = settings.pauseOnZeroVolume
@@ -2710,7 +2712,8 @@ class MusicPlayer @Inject constructor(
         unavailableSkipJob?.cancel()
         unavailableMediaIds.clear()
         unavailableAttemptCounts.clear()
-        playHistory.clear()
+        synchronized(playJournal) { playJournal.clear() }
+        userQueuedKeys.clear()
         latePreloadKey = null
         lastPreloadRetryMs = 0L
         // A podcast episode never seeds a music radio.
@@ -2768,7 +2771,8 @@ class MusicPlayer @Inject constructor(
         unavailableSkipJob?.cancel()
         unavailableMediaIds.clear()
         unavailableAttemptCounts.clear()
-        playHistory.clear()
+        synchronized(playJournal) { playJournal.clear() }
+        userQueuedKeys.clear()
         latePreloadKey = null
         lastPreloadRetryMs = 0L
         val selectedIndex = startIndex.coerceIn(tracks.indices)
@@ -4117,6 +4121,34 @@ class MusicPlayer @Inject constructor(
     fun resetPlaybackParameters() = onMain {
         setPlaybackParameters(1f, 1f)
     }
+
+    /**
+     * Pushes the headphone spatial settings into the audio thread's stage and
+     * owns the head-tracking sensor's lifetime. With no rotation sensor,
+     * head-tracked degrades to a fixed stage instead of going silent.
+     */
+    private fun applySpatialSettings(settings: MiscSettings) {
+        val stage = com.lastwave.app.playback.spatial.SpatialAudioStage
+        stage.crossfeed = settings.spatialCrossfeed
+        stage.width = settings.spatialWidth
+        stage.bassMono = settings.spatialBassMono
+        val requested = settings.spatialAudioMode
+        if (requested == com.lastwave.app.data.local.SpatialAudioMode.HEAD_TRACKED) {
+            headTracker.start()
+        } else {
+            headTracker.stop()
+        }
+        stage.mode = if (requested == com.lastwave.app.data.local.SpatialAudioMode.HEAD_TRACKED &&
+            !headTracker.isAvailable
+        ) {
+            com.lastwave.app.data.local.SpatialAudioMode.STATIC
+        } else {
+            requested
+        }
+    }
+
+    /** Treats the listener's current facing as the centre of the stage. */
+    fun recenterHeadTracking() = onMain { headTracker.recenter() }
     fun cycleSleepTimer() = onMain {
         setSleepTimerMinutes(SLEEP_TIMER_MINUTES[(sleepTimerStep + 1) % SLEEP_TIMER_MINUTES.size])
     }
@@ -5062,7 +5094,7 @@ class MusicPlayer @Inject constructor(
                     val existingVideoIds = existingTracks.mapNotNullTo(mutableSetOf()) { it.videoId }
                     val existingKeys = existingTracks.mapTo(mutableSetOf()) { it.queueKey() }
                     val existingSongKeys = existingTracks.mapTo(mutableSetOf()) { PureRadioQueue.normalizedSongKey(it.title, it.artist) }
-                    val recentHistoryKeys = playHistory.takeLast(50).toSet()
+                    val recentHistoryKeys = playJournal.keys().takeLast(50).toSet()
 
                     val toAdd: List<PlayableTrack> = if (seedVideoId != null && recommendationRepository.isSpotifyActive()) {
                         val seeded = recommendationRepository.relatedFor(
@@ -5214,7 +5246,7 @@ class MusicPlayer @Inject constructor(
                 val knownVideoIds = currentQueue.mapNotNullTo(mutableSetOf()) { it.videoId }
                 val knownKeys = currentQueue.mapTo(mutableSetOf()) { it.queueKey() }
                 val knownSongKeys = currentQueue.mapTo(mutableSetOf()) { PureRadioQueue.normalizedSongKey(it.title, it.artist) }
-                val recentHistoryKeys = playHistory.takeLast(50).toSet()
+                val recentHistoryKeys = playJournal.keys().takeLast(50).toSet()
 
                 val continuationToken = currentRadioContinuationToken
                 val automixId = currentRadioAutomixPlaylistId

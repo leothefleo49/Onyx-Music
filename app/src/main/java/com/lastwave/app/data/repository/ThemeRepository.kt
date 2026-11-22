@@ -8,10 +8,12 @@ import androidx.compose.ui.graphics.Color
 import com.lastwave.app.data.artwork.ArtworkNormalizer
 import com.lastwave.app.data.artwork.ArtworkRepository
 import com.lastwave.app.data.artwork.DeferredArtworkLookup
+import com.lastwave.app.data.local.AppBackgroundStyle
 import com.lastwave.app.data.local.AccentMode
 import com.lastwave.app.data.local.AppIcon
 import com.lastwave.app.data.local.AppIconManager
 import com.lastwave.app.data.local.MiscSettings
+import com.lastwave.app.data.local.GlassSurface
 import com.lastwave.app.data.local.SettingsPreferences
 import com.lastwave.app.data.local.ThemePreferences
 import com.lastwave.app.data.local.ThemePrefs
@@ -67,6 +69,10 @@ data class ThemeUiState(
     val isLastWaveTheme: Boolean = false,
     val useLegacyColors: Boolean = false,
     val appIcon: AppIcon = AppIcon.DEFAULT,
+    /** App background outside the immersive player (artwork gloss / glossy accent / plain). */
+    val appBackgroundStyle: AppBackgroundStyle = AppBackgroundStyle.ARTWORK,
+    /** Glass-eligible surfaces while [liquidGlass] is on ([GlassSurface.id]s). */
+    val glassSurfaces: Set<String> = GlassSurface.allIds,
 )
 
 @Singleton
@@ -303,6 +309,8 @@ class ThemeRepository @Inject constructor(
             isLastWaveTheme = isLastWave,
             useLegacyColors = useLegacy,
             appIcon = prefs.appIcon,
+            appBackgroundStyle = misc.appBackgroundStyle,
+            glassSurfaces = prefs.glassSurfaces,
         )
     }.stateIn(
         applicationScope,
@@ -359,6 +367,9 @@ class ThemeRepository @Inject constructor(
     suspend fun setAmoled(enabled: Boolean) = themePreferences.setAmoled(enabled)
 
     suspend fun setLiquidGlass(enabled: Boolean) = themePreferences.setLiquidGlass(enabled)
+
+    suspend fun setGlassSurface(surface: GlassSurface, enabled: Boolean) =
+        themePreferences.setGlassSurface(surface, enabled)
 
     suspend fun setMd3NavBar(enabled: Boolean) = themePreferences.setMd3NavBar(enabled)
     suspend fun setHideNavTabs(enabled: Boolean) = themePreferences.setHideNavTabs(enabled)

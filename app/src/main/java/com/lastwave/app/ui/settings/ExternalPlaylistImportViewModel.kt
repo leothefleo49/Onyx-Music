@@ -76,6 +76,42 @@ class ExternalPlaylistImportViewModel @Inject constructor(
     private val _loadingUserPlaylists = MutableStateFlow(false)
     val loadingUserPlaylists: StateFlow<Boolean> = _loadingUserPlaylists.asStateFlow()
 
+    /** Non-null while a bulk account import is running ("3/12 · Playlist"). */
+    private val _bulkProgress = MutableStateFlow<String?>(null)
+    val bulkProgress: StateFlow<String?> = _bulkProgress.asStateFlow()
+
+    /** Result line after a bulk import ("Imported 9 playlists · 421 songs"). */
+    private val _bulkSummary = MutableStateFlow<String?>(null)
+    val bulkSummary: StateFlow<String?> = _bulkSummary.asStateFlow()
+
+    /**
+     * Imports every playlist in the connected Spotify account in one pass,
+     * with Liked Songs at the front so the most-wanted content lands first.
+     */
+    fun importAllSpotifyPlaylists(includeLikedSongs: Boolean = true) {
+        if (_bulkProgress.value != null) return
+        val playlists = _userPlaylists.value
+        viewModelScope.launch {
+            _bulkSummary.value = null
+            _bulkProgress.value = "Starting\u2026"
+            val summary = importManager.importAllSpotifyPlaylists(
+                playlists = playlists,
+                includeLikedSongs = includeLikedSongs,
+                onProgress = { done, total, current ->
+                    _bulkProgress.value = if (total == 0) null else "$done/$total \u00b7 $current"
+                },
+            )
+            _bulkProgress.value = null
+            _bulkSummary.value = buildString {
+                append("Imported ${summary.importedPlaylists} playlists \u00b7 ${summary.importedTracks} songs")
+                if (summary.likedSongsAdded > 0) append(" \u00b7 ${summary.likedSongsAdded} liked")
+                if (summary.failedPlaylists > 0) append(" \u00b7 ${summary.failedPlaylists} failed")
+            }
+            // Refresh the account list so newly created playlists show up.
+            loadUserPlaylists()
+        }
+    }
+
     init {
         viewModelScope.launch {
             spotifyConnected.collect { connected ->

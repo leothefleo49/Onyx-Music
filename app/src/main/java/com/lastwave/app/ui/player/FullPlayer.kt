@@ -156,6 +156,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Lock
@@ -393,6 +394,10 @@ internal fun FullPlayer(
     onTryAnotherLyricsSource: (() -> Unit)? = null,
     previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
     onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
+    /** Null follows the artwork palette; otherwise progress bars use these. */
+    seekbarColorsOverride: Triple<Color, Color, Color>? = null,
+    edgeGlow: EdgeGlowConfig = EdgeGlowConfig(),
+    onEnterAod: (() -> Unit)? = null,
 ) {
     val track = state.current ?: return
     val haptics = LocalHapticFeedback.current
@@ -821,6 +826,23 @@ internal fun FullPlayer(
                     )
                 }
             )
+            // Lumn-style ambient border glow: light pooled on the screen edges,
+            // pulsing with the bass envelope. Sits over the artwork and under
+            // every control, and takes no touch input.
+            AmbientEdgeGlow(
+                config = edgeGlow.copy(
+                    color1 = when (edgeGlow.mode) {
+                        com.lastwave.app.data.local.EdgeGlowMode.ART -> ambientColor
+                        else -> edgeGlow.color1
+                    },
+                    color2 = when (edgeGlow.mode) {
+                        com.lastwave.app.data.local.EdgeGlowMode.ART -> ambientCompanion
+                        else -> edgeGlow.color2
+                    },
+                ),
+                isPlaying = state.isPlaying,
+                modifier = Modifier.matchParentSize(),
+            )
             Box(Modifier.matchParentSize().liquidGlassSource(if (fullGlass) playerBackdrop else null)) {
                 // Dynamic ambient lyrics gradient overlay: subtly shifts line-by-line strictly
                 // using the album cover art palette, preserving zero text visibility issues.
@@ -1236,6 +1258,26 @@ internal fun FullPlayer(
                                             imageVector = if (isQueueLockedState) Icons.Filled.Lock else Icons.Filled.LockOpen,
                                             contentDescription = if (isQueueLockedState) "Unlock queue" else "Lock queue",
                                             modifier = Modifier.size(22.dp),
+                                        )
+                                    }
+                                }
+                                if (onEnterAod != null) {
+                                    LiquidGlassSurface(
+                                        onClick = hapticClick { onEnterAod() },
+                                        shape = CircleShape,
+                                        color = liquidGlassContainerColor(if (isThemeLight) Color.Black.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.14f)),
+                                        contentColor = if (isThemeLight) Color(0xFF222226) else Color.White.copy(alpha = 0.94f),
+                                        glassModifier = Modifier.liquidGlassChrome(
+                                            CircleShape,
+                                            LocalLiquidGlass.current,
+                                            LiquidGlassPreset.FloatingControls,
+                                        ),
+                                        modifier = Modifier.size(44.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Bedtime,
+                                            contentDescription = "Always-on player",
+                                            modifier = Modifier.size(21.dp),
                                         )
                                     }
                                 }
@@ -1996,9 +2038,9 @@ internal fun FullPlayer(
                                         onSeek = player::seekTo,
                                         isTranslucent = LocalLiquidGlass.current || showFullBleed,
                                         fallbackDurationMs = track.durationMs ?: state.durationMs,
-                                        primaryColor = ambientColor,
-                                        secondaryColor = ambientCompanion,
-                                        tertiaryColor = ambientDeep,
+                                        primaryColor = seekbarColorsOverride?.first ?: ambientColor,
+                                        secondaryColor = seekbarColorsOverride?.second ?: ambientCompanion,
+                                        tertiaryColor = seekbarColorsOverride?.third ?: ambientDeep,
                                         telemetry = state.deckBlendTelemetry,
                                     )
                                     Spacer(Modifier.height(0.dp))

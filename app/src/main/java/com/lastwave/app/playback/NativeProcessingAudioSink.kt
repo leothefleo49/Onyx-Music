@@ -162,6 +162,15 @@ class NativeProcessingAudioSink(
      */
     private var eqCopySource: ByteBuffer? = null
     private var eqCopy: ByteBuffer? = null
+    /**
+     * Spatial audio (width/crossfeed/head tracking) needs a writable float
+     * buffer. Tracker identical to the EQ copy above, with its own mirror so a
+     * retried buffer is not processed twice.
+     */
+    private var spatialCopySource: ByteBuffer? = null
+    private var spatialCopy: ByteBuffer? = null
+    private var spatialRoutedSource: ByteBuffer? = null
+    private var spatialRouted: ByteBuffer? = null
 
     /**
      * Music-haptics analyser. Fed here, before any routing, because this is the
@@ -635,9 +644,11 @@ class NativeProcessingAudioSink(
         }
         if (hapticsBuffer !== buffer) {
             hapticsBuffer = buffer
-            rhythmAnalyzer.isAnalysisActive = com.lastwave.app.playback.rhythm.FluidRhythmEngine.let {
-                it.isEnabled && it.liveSink === this
-            }
+            // Always analysed on the live deck: the rhythm level also drives the
+            // ambient edge glow and the aurora seekbar, which need beats even
+            // when the beat-synced fluid background is switched off.
+            rhythmAnalyzer.isAnalysisActive =
+                com.lastwave.app.playback.rhythm.FluidRhythmEngine.liveSink === this
             // Read-only (works on a duplicate) and before the EQ so it sees the source signal.
             for (analyzer in arrayOf(hapticsAnalyzer, rhythmAnalyzer)) {
                 runCatching {
@@ -673,18 +684,62 @@ class NativeProcessingAudioSink(
                 buffer
             }
         }
-        val consumed = handleRoutedBuffer(routed, presentationTimeUs, encodedAccessUnitCount)
-        // The copy holds buffer[position, limit): mirror how far it got.
+        // Spatial stage last, so it hears the EQ'd signal. It rewrites float
+        // stereo samples in place and passes everything else straight through.
+        val spatialized = maybeApplySpatial(routed)
+        val consumed = handleRoutedBuffer(spatialized, presentationTimeUs, encodedAccessUnitCount)
+        // Each copy holds source[position, limit): mirror how far it got.
+        if (spatialized !== routed) routed.position(routed.limit() - spatialized.remaining())
         if (routed !== buffer) buffer.position(buffer.limit() - routed.remaining())
         // Decoder buffers are recycled objects: once consumed, the next
         // payload in the same object must be equalised again.
         if (consumed) {
             directEqBuffer = null
             eqCopySource = null
+            spatialCopySource = null
+            spatialRoutedSource = null
+            spatialRouted = null
             hapticsBuffer = null
             skipCheckedBuffer = null
         }
         return consumed
+    }
+
+    /**
+     * Applies [SpatialAudioStage] when active and the format is raw float
+     * stereo. A retried buffer returns the same processed object; read-only
+     * decoder memory is copied first (same crash history as the EQ path).
+     */
+    private fun maybeApplySpatial(source: ByteBuffer): ByteBuffer {
+        val format = configuredFormat ?: return source
+        if (!com.lastwave.app.playback.spatial.SpatialAudioStage.isActive()) return source
+        if (format.sampleMimeType != MimeTypes.AUDIO_RAW ||
+            format.pcmEncoding != C.ENCODING_PCM_FLOAT ||
+            format.channelCount != 2
+        ) {
+            return source
+        }
+        if (spatialRoutedSource === source && spatialRouted != null) return spatialRouted!!
+        val target = if (source.isReadOnly) {
+            copyForSpatial(source).also { spatialCopySource = source }
+        } else {
+            source
+        }
+        com.lastwave.app.playback.spatial.SpatialAudioStage.process(target, format.sampleRate)
+        spatialRoutedSource = source
+        spatialRouted = target
+        return target
+    }
+
+    private fun copyForSpatial(source: ByteBuffer): ByteBuffer {
+        val needed = source.remaining()
+        val target = spatialCopy?.takeIf { it.capacity() >= needed }
+            ?: ByteBuffer.allocateDirect(needed).also { spatialCopy = it }
+        target.clear()
+        target.order(source.order())
+        target.put(source.duplicate())
+        target.flip()
+        return target
     }
 
     private fun copyForEq(source: ByteBuffer): ByteBuffer {

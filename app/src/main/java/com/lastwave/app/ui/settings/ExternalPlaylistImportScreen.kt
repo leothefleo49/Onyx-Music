@@ -51,6 +51,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -111,6 +112,8 @@ fun ExternalPlaylistImportScreen(
 
     val spotifyConnected by viewModel.spotifyConnected.collectAsStateWithLifecycle()
     val userPlaylists by viewModel.userPlaylists.collectAsStateWithLifecycle()
+    val bulkProgress by viewModel.bulkProgress.collectAsStateWithLifecycle()
+    val bulkSummary by viewModel.bulkSummary.collectAsStateWithLifecycle()
     val loadingUserPlaylists by viewModel.loadingUserPlaylists.collectAsStateWithLifecycle()
 
     // Tab 0: Spotify Account (Native connected import), Tab 1: Import with Link
@@ -367,7 +370,60 @@ fun ExternalPlaylistImportScreen(
                                 }
                             }
 
-                            // 2. User Playlists (Vertical List items)
+                            // 2. One-tap account import: every playlist + Liked
+                            // Songs, with live progress; failures don't abort.
+                            if (userPlaylists.isNotEmpty()) {
+                                item {
+                                    Card(
+                                        onClick = {
+                                            if (bulkProgress == null) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                                                viewModel.importAllSpotifyPlaylists(includeLikedSongs = true)
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Download,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                    modifier = Modifier.size(22.dp),
+                                                )
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = if (bulkProgress != null) "Importing\u2026" else "Import everything",
+                                                        style = MaterialTheme.typography.titleSmall,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                    )
+                                                    Text(
+                                                        text = bulkProgress
+                                                            ?: "$bulkSummary".takeIf { bulkSummary != null }
+                                                            ?: "All ${userPlaylists.size} playlists + Liked Songs, one tap",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+                                                    )
+                                                }
+                                            }
+                                            if (bulkProgress != null) {
+                                                Spacer(Modifier.height(10.dp))
+                                                LinearProgressIndicator(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             items(userPlaylists, key = { it.id }) { pl ->
                                 Card(
                                     onClick = {
