@@ -51,6 +51,11 @@ class SpotifyPlaylistImporter @Inject constructor(
         .callTimeout(20, TimeUnit.SECONDS)
         .build()
     private val json = Json { ignoreUnknownKeys = true }
+    // Spotify playlist pages are expensive (Pathfinder + N count queries).
+    // Keep a short-lived in-memory cache so reopening the library is instant.
+    @Volatile private var userPlaylistsCache: Pair<Long, List<SpotifyUserPlaylist>>? = null
+    private val playlistCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, ExternalPlaylistResult>>()
+    private val cacheTtlMs = 10L * 60L * 1000L
 
     /**
      * Pure parser: Spotify embed HTML in, parsed playlist out. Performs no
@@ -113,6 +118,9 @@ class SpotifyPlaylistImporter @Inject constructor(
         val id = ExternalPlaylistLink.extractId(input, ExternalPlaylistSource.SPOTIFY)
             ?: throw IllegalArgumentException("That does not look like a Spotify playlist link.")
 
+        playlistCache[id]?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
+            ?.let { return@withContext it.second }
+
         // First attempt via authenticated Spotify API if personal token is available
         val token = spotifyAuthRepository.getPersonalToken()
         val clientToken = spotifyAuthRepository.getClientToken()
@@ -126,6 +134,7 @@ class SpotifyPlaylistImporter @Inject constructor(
                 null
             }
             if (apiResult != null && apiResult.rows.isNotEmpty()) {
+                playlistCache[id] = System.currentTimeMillis() to apiResult
                 return@withContext apiResult
             }
             Log.w(TAG, "Authenticated fetch returned no tracks for $id; using public embed fallback")
@@ -146,7 +155,7 @@ class SpotifyPlaylistImporter @Inject constructor(
             }
             response.body?.string().orEmpty()
         }
-        parseEmbedPage(html)
+        parseEmbedPage(html).also { playlistCache[id] = System.currentTimeMillis() to it }
     }
 
     private fun fetchViaPathfinder(id: String, token: String, clientToken: String?): ExternalPlaylistResult? {
@@ -277,6 +286,8 @@ class SpotifyPlaylistImporter @Inject constructor(
      * (`limit=1`) query instead of defaulting to 0.
      */
     suspend fun fetchUserPlaylists(): List<SpotifyUserPlaylist> = withContext(Dispatchers.IO) {
+        userPlaylistsCache?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
+            ?.let { return@withContext it.second }
         val token = spotifyAuthRepository.getPersonalToken() ?: return@withContext emptyList()
         val clientToken = spotifyAuthRepository.getClientToken()
         try {
@@ -284,7 +295,10 @@ class SpotifyPlaylistImporter @Inject constructor(
             val body = pathfinderGet("libraryV3", variables, HASH_LIBRARY_V3, token, clientToken)
                 ?: return@withContext emptyList()
             val playlists = parseUserPlaylists(body)
-            if (playlists.none { it.trackCount == null }) return@withContext playlists
+            if (playlists.none { it.trackCount == null }) {
+                userPlaylistsCache = System.currentTimeMillis() to playlists
+                return@withContext playlists
+            }
 
             val semaphore = Semaphore(USER_PLAYLIST_COUNT_CONCURRENCY)
             coroutineScope {
@@ -300,6 +314,8 @@ class SpotifyPlaylistImporter @Inject constructor(
                         }
                     }
                 }.awaitAll()
+            }.also { resolved ->
+                userPlaylistsCache = System.currentTimeMillis() to resolved
             }
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()

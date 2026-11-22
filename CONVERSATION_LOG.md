@@ -186,3 +186,22 @@ Large fix/feature list: match the top-bar outline and per-surface Liquid Glass, 
 - Stats source filter chips with All sources as the default.
 - Settings search entries for the new audio/AOD/recognition/queue settings.
 - Version 1.2.1 (versionCode 4), signed APK staged in `builds/`.
+
+---
+
+## Session 5 — 2026-11-21 (1.2.2 fixes + release)
+
+### Message 1 (condensed; full text in the session transcript)
+Reported the Last.fm callback being rejected as invalid, custom colours shifting, missing/undiscoverable humming + sensitivity controls, missing manual/auto mixing entry points, a Spotify playlist mislabelled as YouTube Music, the white cast icon, slow Spotify playlist opening, empty Genres stats, no Last.fm history backfill, wanting Onyx Wrapped for any period, Library header parity and sort/filter layout, multi-platform releases, and prompt-free self-updates.
+
+### Delivered in 1.2.2
+- HTTPS Last.fm callback page (GitHub Pages) + full Last.fm history import.
+- Custom palettes win over artwork theming; picker reopens from the active palette; secondary/tertiary roles use picked colours.
+- Recognition start sheet with song/speaker vs humming/instrument mode and sensitivity.
+- Generator: Deep transition mix + Manual DJ remix; Queue: one-tap Mix this queue.
+- Spotify detail labels and 10-minute playlist cache.
+- Cast glyphs use the accent and hidden route buttons are fully transparent.
+- Genres page falls back to ranked artists when tags are unavailable.
+- Library header search/recognition/profile/create + sort pill beside filters.
+- Onyx Wrapped ranges: 7 days, 30 days, this year, all time.
+- Version 1.2.2 (versionCode 5), signed universal APK.

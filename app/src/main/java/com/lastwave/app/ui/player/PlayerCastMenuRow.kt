@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,11 +73,11 @@ internal fun PlayerCastMenuRow(player: MusicPlayer, modifier: Modifier = Modifie
                 Icons.Outlined.Cast,
                 contentDescription = null,
                 modifier = Modifier.size(if (plain) 24.dp else 20.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = MaterialTheme.colorScheme.primary,
             )
             if (available) {
                 AndroidView(
-                    modifier = Modifier.size(0.dp),
+                    modifier = Modifier.size(0.dp).graphicsLayer { alpha = 0f },
                     update = { it.isEnabled = enabled },
                     factory = { viewContext ->
                         MediaRouteButton(viewContext).apply {

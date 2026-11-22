@@ -398,6 +398,7 @@ internal fun FullPlayer(
     previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
     onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
     onSaveRecentQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
+    onMixQueue: () -> Unit = {},
     /** Null follows the artwork palette; otherwise progress bars use these. */
     seekbarColorsOverride: Triple<Color, Color, Color>? = null,
     edgeGlow: EdgeGlowConfig = EdgeGlowConfig(),
@@ -1450,6 +1451,7 @@ internal fun FullPlayer(
                                     previewQueues = previewQueues,
                                     onPlayPreviewQueue = onPlayPreviewQueue,
                                     onSaveRecentQueue = onSaveRecentQueue,
+                                    onMixQueue = onMixQueue,
                                 )
                             }
                         }

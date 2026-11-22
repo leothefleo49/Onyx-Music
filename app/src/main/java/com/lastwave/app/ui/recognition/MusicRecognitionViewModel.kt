@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -42,24 +44,35 @@ class MusicRecognitionViewModel @Inject constructor(
     private val _state = MutableStateFlow<RecognitionState>(RecognitionState.Idle)
     val state: StateFlow<RecognitionState> = _state.asStateFlow()
 
+    /** Humming-mode default and sensitivity from Settings. */
+    val defaults: StateFlow<Pair<Boolean, Int>> = settingsPreferences.settings
+        .map { it.recognitionHumMode to it.recognitionSensitivity }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), false to 50)
+
     private var job: Job? = null
 
     /** Caller must already hold RECORD_AUDIO. */
-    fun start() {
+    fun start(
+        humMode: Boolean? = null,
+        sensitivityOverride: Int? = null,
+    ) {
         job?.cancel()
         job = viewModelScope.launch {
             _state.value = RecognitionState.Listening
             _state.value = try {
                 val settings = settingsPreferences.settings.first()
-                val sensitivity = settings.recognitionSensitivity.coerceIn(0, 100)
+                val hum = humMode ?: settings.recognitionHumMode
+                val sensitivity = (sensitivityOverride ?: settings.recognitionSensitivity).coerceIn(0, 100)
+                if (humMode != null) settingsPreferences.setRecognitionHumMode(hum)
+                if (sensitivityOverride != null) settingsPreferences.setRecognitionSensitivity(sensitivity)
                 // 700 at "strict" down to 100 at "very lenient". Humming and
                 // solo instruments are quiet, so the hum mode floor is lower.
-                val silenceThreshold = if (settings.recognitionHumMode) {
+                val silenceThreshold = if (hum) {
                     (350 - sensitivity * 2).coerceIn(80, 350)
                 } else {
                     (700 - sensitivity * 6).coerceIn(100, 700)
                 }
-                val listenMs = if (settings.recognitionHumMode) HUM_LISTEN_MS else LISTEN_MS
+                val listenMs = if (hum) HUM_LISTEN_MS else LISTEN_MS
                 val clip = MicCapture.record(listenMs)
                 if (MicCapture.isSilent(clip.samples, silenceThreshold)) {
                     RecognitionState.Failed(RecognitionError.SILENCE)

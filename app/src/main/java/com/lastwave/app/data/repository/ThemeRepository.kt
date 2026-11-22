@@ -48,6 +48,10 @@ data class ThemeUiState(
      *  seed, not the seed itself, so it can't be compared back against a
      *  preset's hex to know which one is selected. This can. */
     val accentColorHex: String,
+    /** The other three custom-palette roles, when the user picked them. */
+    val accentLightHex: String = "#FF6060",
+    val accentContainerHex: String? = null,
+    val accentHighlightHex: String? = null,
     /** Settings' "Use Application Font" toggle — see ui/theme/Type.kt for
      *  what turning it off falls back to. */
     val useCustomFont: Boolean = true,
@@ -251,7 +255,12 @@ class ThemeRepository @Inject constructor(
         val isGlass = prefs.liquidGlass
         val isLastWave = prefs.lastWaveTheme
         val useLegacy = prefs.useLegacyColors
-        val nowPlayingActive = misc.dynamicNowPlayingEnabled && nowPlaying != null && !isLastWave
+        // A user-built four-colour palette is an explicit choice and must not
+        // be replaced song-by-song by the artwork theme.
+        val hasCustomPalette = prefs.accentMode == AccentMode.MANUAL &&
+            prefs.accentContainer != null && prefs.accentHighlight != null
+        val nowPlayingActive = misc.dynamicNowPlayingEnabled && nowPlaying != null &&
+            !isLastWave && !hasCustomPalette
         // Real wallpaper Monet on S+. Built here (not only in LastWaveTheme)
         // so widgets and the media notification use the same colors as the UI.
         val systemDynamic = if (prefs.accentMode == AccentMode.DYNAMIC && !isLastWave) systemDynamicSchemes(isAmoled, useLegacy) else null
@@ -313,6 +322,9 @@ class ThemeRepository @Inject constructor(
             amoled = isAmoled,
             mode = prefs.accentMode,
             accentColorHex = if (isLastWave) "#C9FB00" else prefs.accentColor,
+            accentLightHex = prefs.accentLight,
+            accentContainerHex = prefs.accentContainer,
+            accentHighlightHex = prefs.accentHighlight,
             useCustomFont = misc.useCustomFont,
             useBoldFont = misc.useBoldFont,
             liquidGlass = isGlass,

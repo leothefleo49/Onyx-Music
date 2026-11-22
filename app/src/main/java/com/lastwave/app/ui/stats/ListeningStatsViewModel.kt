@@ -855,7 +855,28 @@ class ListeningStatsViewModel @Inject constructor(
                         )
                     }
                 } else {
-                    emptyList()
+                    // YouTube Music scrobbles carry no genre tags, and no
+                    // Last.fm taste profile may be connected yet. Keep the
+                    // page useful by ranking artists instead of showing empty.
+                    val grouped = events
+                        .filter { it.artist.isNotBlank() }
+                        .groupBy { it.artist.trim().lowercase() }
+                        .values
+                        .sortedByDescending { list -> list.sumOf { effectiveListenMs(it) } }
+                        .take(12)
+                    val maxMs = grouped.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
+                    grouped.mapIndexed { idx, list ->
+                        val ms = list.sumOf { effectiveListenMs(it) }
+                        val display = list.first().artist.trim().ifBlank { "Unknown Artist" }
+                        RankedCategoryItem(
+                            rank = idx + 1,
+                            title = display,
+                            subtitle = "${list.size} plays \u00b7 genre tags unavailable",
+                            durationLabel = formatHoursMins(ms),
+                            progress = (ms.toFloat() / maxMs).coerceIn(0.05f, 1f),
+                            playCount = list.size,
+                        )
+                    }
                 }
             }
         }

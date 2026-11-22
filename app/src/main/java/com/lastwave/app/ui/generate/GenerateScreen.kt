@@ -99,9 +99,11 @@ private val IconBadgeShape = RoundedCornerShape(14.dp)
 fun GenerateScreen(
     onNavigateToPlaylist: (Long?) -> Unit = {},
     onBack: (() -> Unit)? = null,
+    onOpenDeepMix: () -> Unit = {},
     viewModel: GenerateViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val showManualDj = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.navEvents.collect { event ->
@@ -141,6 +143,92 @@ fun GenerateScreen(
             if (state.isGenerating) {
                 item(key = "loadingOverlay") {
                     com.lastwave.app.ui.common.GenerationProgressCard(message = state.loadingMessage)
+                }
+            }
+
+            item(key = "deepMix") {
+                Card(
+                    onClick = onOpenDeepMix,
+                    shape = GeneratorOuterCardShape,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(44.dp)
+                                .clip(IconBadgeShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                com.lastwave.app.ui.player.QualityGlyphs.AutoMix,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Deep transition mix",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                            Text(
+                                "Build a playlist where songs blend insanely well. Takes longer, but the transitions are worth it.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                            )
+                        }
+                    }
+                }
+            }
+
+            item(key = "manualDj") {
+                Card(
+                    onClick = { showManualDj.value = true },
+                    shape = GeneratorOuterCardShape,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(44.dp)
+                                .clip(IconBadgeShape)
+                                .background(MaterialTheme.colorScheme.secondary),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                com.lastwave.app.ui.player.QualityGlyphs.Crossfade,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondary,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Manual DJ remix",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                            Text(
+                                "Set the transition for the currently playing pair: crossfade length, EQ hand-off, filter sweep and more.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f),
+                            )
+                        }
+                    }
                 }
             }
 
@@ -269,6 +357,16 @@ fun GenerateScreen(
     }
     }
         }
+    }
+
+    if (showManualDj.value) {
+        com.lastwave.app.ui.player.automix.ManualDjMixSheet(
+            onDismiss = { showManualDj.value = false },
+            onOpenDeepMixBuilder = {
+                showManualDj.value = false
+                onOpenDeepMix()
+            },
+        )
     }
 }
 

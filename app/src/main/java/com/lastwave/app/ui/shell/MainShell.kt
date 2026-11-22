@@ -515,6 +515,8 @@ fun MainShell(
                             onOpenPlaylist = onOpenPlaylist,
                             onOpenFeedPlaylist = onOpenFeedPlaylist,
                             onOpenGenerator = onOpenGenerator,
+                            onOpenSearch = onOpenSearch,
+                            onOpenSettings = { showAccountMenu = true },
                         )
                     }
                 }
@@ -804,7 +806,7 @@ fun MainShell(
                             Icon(
                                 Icons.Outlined.Cast,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(20.dp),
                             )
                         }
@@ -815,7 +817,7 @@ fun MainShell(
                         }
                         if (castAvailable) {
                             androidx.compose.ui.viewinterop.AndroidView(
-                                modifier = Modifier.size(0.dp),
+                                modifier = Modifier.size(0.dp).graphicsLayer { alpha = 0f },
                                 factory = { viewContext ->
                                     androidx.mediarouter.app.MediaRouteButton(viewContext).apply {
                                         background = null

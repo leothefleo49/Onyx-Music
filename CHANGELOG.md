@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.2.2] - 2026-11-21
+
+### 🛠️ Fixed
+* **Last.fm setup:** the callback is now a valid HTTPS URL (`https://leothefleo49.github.io/Onyx-Music/auth-callback.html`) that forwards the token into the app, so Last.fm’s account form accepts it.
+* **Custom colours stay put:** a custom four-colour palette now wins over the per-song artwork theme, the picker reopens with the palette already in use, and secondary/tertiary roles use the picked colours instead of generated tones.
+* **Spotify playlists no longer say “YouTube Music”** in the detail header, and Spotify playlist lists/details are cached for 10 minutes so reopening the library is much faster.
+* **Cast icon:** both cast quick actions use the themed accent glyph; the hidden MediaRouteButton is fully transparent and zero-sized.
+* **Genres with no tags:** the Genres stat page falls back to ranked artists with a clear “genre tags unavailable” note instead of showing an empty page.
+* **Library header:** search, music recognition, profile and create now live in the Library header; the sort pill moved beside the source filters at the same height.
+
+### ✨ What's New
+* **Last.fm history import:** connected accounts can pull their entire past scrobble history into Onyx Stats from Settings → Last.fm.
+* **Recognition options where you use them:** tapping Listen now opens a sheet with song/speaker vs humming/instrument mode and a sensitivity slider before capture.
+* **Mixing where it belongs:** Generator now has **Deep transition mix** and **Manual DJ remix** entries; the queue header has a one-tap **Mix this queue** (improved Automix) button.
+* **Onyx Wrapped ranges:** 7 days, 30 days, this year and all time.
+
 ## [1.2.1] - 2026-11-21
 
 ### ✨ What's New

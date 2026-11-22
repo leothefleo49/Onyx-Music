@@ -359,6 +359,7 @@ class PlayerViewModel @Inject constructor(
     private val localOfflineRepository: com.lastwave.app.data.localmusic.LocalOfflineRepository,
     private val previewQueueRepository: com.lastwave.app.data.queue.PreviewQueueRepository,
     private val trackOverridesRepository: com.lastwave.app.data.local.TrackOverridesRepository,
+    private val autoMixPreferences: com.lastwave.app.playback.automix.api.AutoMixPreferences,
 ) : ViewModel() {
     val navEvents = navigator.events
     val state = player.state
@@ -377,6 +378,18 @@ class PlayerViewModel @Inject constructor(
     fun playPreviewQueue(queue: com.lastwave.app.data.queue.PreviewQueue) {
         if (queue.tracks.isEmpty()) return
         player.playQueue(queue.tracks, queue.startIndex, sourceLabel = queue.title)
+    }
+
+    /** Spur-of-the-moment queue transitions: turn on the improved Automix
+     *  tier without sending the listener into deep settings. */
+    fun mixCurrentQueue() {
+        viewModelScope.launch {
+            autoMixPreferences.setAutoMixEnabled(true)
+            autoMixPreferences.setAutoMixTier(
+                com.lastwave.app.playback.automix.api.AutoMixTier.IMPROVED_SMART,
+            )
+            _toastMessage.emit("Queue transitions on")
+        }
     }
 
     /** Snapshots a recent queue into a normal library playlist. */

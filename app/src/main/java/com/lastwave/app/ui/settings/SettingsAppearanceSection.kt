@@ -525,13 +525,25 @@ private fun Color.toHsvSlot(): HsvSlot {
 internal fun ColorWheelSheet(
     onDismiss: () -> Unit,
     onApply: (accent: Color, light: Color, container: Color, highlight: Color) -> Unit,
+    initialAccent: String? = null,
+    initialLight: String? = null,
+    initialContainer: String? = null,
+    initialHighlight: String? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    // Custom palettes expose the same four roles the preset tiles preview.
-    // Start from the default crimson palette so every slot has a usable value.
-    val defaults = remember {
-        val shades = accentShades("#E03030")
-        listOf(shades[1], shades[3], shades[0], shades[2])
+    // Start from the palette currently in use, not a hardcoded red, so
+    // reopening the picker and applying cannot silently change the theme.
+    val defaults = remember(initialAccent, initialLight, initialContainer, initialHighlight) {
+        val shades = accentShades(initialAccent ?: "#E03030")
+        fun parse(hex: String?, fallback: Color): Color = hex?.let {
+            runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull()
+        } ?: fallback
+        listOf(
+            parse(initialAccent, shades[1]),
+            parse(initialLight, shades[3]),
+            parse(initialContainer, shades[0]),
+            parse(initialHighlight, shades[2]),
+        )
     }
     val slots = remember {
         androidx.compose.runtime.mutableStateListOf<HsvSlot>().apply {

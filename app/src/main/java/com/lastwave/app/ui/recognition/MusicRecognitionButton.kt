@@ -17,9 +17,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,11 +34,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,23 +72,41 @@ import com.lastwave.app.ui.common.HeaderActionIcon
 fun MusicRecognitionButton(key: String) {
     val viewModel: MusicRecognitionViewModel = hiltViewModel(key = key)
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val defaults by viewModel.defaults.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    var showStartSheet by remember { mutableStateOf(false) }
+    var pendingHum by remember { mutableStateOf(false) }
+    var pendingSensitivity by remember { mutableStateOf(50) }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) viewModel.start() else viewModel.onPermissionDenied()
+        if (granted) viewModel.start(pendingHum, pendingSensitivity) else viewModel.onPermissionDenied()
     }
-    val begin = {
+    val launchCapture = { hum: Boolean, sensitivity: Int ->
+        showStartSheet = false
+        pendingHum = hum
+        pendingSensitivity = sensitivity
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
-        if (granted) viewModel.start() else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        if (granted) viewModel.start(hum, sensitivity) else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
-    HeaderActionIcon(Icons.Filled.GraphicEq, stringResource(R.string.recognize_music), begin)
+    HeaderActionIcon(Icons.Filled.GraphicEq, stringResource(R.string.recognize_music)) {
+        showStartSheet = true
+    }
+
+    if (showStartSheet) {
+        RecognitionStartSheet(
+            defaultHum = defaults.first,
+            defaultSensitivity = defaults.second,
+            onStart = launchCapture,
+            onDismiss = { showStartSheet = false },
+        )
+    }
 
     if (state != RecognitionState.Idle) {
         RecognitionSheet(
             state = state,
-            onRetry = begin,
+            onRetry = { launchCapture(defaults.first, defaults.second) },
             onDismiss = viewModel::dismiss,
             onOpenSettings = {
                 context.startActivity(
@@ -90,6 +117,67 @@ fun MusicRecognitionButton(key: String) {
             },
             onSearch = viewModel::searchFor,
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RecognitionStartSheet(
+    defaultHum: Boolean,
+    defaultSensitivity: Int,
+    onStart: (Boolean, Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var hum by remember { mutableStateOf(defaultHum) }
+    var sensitivity by remember { mutableStateOf(defaultSensitivity.toFloat()) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("Listen for music", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "Play the song out loud, or hum/sing it. Humming is best-effort — a clean melody helps most.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Humming / instrument mode", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Listens longer and accepts quieter input",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = hum, onCheckedChange = { hum = it })
+            }
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Sensitivity", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    Text("${sensitivity.toInt()}%", style = MaterialTheme.typography.labelLarge)
+                }
+                Slider(
+                    value = sensitivity,
+                    onValueChange = { sensitivity = it },
+                    valueRange = 0f..100f,
+                )
+            }
+            Button(
+                onClick = { onStart(hum, sensitivity.toInt()) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Start listening") }
+            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                Text("Cancel")
+            }
+            Spacer(Modifier.height(4.dp))
+        }
     }
 }
 

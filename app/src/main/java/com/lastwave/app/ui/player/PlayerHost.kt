@@ -904,6 +904,7 @@ internal fun ExpandedPlayer(
         previewQueues = previewQueues,
         onPlayPreviewQueue = viewModel::playPreviewQueue,
         onSaveRecentQueue = viewModel::savePreviewQueueAsPlaylist,
+        onMixQueue = viewModel::mixCurrentQueue,
         edgeGlow = remember(
             settings.edgeGlowEnabled,
             settings.edgeGlowMode,

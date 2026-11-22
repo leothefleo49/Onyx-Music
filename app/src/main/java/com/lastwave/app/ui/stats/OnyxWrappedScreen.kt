@@ -137,6 +137,20 @@ fun OnyxWrappedScreen(
                 ) {
                     item {
                         Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                            androidx.compose.foundation.layout.Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                            ) {
+                                WrappedRange.entries.forEach { range ->
+                                    androidx.compose.material3.FilterChip(
+                                        selected = state.range == range,
+                                        onClick = { viewModel.setRange(range) },
+                                        label = {
+                                            Text(range.label, style = MaterialTheme.typography.labelMedium)
+                                        },
+                                    )
+                                }
+                            }
                             Text(
                                 "ONYX WRAPPED",
                                 fontSize = 13.sp,
@@ -145,7 +159,7 @@ fun OnyxWrappedScreen(
                                 color = primary,
                             )
                             Text(
-                                state.year.toString(),
+                                if (state.range == WrappedRange.YEAR) state.year.toString() else state.range.label,
                                 fontSize = 56.sp,
                                 fontWeight = FontWeight.Black,
                                 color = Color.White,

@@ -339,6 +339,7 @@ internal fun QueuePanel(
     previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
     onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
     onSaveRecentQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
+    onMixQueue: () -> Unit = {},
 ) {
     val isQueueLocked = isQueueLockedState
     val listState = rememberLazyListState()
@@ -471,6 +472,23 @@ internal fun QueuePanel(
                     imageVector = if (isQueueLocked) Icons.Filled.Lock else Icons.Filled.LockOpen,
                     contentDescription = if (isQueueLocked) "Unlock queue" else "Lock queue",
                     tint = if (isQueueLocked) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.90f),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            IconButton(
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                    onMixQueue()
+                },
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White.copy(alpha = 0.14f)),
+            ) {
+                Icon(
+                    imageVector = com.lastwave.app.ui.player.QualityGlyphs.AutoMix,
+                    contentDescription = "Mix this queue",
+                    tint = Color.White.copy(alpha = 0.90f),
                 )
             }
             Spacer(Modifier.width(10.dp))

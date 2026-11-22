@@ -7,7 +7,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
-const val LAST_FM_AUTH_CALLBACK_URI = "onyxmusic://auth-callback"
+/**
+ * Last.fm's account form rejects custom schemes, so the registered callback
+ * is a real HTTPS page that immediately forwards `?token=` into the app.
+ */
+const val LAST_FM_AUTH_CALLBACK_URI =
+    "https://leothefleo49.github.io/Onyx-Music/auth-callback.html"
 
 /** Carries the browser redirect safely into the login ViewModel. */
 @Singleton

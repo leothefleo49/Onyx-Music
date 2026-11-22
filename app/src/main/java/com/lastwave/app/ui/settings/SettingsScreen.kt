@@ -432,6 +432,7 @@ fun SettingsScreen(
     val hasApiKey by viewModel.hasApiKey.collectAsStateWithLifecycle()
     val lastFmAuthUrl by viewModel.lastFmAuthUrl.collectAsStateWithLifecycle()
     val lastFmConnecting by viewModel.lastFmConnecting.collectAsStateWithLifecycle()
+    val lastFmImportStatus by viewModel.lastFmImportStatus.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // Last.fm web auth (Settings → Integrations): open the auth URL in Custom
@@ -2110,6 +2111,18 @@ fun SettingsScreen(
                             }
                         },
                     )
+                    if (isLastFmConnected) {
+                        SettingsActionCard(
+                            icon = Icons.Filled.History,
+                            iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                            iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            title = "Import full Last.fm history",
+                            subtitle = lastFmImportStatus
+                                ?: "Pull every past scrobble into Onyx Stats (this can take a while)",
+                            onClick = viewModel::importLastFmHistory,
+                            position = com.lastwave.app.ui.settings.GroupPosition.SINGLE,
+                        )
+                    }
                     // Discord presence, next to Last.fm because both are "tell
                     // other services what I'm listening to" integrations and
                     // neither is required for playback. Unlike Last.fm this
@@ -2549,7 +2562,14 @@ fun SettingsScreen(
 
     // -- Custom color wheel dialog (par 8.4) --
     if (state.showColorWheel) {
-        ColorWheelSheet(onDismiss = viewModel::dismissColorWheel, onApply = viewModel::applyCustomPalette)
+        ColorWheelSheet(
+            onDismiss = viewModel::dismissColorWheel,
+            onApply = viewModel::applyCustomPalette,
+            initialAccent = theme?.accentColorHex,
+            initialLight = theme?.accentLightHex,
+            initialContainer = theme?.accentContainerHex,
+            initialHighlight = theme?.accentHighlightHex,
+        )
     }
 
     // -- Clear-all-data confirm --

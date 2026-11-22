@@ -68,6 +68,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
@@ -161,6 +162,8 @@ fun PlaylistScreen(
     onOpenPlaylist: (Long) -> Unit = {},
     onOpenFeedPlaylist: (String) -> Unit = {},
     onOpenGenerator: () -> Unit = {},
+    onOpenSearch: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -229,53 +232,21 @@ fun PlaylistScreen(
                             Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.pl_clear_selection_cd))
                         }
                     } else {
+                        IconButton(onClick = onOpenSearch, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.Search, contentDescription = "Search")
+                        }
+                        com.lastwave.app.ui.recognition.MusicRecognitionButton(key = "recognition_library")
+                        IconButton(onClick = onOpenSettings, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                Icons.Filled.Person,
+                                contentDescription = "Profile",
+                            )
+                        }
                         IconButton(
                             onClick = viewModel::openCreateDialog,
                             modifier = Modifier.size(40.dp),
                         ) {
                             Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.pl_create_cd))
-                        }
-                        Box {
-                            Surface(
-                                onClick = { sortMenuExpanded = true },
-                                shape = RoundedCornerShape(50),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                tonalElevation = 1.dp,
-                                modifier = Modifier.heightIn(min = 34.dp),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.Sort,
-                                        contentDescription = stringResource(R.string.pl_sort_cd),
-                                        modifier = Modifier.size(15.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        stringResource(R.string.pl_sort_label),
-                                        style = MaterialTheme.typography.labelLarge,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                }
-                            }
-                            DropdownMenu(
-                                expanded = sortMenuExpanded,
-                                onDismissRequest = { sortMenuExpanded = false },
-                                shape = RoundedCornerShape(22.dp),
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                tonalElevation = 4.dp,
-                                shadowElevation = 10.dp,
-                                modifier = Modifier.padding(vertical = 4.dp),
-                            ) {
-                                DropdownMenuItem(text = { Text(stringResource(R.string.pl_sort_newest)) }, onClick = { viewModel.setSortMode(PlaylistSortMode.DATE_DESC); sortMenuExpanded = false })
-                                DropdownMenuItem(text = { Text(stringResource(R.string.pl_sort_oldest)) }, onClick = { viewModel.setSortMode(PlaylistSortMode.DATE_ASC); sortMenuExpanded = false })
-                                DropdownMenuItem(text = { Text(stringResource(R.string.pl_sort_name)) }, onClick = { viewModel.setSortMode(PlaylistSortMode.NAME); sortMenuExpanded = false })
-                                DropdownMenuItem(text = { Text(stringResource(R.string.pl_sort_track_count)) }, onClick = { viewModel.setSortMode(PlaylistSortMode.TRACK_COUNT); sortMenuExpanded = false })
-                            }
                         }
                     }
                 },
@@ -292,50 +263,98 @@ fun PlaylistScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
                         .padding(horizontal = 6.dp, vertical = 5.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    PlaylistFilter.entries.forEach { filter ->
-                        val isSelected = selectedFilter == filter
-                        Surface(
-                            onClick = {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                selectedFilter = filter
-                            },
-                            shape = RoundedCornerShape(16.dp),
-                            color = if (isSelected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent,
-                            modifier = Modifier.height(34.dp),
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.padding(horizontal = 12.dp),
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PlaylistFilter.entries.forEach { filter ->
+                            val isSelected = selectedFilter == filter
+                            Surface(
+                                onClick = {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    selectedFilter = filter
+                                },
+                                shape = RoundedCornerShape(16.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent,
+                                modifier = Modifier.height(34.dp),
                             ) {
-                                val chipTint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                    val icon = when (filter) {
-                                        PlaylistFilter.ALL -> Icons.Filled.LibraryMusic
-                                        PlaylistFilter.GENERATED -> Icons.Filled.AutoAwesome
-                                        PlaylistFilter.YTMUSIC -> Icons.Filled.PlayCircle
-                                        PlaylistFilter.SPOTIFY -> com.lastwave.app.ui.player.QualityGlyphs.Spotify
-                                        PlaylistFilter.IMPORTED -> Icons.Filled.Download
-                                        PlaylistFilter.PINNED -> Icons.Filled.PushPin
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                ) {
+                                    val chipTint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                        val icon = when (filter) {
+                                            PlaylistFilter.ALL -> Icons.Filled.LibraryMusic
+                                            PlaylistFilter.GENERATED -> Icons.Filled.AutoAwesome
+                                            PlaylistFilter.YTMUSIC -> Icons.Filled.PlayCircle
+                                            PlaylistFilter.SPOTIFY -> com.lastwave.app.ui.player.QualityGlyphs.Spotify
+                                            PlaylistFilter.IMPORTED -> Icons.Filled.Download
+                                            PlaylistFilter.PINNED -> Icons.Filled.PushPin
+                                        }
+                                        Icon(
+                                            imageVector = icon,
+                                            contentDescription = null,
+                                            tint = chipTint,
+                                            modifier = Modifier.size(15.dp),
+                                        )
+                                        Text(
+                                            text = filter.label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = chipTint,
+                                        )
                                     }
-                                    Icon(
-                                        imageVector = icon,
-                                        contentDescription = null,
-                                        tint = chipTint,
-                                        modifier = Modifier.size(15.dp),
-                                    )
-                                    Text(
-                                        text = filter.label,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = chipTint,
-                                    )
                                 }
                             }
+                        }
+                    }
+                    Box {
+                        Surface(
+                            onClick = { sortMenuExpanded = true },
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            modifier = Modifier.height(34.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Sort,
+                                    contentDescription = stringResource(R.string.pl_sort_cd),
+                                    modifier = Modifier.size(15.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    stringResource(R.string.pl_sort_label),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = sortMenuExpanded,
+                            onDismissRequest = { sortMenuExpanded = false },
+                            shape = RoundedCornerShape(22.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            tonalElevation = 4.dp,
+                            shadowElevation = 10.dp,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        ) {
+                            DropdownMenuItem(text = { Text(stringResource(R.string.pl_sort_newest)) }, onClick = { viewModel.setSortMode(PlaylistSortMode.DATE_DESC); sortMenuExpanded = false })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.pl_sort_oldest)) }, onClick = { viewModel.setSortMode(PlaylistSortMode.DATE_ASC); sortMenuExpanded = false })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.pl_sort_name)) }, onClick = { viewModel.setSortMode(PlaylistSortMode.NAME); sortMenuExpanded = false })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.pl_sort_track_count)) }, onClick = { viewModel.setSortMode(PlaylistSortMode.TRACK_COUNT); sortMenuExpanded = false })
                         }
                     }
                 }

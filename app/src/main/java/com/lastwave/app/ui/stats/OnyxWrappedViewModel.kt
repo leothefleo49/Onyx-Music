@@ -14,6 +14,13 @@ import kotlinx.coroutines.launch
 import java.util.Calendar
 import javax.inject.Inject
 
+enum class WrappedRange(val label: String) {
+    WEEK("7 days"),
+    MONTH("30 days"),
+    YEAR("This year"),
+    ALL("All time"),
+}
+
 data class WrappedItem(
     val title: String,
     val subtitle: String,
@@ -23,6 +30,7 @@ data class WrappedItem(
 
 data class OnyxWrappedUiState(
     val year: Int = Calendar.getInstance().get(Calendar.YEAR),
+    val range: WrappedRange = WrappedRange.YEAR,
     val isLoading: Boolean = true,
     val hasData: Boolean = false,
     val totalMinutes: Long = 0L,
@@ -51,31 +59,40 @@ class OnyxWrappedViewModel @Inject constructor(
         load()
     }
 
-    fun load() {
+    fun load(range: WrappedRange = _state.value.range) {
         viewModelScope.launch {
             val events = runCatching { scrobbleEventDao.observeAll().first() }.getOrDefault(emptyList())
-            _state.value = buildWrapped(events)
+            _state.value = buildWrapped(events, range)
         }
     }
 
-    private fun buildWrapped(events: List<ScrobbleEventEntity>): OnyxWrappedUiState {
-        val calendar = Calendar.getInstance()
-        val year = calendar.get(Calendar.YEAR)
-        val start = Calendar.getInstance().apply {
-            clear()
-            set(Calendar.YEAR, year)
-            set(Calendar.MONTH, Calendar.JANUARY)
-            set(Calendar.DAY_OF_MONTH, 1)
-        }.timeInMillis
-        val end = Calendar.getInstance().apply {
-            clear()
-            set(Calendar.YEAR, year + 1)
-            set(Calendar.MONTH, Calendar.JANUARY)
-            set(Calendar.DAY_OF_MONTH, 1)
-        }.timeInMillis
+    fun setRange(range: WrappedRange) {
+        _state.value = _state.value.copy(range = range, isLoading = true)
+        load(range)
+    }
+
+    private fun buildWrapped(events: List<ScrobbleEventEntity>, range: WrappedRange): OnyxWrappedUiState {
+        val year = Calendar.getInstance().get(Calendar.YEAR)
+        val now = System.currentTimeMillis()
+        val (start, end) = when (range) {
+            WrappedRange.WEEK -> now - 7L * 24L * 60L * 60L * 1000L to now + 1L
+            WrappedRange.MONTH -> now - 30L * 24L * 60L * 60L * 1000L to now + 1L
+            WrappedRange.ALL -> Long.MIN_VALUE to Long.MAX_VALUE
+            WrappedRange.YEAR -> Calendar.getInstance().apply {
+                clear()
+                set(Calendar.YEAR, year)
+                set(Calendar.MONTH, Calendar.JANUARY)
+                set(Calendar.DAY_OF_MONTH, 1)
+            }.timeInMillis to Calendar.getInstance().apply {
+                clear()
+                set(Calendar.YEAR, year + 1)
+                set(Calendar.MONTH, Calendar.JANUARY)
+                set(Calendar.DAY_OF_MONTH, 1)
+            }.timeInMillis
+        }
         val inYear = events.filter { it.scrobbledAtMs in start until end }
         if (inYear.isEmpty()) {
-            return OnyxWrappedUiState(year = year, isLoading = false, hasData = false)
+            return OnyxWrappedUiState(year = year, range = range, isLoading = false, hasData = false)
         }
 
         fun listenMs(event: ScrobbleEventEntity): Long = when {
@@ -155,6 +172,7 @@ class OnyxWrappedViewModel @Inject constructor(
 
         return OnyxWrappedUiState(
             year = year,
+            range = range,
             isLoading = false,
             hasData = true,
             totalMinutes = totalMs / 60_000L,

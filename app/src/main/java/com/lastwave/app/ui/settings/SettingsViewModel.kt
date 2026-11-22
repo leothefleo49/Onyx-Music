@@ -101,6 +101,7 @@ class SettingsViewModel @Inject constructor(
     private val downloadManager: TrackDownloadManager,
     private val fileExportHelper: FileExportHelper,
     private val scrobblerPreferences: ScrobblerPreferences,
+    private val scrobbleSyncEngine: com.lastwave.app.data.scrobble.ScrobbleSyncEngine,
     private val discordPresencePreferences: com.lastwave.app.presence.DiscordPresencePreferences,
     private val equalizerPreferences: com.lastwave.app.data.local.EqualizerPreferences,
     private val loudnessPrefs: com.lastwave.app.playback.LoudnessPrefs,
@@ -313,6 +314,7 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SettingsSharing, 0L)
 
     private val _uiState = MutableStateFlow(SettingsScreenState())
+    val lastFmImportStatus = MutableStateFlow<String?>(null)
     val uiState: StateFlow<SettingsScreenState> = _uiState.asStateFlow()
 
     /** Prevent DataStore/Room/runtime write failures from escaping as an
@@ -488,6 +490,53 @@ class SettingsViewModel @Inject constructor(
             authRepository.signOut()
             _lastFmAuthUrl.value = null
             _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_lfm_off)) }
+        }
+    }
+
+    /** Pulls the account's entire Last.fm history into local stats. */
+    fun importLastFmHistory() {
+        launchSettingsAction("import Last.fm history") {
+            lastFmImportStatus.value = "Fetching play history…"
+            val events = org.json.JSONArray()
+            var page = 1
+            var totalPages = 1
+            while (page <= totalPages && page <= 200) {
+                val data = homeRepository.fetchRecentTracks(
+                    page = page,
+                    limit = 200,
+                    forceRefresh = true,
+                ).getOrNull() ?: break
+                totalPages = data.totalPages.coerceAtLeast(1)
+                data.tracks.filterNot { it.isNowPlaying }.forEach { track ->
+                    val seconds = track.date?.uts?.toLongOrNull() ?: return@forEach
+                    if (track.name.isBlank() || track.artist.name.isBlank()) return@forEach
+                    events.put(
+                        org.json.JSONObject().apply {
+                            put("title", track.name)
+                            put("artist", track.artist.name)
+                            put("album", track.album.name)
+                            put("scrobbledAtMs", seconds * 1000L)
+                            put("startedAtMs", seconds * 1000L)
+                            put("durationMs", 0L)
+                            put("listenedMs", 0L)
+                            put("sourcePackage", "fm.last.android")
+                            put("sourceAppName", "Last.fm Import")
+                        },
+                    )
+                }
+                lastFmImportStatus.value = "Fetched ${events.length()} plays (page $page/$totalPages)…"
+                page++
+            }
+            if (events.length() == 0) {
+                lastFmImportStatus.value = "No Last.fm history found"
+                return@launchSettingsAction
+            }
+            val payload = org.json.JSONObject().put("events", events).toString()
+            val result = scrobbleSyncEngine.importScrobbles(payload)
+            lastFmImportStatus.value = "Imported ${result.events.size} plays"
+            _uiState.update {
+                it.copy(toastMessage = "Imported ${result.events.size} Last.fm plays into Stats")
+            }
         }
     }
 

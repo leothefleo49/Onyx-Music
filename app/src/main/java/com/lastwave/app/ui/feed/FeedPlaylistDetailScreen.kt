@@ -99,7 +99,8 @@ fun FeedPlaylistDetailScreen(
             modifier = headerModifier,
             backdrop = headerBackdrop,
             title = playlist?.title?.takeIf(String::isNotBlank) ?: "Playlist",
-            subtitle = playlist?.author ?: "YouTube Music",
+            subtitle = playlist?.author?.takeIf { it.isNotBlank() }
+                ?: if (playlistId.startsWith("sp_") || playlistId.startsWith("spotify")) "Spotify" else "YouTube Music",
             onBack = onBack,
         )
             },
@@ -479,6 +480,6 @@ private fun PlaylistContent(
 private fun YouTubeMusicTrack.artistAndAlbum(): String =
     listOfNotNull(artist.takeIf(String::isNotBlank), album?.takeIf(String::isNotBlank))
         .joinToString(" \u2022 ")
-        .ifBlank { "YouTube Music" }
+        .ifBlank { "Unknown artist" }
 
 private fun Int.toDurationLabel(): String = "%d:%02d".format(this / 60, this % 60)

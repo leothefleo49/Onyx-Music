@@ -345,6 +345,7 @@ fun LastWaveNavHost(
                         }
                     },
                     onBack = { navController.safePopBackStack(backStackEntry) },
+                    onOpenDeepMix = { navController.navigate(Screen.DeepMixBuilder.route) },
                 )
             }
         }
