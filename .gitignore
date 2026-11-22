@@ -101,3 +101,7 @@ builds/
 
 # Local debug builds (large binaries)
 builds/*.apk
+
+# Release signing material (never commit)
+signing/
+.env

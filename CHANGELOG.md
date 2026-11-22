@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.0] - 2026-11-21
+
+### ✨ What's New
+* **Ambient screen glow (Lumn-style):** screen edges glow and pulse with the song's bass — artwork, custom or gradient colours, adjustable intensity and thickness, beat/breathing/static motion.
+* **Aurora seekbar:** layered translucent waves of different heights and colours over a flat baseline; fourth seekbar style with live preview.
+* **Always-on player:** full-screen clock, artwork, track and current lyric line that keeps the screen awake; open it from the moon button in the player.
+* **App backgrounds:** subtly animated artwork glow, glossy accent sheen, or plain — gloss applied outside the immersive player.
+* **Headphone spatial audio:** fixed or head-tracked soundstage (rotation sensor), crossfeed, stereo width and bass-centring.
+* **One-tap Spotify import:** every playlist in the account plus Liked Songs, with progress and a per-playlist failure report.
+* **Quest 3 / Horizon OS:** installs as a resizable 2D panel; touchscreen/camera/telephony no longer required.
+* **Smart Previous:** after a queued song plays, Previous offers the queued song or the playlist order (Ask / Always queue / Always context).
+* **Sleep at end of queue** with queue-length previews in both timer dialogs.
+
+### ⚡ Improved
+* Queue panel shows remaining songs/time and a Recent queues strip, with an explicit Back button.
+* Search includes on-device files in the Tracks tab, uses token matching and returns up to 120 results.
+* Per-surface Liquid Glass toggles (navigation, mini player, player controls, floating buttons, headers).
+* Progress-bar colours can match the artwork or use two custom colours.
+
 ## [5.2.1] - 2026-11-13
 
 ### ✨ What's New
