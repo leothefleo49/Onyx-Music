@@ -168,4 +168,56 @@ class PlaylistImportManager @Inject constructor(
             val likedPlaylist = playlistRepository.ensureLikedSongs()
             Pair(likedPlaylist, result)
         }
+
+    /** Outcome of one bulk-import pass over the connected Spotify account. */
+    data class BulkImportSummary(
+        val importedPlaylists: Int,
+        val failedPlaylists: Int,
+        val importedTracks: Int,
+        val likedSongsAdded: Int,
+        val failures: List<String>,
+    )
+
+    /**
+     * One-tap import of the whole Spotify account: every playlist in the
+     * account, plus (optionally) Liked Songs. Each playlist becomes a normal
+     * local playlist; one failure is reported and never aborts the rest.
+     */
+    suspend fun importAllSpotifyPlaylists(
+        playlists: List<SpotifyUserPlaylist>,
+        includeLikedSongs: Boolean,
+        onProgress: (done: Int, total: Int, currentTitle: String) -> Unit = { _, _, _ -> },
+    ): BulkImportSummary = withContext(Dispatchers.IO) {
+        val total = playlists.size + if (includeLikedSongs) 1 else 0
+        var done = 0
+        var imported = 0
+        var failed = 0
+        var tracks = 0
+        var likedAdded = 0
+        val failures = mutableListOf<String>()
+
+        if (includeLikedSongs) {
+            onProgress(done, total, "Liked Songs")
+            runCatching { importSpotifyLikedIntoLikedSongs() }
+                .onSuccess { (_, result) -> likedAdded = result.matchedCount }
+                .onFailure { failures += "Liked Songs: ${it.message ?: "import failed"}" }
+            done++
+        }
+
+        for (playlist in playlists) {
+            onProgress(done, total, playlist.name)
+            runCatching {
+                val url = "https://open.spotify.com/playlist/${playlist.id}"
+                val (_, result) = importExternalPlaylist(url)
+                imported++
+                tracks += result.matchedCount
+            }.onFailure {
+                failed++
+                failures += "${playlist.name}: ${it.message ?: "import failed"}"
+            }
+            done++
+        }
+        onProgress(total, total, "")
+        BulkImportSummary(imported, failed, tracks, likedAdded, failures)
+    }
 }

@@ -101,16 +101,29 @@ class SearchRepository @Inject constructor(
         }
 
         val results = when (tab) {
-            SearchTab.TRACKS -> innerTube.searchSongs(trimmed).map { track ->
-                SearchResultItem(
-                    name = track.title,
-                    artist = track.artist,
-                    artworkUrl = track.artworkUrl,
-                    subtitle = track.album,
-                    videoId = track.videoId,
-                    entityId = track.videoId,
-                    durationMs = track.durationSeconds?.takeIf { it > 0 }?.times(1_000L),
-                )
+            SearchTab.TRACKS -> {
+                val online = innerTube.searchSongs(trimmed).map { track ->
+                    SearchResultItem(
+                        name = track.title,
+                        artist = track.artist,
+                        artworkUrl = track.artworkUrl,
+                        subtitle = track.album,
+                        videoId = track.videoId,
+                        entityId = track.videoId,
+                        durationMs = track.durationSeconds?.takeIf { it > 0 }?.times(1_000L),
+                    )
+                }
+                // One result list, both sources: on-device files sit after the
+                // streamable matches unless the same song is already online.
+                val seen = online.mapTo(mutableSetOf()) {
+                    "${it.name.lowercase()}|${it.artist.orEmpty().lowercase()}"
+                }
+                val onDevice = runCatching { searchLocal(trimmed) }.getOrDefault(emptyList())
+                    // Local tracks carry their file uri; offline playlists don't.
+                    .filter { it.url.isNotBlank() }
+                    .filter { seen.add("${it.name.lowercase()}|${it.artist.orEmpty().lowercase()}") }
+                    .take(24)
+                online + onDevice
             }
             SearchTab.LOCAL -> searchLocal(trimmed)
             SearchTab.ARTISTS -> innerTube.searchArtists(trimmed).map { artist ->
@@ -180,22 +193,41 @@ class SearchRepository @Inject constructor(
         val offlinePlaylists = localOfflineRepository.playlists.value
         val artByUrl = localTracks.associateBy({ it.url }, { it.artworkUrl })
 
+        // Token AND-match across name/artist/album: "daft punk discovery"
+        // still finds the track when the tags split the words differently.
+        // Single-token queries keep the cheap substring path.
+        val tokens = query.trim().lowercase().split(Regex("\\s+")).filter { it.length > 1 }
+        fun localHaystack(track: com.lastwave.app.data.generate.GeneratedTrack): String = buildString {
+            append(track.name.lowercase()).append(' ')
+            append(track.artist.lowercase()).append(' ')
+            append(track.album.orEmpty().lowercase()).append(' ')
+            append(track.albumArtist.orEmpty().lowercase())
+        }
         val matchingTracks = localTracks
             .filter { track ->
-                track.name.contains(query, ignoreCase = true) ||
-                    track.artist.contains(query, ignoreCase = true) ||
-                    track.album.orEmpty().contains(query, ignoreCase = true) ||
-                    track.albumArtist.orEmpty().contains(query, ignoreCase = true)
+                val text = localHaystack(track)
+                if (tokens.size < 2) text.contains(query.lowercase())
+                else tokens.all { text.contains(it) }
             }
-            .sortedBy { track ->
-                when {
-                    track.name.startsWith(query, ignoreCase = true) -> 0
-                    track.name.contains(query, ignoreCase = true) -> 1
-                    track.artist.startsWith(query, ignoreCase = true) -> 2
-                    else -> 3
-                }
-            }
-            .take(60)
+            .sortedWith(
+                compareBy(
+                    { track ->
+                        val name = track.name.lowercase()
+                        val artist = track.artist.lowercase()
+                        val q = query.lowercase()
+                        when {
+                            name == q -> 0
+                            name.startsWith(q) -> 1
+                            artist.startsWith(q) -> 2
+                            name.contains(q) -> 3
+                            else -> 4
+                        }
+                    },
+                    // A shorter name that matches beats a long one that merely contains it.
+                    { it.name.length },
+                )
+            )
+            .take(120)
             .map { track ->
                 val ext = LocalAudioFormats.extensionOf(track.url).uppercase().takeIf { it.isNotBlank() }
                 SearchResultItem(
