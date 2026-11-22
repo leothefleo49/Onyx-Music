@@ -877,3 +877,65 @@ private fun LiveWaveformSeekbarPreview(
         )
     }
 }
+
+/**
+ * Previous-button behavior for a played user-queued track: ask each time
+ * (default), always replay the queued song, or always keep playlist order.
+ */
+@Composable
+internal fun PreviousNavigationDialog(
+    current: com.lastwave.app.data.local.PreviousNavigationMode,
+    onSelect: (com.lastwave.app.data.local.PreviousNavigationMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    text = stringResource(com.lastwave.app.R.string.settings_previous_navigation),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "When you press Previous after a song you queued played.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(14.dp))
+                com.lastwave.app.data.local.PreviousNavigationMode.entries.forEach { mode ->
+                    val label = when (mode) {
+                        com.lastwave.app.data.local.PreviousNavigationMode.ASK ->
+                            stringResource(com.lastwave.app.R.string.settings_previous_navigation_ask)
+                        com.lastwave.app.data.local.PreviousNavigationMode.QUEUE ->
+                            stringResource(com.lastwave.app.R.string.settings_previous_navigation_queue)
+                        com.lastwave.app.data.local.PreviousNavigationMode.CONTEXT ->
+                            stringResource(com.lastwave.app.R.string.settings_previous_navigation_context)
+                    }
+                    androidx.compose.material3.RadioButton(
+                        selected = mode == current,
+                        onClick = { onSelect(mode) },
+                        modifier = Modifier.align(androidx.compose.ui.Alignment.Start),
+                    )
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(androidx.compose.ui.Alignment.End),
+                ) { Text("Close") }
+            }
+        }
+    }
+}

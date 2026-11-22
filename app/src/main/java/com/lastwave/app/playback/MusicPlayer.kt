@@ -76,6 +76,7 @@ import com.lastwave.app.data.discover.DiscoverRepository
 import com.lastwave.app.data.generate.GeneratedTrack
 import com.lastwave.app.data.generate.youtubeVideoIdOrNull
 import com.lastwave.app.data.local.MiscSettings
+import com.lastwave.app.data.local.PreviousNavigationMode
 import com.lastwave.app.data.local.HiResStart
 import com.lastwave.app.data.local.CacheStoragePolicy
 import com.lastwave.app.data.local.AdaptiveCacheEvictor
@@ -125,6 +126,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.isActive
@@ -384,13 +386,16 @@ class MusicPlayer @Inject constructor(
     private val unavailableAttemptCounts = mutableMapOf<String, Int>()
     /**
      * Explicit listening history (mediaIdKeys, oldest first) so Previous
-     * under shuffle returns the song actually heard. ExoPlayer's internal
-     * shuffle permutation is rebuilt on toggle, crossfade handoff and queue
-     * edits, so previousMediaItemIndex rarely points at the last-heard song.
-     * Keys (not indices) survive queue insertions/removals; stale keys are
-     * skipped on pop. Main-thread only.
+     * under shuffle returns the song actually heard, and so smart Previous
+     * can tell a played user-queue insertion from original context order.
+     * ExoPlayer's internal shuffle permutation is rebuilt on toggle,
+     * crossfade handoff and queue edits, so previousMediaItemIndex rarely
+     * points at the last-heard song. Keys (not indices) survive queue
+     * insertions/removals; stale keys are skipped on pop. Main-thread only.
      */
-    internal val playHistory = ArrayDeque<String>()
+    internal val playJournal = PlayJournal()
+    /** mediaIdKeys inserted by the user via play-next / add-to-queue this queue context. */
+    private val userQueuedKeys = mutableSetOf<String>()
     /** Guards the near-end late-preload so it fires once per upcoming item. */
     private var latePreloadKey: String? = null
     /** Last steady-state preload retry (elapsedRealtime); throttles the 30s ensure. */
@@ -425,10 +430,14 @@ class MusicPlayer @Inject constructor(
     private var tailPinnedSinceMs = 0L
     private var sleepTimerDeadlineMs: Long? = null
     private var sleepTimerStep = 0
+    /** Sleep-at-end-of-queue mode: no deadline, stops when the queue runs out. */
+    private var sleepTimerEndOfQueue = false
     @Volatile
     internal var crossfadeEnabled = false
     /** Settings -> Autoplay similar songs. Off: the queue ends where the user left it. */
     @Volatile internal var autoplaySimilarEnabled = true
+    /** Settings -> how Previous resolves a played user-queued track (ask / queue / context). */
+    @Volatile internal var previousNavigationMode = PreviousNavigationMode.ASK
     @Volatile
     internal var crossfadeDurationMs = 5_000L
     /**
@@ -486,6 +495,9 @@ class MusicPlayer @Inject constructor(
     private var cachedTickerNextTrack: PlayableTrack? = null
     internal val _state = MutableStateFlow(MusicPlayerState())
     val state: StateFlow<MusicPlayerState> = _state.asStateFlow()
+    /** Smart-Previous ask: queue index of the played user-queued track awaiting a choice. */
+    data class PreviousChoice(val queuedIndex: Int)
+    val previousChoiceEvents = MutableSharedFlow<PreviousChoice>(extraBufferCapacity = 1)
     /** Album identity for ALBUM loudness mode: one measurement spans the album. */
     private val loudnessAlbumKey: StateFlow<String?> = _state
         .map { it.current?.album }
@@ -2527,6 +2539,7 @@ class MusicPlayer @Inject constructor(
                     withContext(Dispatchers.Main.immediate) { disableRadioQueue() }
                 }
                 autoplaySimilarEnabled = settings.autoplaySimilarEnabled
+                previousNavigationMode = settings.previousNavigationMode
                 crossfadeDurationMs = settings.crossfadeSeconds.coerceIn(1, 12) * 1000L
                 stopPlaybackOnTaskRemovedPref = settings.stopPlaybackOnTaskRemoved
                 pauseOnZeroVolumePref = settings.pauseOnZeroVolume
@@ -2803,7 +2816,8 @@ class MusicPlayer @Inject constructor(
         unavailableAttemptCounts.clear()
         // Fresh queue context: previous-queue history no longer applies.
         // (Same-queue navigations via startResolvedQueuePlayback keep it.)
-        playHistory.clear()
+        synchronized(playJournal) { playJournal.clear() }
+        userQueuedKeys.clear()
         latePreloadKey = null
         lastPreloadRetryMs = 0L
         startResolvedQueuePlayback(
@@ -3093,6 +3107,7 @@ class MusicPlayer @Inject constructor(
 
     fun playNext(track: PlayableTrack) = onMain {
         val enriched = track.withYoutubeArtwork()
+        userQueuedKeys.add(enriched.mediaIdKey())
         if (isCasting) {
             _state.update { snapshot ->
                 val queue = snapshot.queue.toMutableList()
@@ -3126,6 +3141,7 @@ class MusicPlayer @Inject constructor(
 
     fun addToQueue(track: PlayableTrack) = onMain {
         val enriched = track.withYoutubeArtwork()
+        userQueuedKeys.add(enriched.mediaIdKey())
         if (isCasting) {
             _state.update { it.copy(queue = it.queue + enriched) }
             persistPlaybackSession()
@@ -3163,6 +3179,7 @@ class MusicPlayer @Inject constructor(
             track.title.isNotBlank() && track.artist.isNotBlank() && seenQueueKeys.add(track.queueKey())
         }
         if (fresh.isEmpty()) return@onMain
+        fresh.forEach { userQueuedKeys.add(it.mediaIdKey()) }
 
         if (isCasting) {
             _state.update { it.copy(queue = it.queue + fresh) }
@@ -3788,51 +3805,104 @@ class MusicPlayer @Inject constructor(
         if (pos > 5_000) {
             seekTo(0)
         } else {
-            // Under shuffle, walk the explicit listening history first:
-            // the engine permutation is rebuilt on toggle/handoff/edits, so
-            // its "previous" is often a song never heard in this session.
-            // With exhausted history there is no heard song to return to â€”
-            // restart instead of jumping to a random unheard track.
-            val historyIndex = if (pendingState.shuffleEnabled) popHistoryIndex(pendingState) else null
-            if (historyIndex == null && pendingState.shuffleEnabled) {
-                seekTo(0)
-                return@onMain
-            }
-            val timeline = player.currentTimeline
-            val fromIndex = if (pendingState.currentIndex in 0 until player.mediaItemCount) {
-                pendingState.currentIndex
-            } else {
-                player.currentMediaItemIndex
-            }
-            val repeatOne = player.repeatMode == Player.REPEAT_MODE_ONE ||
-                pendingState.repeatMode == Player.REPEAT_MODE_ONE
-            var candidatePrev = if (!timeline.isEmpty && fromIndex in 0 until player.mediaItemCount) {
-                timeline.getPreviousWindowIndex(fromIndex, player.repeatMode, player.shuffleModeEnabled).takeIf { it != C.INDEX_UNSET }
-            } else {
-                player.previousMediaItemIndex.takeIf { it != C.INDEX_UNSET }
-            }
-            var guard = 0
-            while (candidatePrev != null &&
-                guard++ < player.mediaItemCount &&
-                (candidatePrev == fromIndex ||
-                 candidatePrev == pendingState.currentIndex ||
-                 (candidatePrev in 0 until player.mediaItemCount && player.getMediaItemAt(candidatePrev).mediaId in unavailableMediaIds))
-            ) {
-                if (repeatOne) break
-                candidatePrev = timeline.getPreviousWindowIndex(candidatePrev, player.repeatMode, player.shuffleModeEnabled).takeIf { it != C.INDEX_UNSET }
-            }
-            val enginePrev = candidatePrev
-            val index = historyIndex
-                ?: if (enginePrev == null || enginePrev == fromIndex || enginePrev == pendingState.currentIndex || (repeatOne && enginePrev == player.currentMediaItemIndex)) {
-                    val logical = previousQueueIndex(pendingState)
-                    if (logical != C.INDEX_UNSET) logical else enginePrev
-                } else {
-                    enginePrev
+            // Smart Previous (linear order only — under shuffle the history
+            // walk below already returns what actually played, queued or
+            // not, and "original context position" is undefined): when the
+            // last-heard track was a user queue insertion, resolve the
+            // conflict per the user's setting instead of silently dropping
+            // back into playlist order.
+            if (!pendingState.shuffleEnabled && previousNavigationMode != PreviousNavigationMode.CONTEXT) {
+                val currentKey = pendingState.current?.mediaIdKey()
+                val journalPrev = synchronized(playJournal) {
+                    playJournal.peekPrevious(currentKey, pendingState.queue.map { it.mediaIdKey() })
                 }
-            index.takeIf { it != C.INDEX_UNSET }?.let {
-                if (it in 0 until player.mediaItemCount) resolveAndPlayQueueItem(it)
-                else playPendingQueueItem(it, pendingState)
+                if (journalPrev != null && journalPrev.wasUserQueued) {
+                    val index = pendingState.queue.indexOfFirst { it.mediaIdKey() == journalPrev.key }
+                    if (index >= 0) {
+                        when (previousNavigationMode) {
+                            PreviousNavigationMode.QUEUE -> playJournalEntry(journalPrev, index, pendingState)
+                            PreviousNavigationMode.ASK -> previousChoiceEvents.tryEmit(PreviousChoice(index))
+                            PreviousNavigationMode.CONTEXT -> {}
+                        }
+                        if (previousNavigationMode != PreviousNavigationMode.CONTEXT) return@onMain
+                    }
+                }
             }
+            previousContext(pendingState)
+        }
+    }
+
+    /** Resolve a smart-Previous ask by replaying the played queue insertion. */
+    fun previousChooseQueued() = onMain {
+        val pendingState = _state.value
+        val currentKey = pendingState.current?.mediaIdKey()
+        val entry = synchronized(playJournal) {
+            playJournal.peekPrevious(currentKey, pendingState.queue.map { it.mediaIdKey() })
+        } ?: return@onMain
+        val index = pendingState.queue.indexOfFirst { it.mediaIdKey() == entry.key }
+        if (index >= 0) playJournalEntry(entry, index, pendingState)
+    }
+
+    /** Resolve a smart-Previous ask by keeping original context order. */
+    fun previousChooseContext() = onMain {
+        previousContext(_state.value)
+    }
+
+    private fun playJournalEntry(entry: PlayJournal.Entry, index: Int, pendingState: MusicPlayerState) {
+        synchronized(playJournal) { playJournal.consumeThrough(entry) }
+        if (index in 0 until player.mediaItemCount) resolveAndPlayQueueItem(index)
+        else playPendingQueueItem(index, pendingState)
+    }
+
+    /**
+     * Classic Previous: history walk under shuffle, otherwise engine/logical
+     * queue order. This is the pre-smart-Previous behavior, verbatim.
+     */
+    private fun previousContext(pendingState: MusicPlayerState) {
+        // Under shuffle, walk the explicit listening history first:
+        // the engine permutation is rebuilt on toggle/handoff/edits, so
+        // its "previous" is often a song never heard in this session.
+        // With exhausted history there is no heard song to return to â€”
+        // restart instead of jumping to a random unheard track.
+        val historyIndex = if (pendingState.shuffleEnabled) popHistoryIndex(pendingState) else null
+        if (historyIndex == null && pendingState.shuffleEnabled) {
+            seekTo(0)
+            return
+        }
+        val timeline = player.currentTimeline
+        val fromIndex = if (pendingState.currentIndex in 0 until player.mediaItemCount) {
+            pendingState.currentIndex
+        } else {
+            player.currentMediaItemIndex
+        }
+        val repeatOne = player.repeatMode == Player.REPEAT_MODE_ONE ||
+            pendingState.repeatMode == Player.REPEAT_MODE_ONE
+        var candidatePrev = if (!timeline.isEmpty && fromIndex in 0 until player.mediaItemCount) {
+            timeline.getPreviousWindowIndex(fromIndex, player.repeatMode, player.shuffleModeEnabled).takeIf { it != C.INDEX_UNSET }
+        } else {
+            player.previousMediaItemIndex.takeIf { it != C.INDEX_UNSET }
+        }
+        var guard = 0
+        while (candidatePrev != null &&
+            guard++ < player.mediaItemCount &&
+            (candidatePrev == fromIndex ||
+             candidatePrev == pendingState.currentIndex ||
+             (candidatePrev in 0 until player.mediaItemCount && player.getMediaItemAt(candidatePrev).mediaId in unavailableMediaIds))
+        ) {
+            if (repeatOne) break
+            candidatePrev = timeline.getPreviousWindowIndex(candidatePrev, player.repeatMode, player.shuffleModeEnabled).takeIf { it != C.INDEX_UNSET }
+        }
+        val enginePrev = candidatePrev
+        val index = historyIndex
+            ?: if (enginePrev == null || enginePrev == fromIndex || enginePrev == pendingState.currentIndex || (repeatOne && enginePrev == player.currentMediaItemIndex)) {
+                val logical = previousQueueIndex(pendingState)
+                if (logical != C.INDEX_UNSET) logical else enginePrev
+            } else {
+                enginePrev
+            }
+        index.takeIf { it != C.INDEX_UNSET }?.let {
+            if (it in 0 until player.mediaItemCount) resolveAndPlayQueueItem(it)
+            else playPendingQueueItem(it, pendingState)
         }
     }
 
@@ -3886,10 +3956,8 @@ class MusicPlayer @Inject constructor(
 
     private fun recordHistory(mediaIdKey: String?) {
         if (mediaIdKey.isNullOrBlank()) return
-        synchronized(playHistory) {
-            if (playHistory.lastOrNull() == mediaIdKey) return
-            playHistory.addLast(mediaIdKey)
-            while (playHistory.size > MAX_PLAY_HISTORY) playHistory.removeFirst()
+        synchronized(playJournal) {
+            playJournal.record(mediaIdKey, mediaIdKey in userQueuedKeys)
         }
     }
 
@@ -3899,9 +3967,9 @@ class MusicPlayer @Inject constructor(
      * that left the queue can't be resolved back to tracks and are skipped.
      */
     private fun List<PlayableTrack>.withHistoryTracks(): List<PlayableTrack> {
-        if (playHistory.isEmpty()) return this
+        if (playJournal.size == 0) return this
         val byKey = associateBy { it.mediaIdKey() }
-        return this + playHistory.mapNotNull { byKey[it] }
+        return this + playJournal.keys().mapNotNull { byKey[it] }
     }
 
     /**
@@ -3910,13 +3978,10 @@ class MusicPlayer @Inject constructor(
      */
     private fun popHistoryIndex(snapshot: MusicPlayerState): Int? {
         val currentKey = snapshot.current?.mediaIdKey()
-        while (playHistory.isNotEmpty()) {
-            val key = playHistory.removeLast()
-            if (key == currentKey) continue
-            val index = snapshot.queue.indexOfFirst { it.mediaIdKey() == key }
-            if (index >= 0) return index
-        }
-        return null
+        val entry = synchronized(playJournal) {
+            playJournal.popPrevious(currentKey) { key -> snapshot.queue.any { it.mediaIdKey() == key } }
+        } ?: return null
+        return snapshot.queue.indexOfFirst { it.mediaIdKey() == entry.key }
     }
 
     /**
@@ -4061,9 +4126,32 @@ class MusicPlayer @Inject constructor(
         sleepTimerStep = SLEEP_TIMER_MINUTES.indexOf(minutes).coerceAtLeast(0)
         sleepTimerDeadlineMs = minutes.takeIf { it > 0 }
             ?.let { SystemClock.elapsedRealtime() + it * 60_000L }
+        sleepTimerEndOfQueue = false
         _state.update {
-            it.copy(sleepTimerRemainingMs = sleepTimerDeadlineMs?.minus(SystemClock.elapsedRealtime()))
+            it.copy(
+                sleepTimerRemainingMs = sleepTimerDeadlineMs?.minus(SystemClock.elapsedRealtime()),
+                sleepTimerEndOfQueue = false,
+            )
         }
+    }
+
+    /**
+     * Sleep at the end of the current queue/playlist instead of on a clock:
+     * playback stops when the last song finishes (before endless-queue
+     * refills, autoplay-similar and repeat-all would continue it).
+     */
+    fun setSleepTimerEndOfQueue() = onMain {
+        sleepTimerDeadlineMs = null
+        sleepTimerStep = 0
+        sleepTimerEndOfQueue = true
+        _state.update { it.copy(sleepTimerRemainingMs = null, sleepTimerEndOfQueue = true) }
+    }
+
+    private fun clearSleepTimerState() {
+        sleepTimerDeadlineMs = null
+        sleepTimerStep = 0
+        sleepTimerEndOfQueue = false
+        _state.update { it.copy(sleepTimerRemainingMs = null, sleepTimerEndOfQueue = false) }
     }
     fun clearUpcoming() = onMain {
         if (isCasting) {
@@ -4109,6 +4197,7 @@ class MusicPlayer @Inject constructor(
         unavailableSkipJob?.cancel()
         sleepTimerDeadlineMs = null
         sleepTimerStep = 0
+        sleepTimerEndOfQueue = false
         // Save the podcast resume position before the queue is torn down.
         checkpointPodcastProgress()
         // stop() keeps playWhenReady unchanged, so no listener callback would
@@ -4157,6 +4246,9 @@ class MusicPlayer @Inject constructor(
     }
     fun insertQueueItem(index: Int, track: PlayableTrack) = onMain {
         val enriched = track.withYoutubeArtwork()
+        // Undo of a swipe-remove: re-insertion keeps the original provenance
+        // (marked again is a no-op for user-queued tracks).
+        userQueuedKeys.add(enriched.mediaIdKey())
         if (isCasting) {
             val snapshot = _state.value
             val queue = snapshot.queue.toMutableList()
@@ -5318,6 +5410,15 @@ class MusicPlayer @Inject constructor(
         if (timeline.isEmpty) return
         var nextIndex = timeline.getNextWindowIndex(currentIndex, player.repeatMode, player.shuffleModeEnabled)
         if (nextIndex == C.INDEX_UNSET) {
+            // Sleep-at-end-of-queue wins over every continuation path below
+            // (endless refills, repeat-all wrap, autoplay-similar radio).
+            if (sleepTimerEndOfQueue) {
+                clearSleepTimerState()
+                player.pause()
+                _state.update { it.copy(isPlaying = false, isBuffering = false) }
+                persistPlaybackSession()
+                return
+            }
             // Queue end: endless queues refill asynchronously â€” kick them
             // and seamlessly resume once items land without pausing/stopping.
             if (discoverQueueActive) {
@@ -9329,8 +9430,6 @@ class MusicPlayer @Inject constructor(
         const val CURRENT_TRACK_CACHE_MAX_SKIP_WINDOWS = 64
         const val MAX_PREPARED_STREAMS = 256
         const val MAX_KNOWN_DURATIONS = 512
-        /** Cap for the explicit shuffle-Previous listening history. */
-        const val MAX_PLAY_HISTORY = 1_000 // shuffle reads it as "already played"; cover big playlists
         const val RESOLVED_URL_EXPIRY_MARGIN_MS = 2 * 60 * 1000L
         /** Offline license renewal attempt before giving up to streaming. */
         const val OFFLINE_LICENSE_RENEW_TIMEOUT_MS = 8_000L

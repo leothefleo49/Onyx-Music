@@ -391,6 +391,8 @@ internal fun FullPlayer(
     onProbeLyricsProviders: (() -> Unit)? = null,
     onSelectLyricsProvider: ((com.lastwave.app.data.local.LyricsProvider) -> Unit)? = null,
     onTryAnotherLyricsSource: (() -> Unit)? = null,
+    previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
+    onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
 ) {
     val track = state.current ?: return
     val haptics = LocalHapticFeedback.current
@@ -1421,6 +1423,9 @@ internal fun FullPlayer(
                                         .fillMaxSize()
                                         .adaptiveContentWidth(maxWidth = if (isTabletLandscape) 960.dp else 720.dp)
                                         .padding(horizontal = 12.dp),
+                                    onBack = { onTabChange(FullPlayerTab.NOW_PLAYING) },
+                                    previewQueues = previewQueues,
+                                    onPlayPreviewQueue = onPlayPreviewQueue,
                                 )
                             }
                         }

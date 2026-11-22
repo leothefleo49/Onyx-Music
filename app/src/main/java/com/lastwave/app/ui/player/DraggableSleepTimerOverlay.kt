@@ -58,10 +58,11 @@ fun DraggableSleepTimerOverlay(
     sleepTimerRemainingMs: Long?,
     onCycleTimer: () -> Unit,
     onCloseTimer: () -> Unit = {},
+    sleepTimerEndOfQueue: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     AnimatedVisibility(
-        visible = sleepTimerRemainingMs != null,
+        visible = sleepTimerRemainingMs != null || sleepTimerEndOfQueue,
         enter = fadeIn(tween(250)) + scaleIn(tween(250)),
         exit = fadeOut(tween(250)) + scaleOut(tween(250)),
         modifier = modifier.fillMaxSize(),
@@ -74,7 +75,9 @@ fun DraggableSleepTimerOverlay(
             val hours = (remainingMs / 3600000).toInt()
             val minutes = ((remainingMs % 3600000) / 60000).toInt()
             val seconds = ((remainingMs % 60000) / 1000).toInt()
-            val timeText = if (hours > 0) {
+            val timeText = if (sleepTimerEndOfQueue) {
+                "End"
+            } else if (hours > 0) {
                 String.format("%d:%02d:%02d", hours, minutes, seconds)
             } else {
                 String.format("%02d:%02d", minutes, seconds)
@@ -123,7 +126,8 @@ fun DraggableSleepTimerOverlay(
                     maxDurationMs = remainingMs
                 }
             }
-            val progressFraction = (remainingMs.toFloat() / maxDurationMs.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+            val progressFraction = if (sleepTimerEndOfQueue) 1f
+            else (remainingMs.toFloat() / maxDurationMs.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
             val animatedProgress by animateFloatAsState(
                 targetValue = progressFraction,
                 animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
@@ -210,7 +214,7 @@ fun DraggableSleepTimerOverlay(
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Timer,
-                                contentDescription = "Sleep Timer",
+                                contentDescription = if (sleepTimerEndOfQueue) "Sleep at end of queue" else "Sleep Timer",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(if (hours > 0) 12.dp else 14.dp),
                             )

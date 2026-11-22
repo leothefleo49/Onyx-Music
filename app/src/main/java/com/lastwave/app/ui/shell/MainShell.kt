@@ -857,6 +857,23 @@ fun MainShell(
                         }
                     }
                     Spacer(Modifier.height(16.dp))
+                    val endOfQueueStats = remember(showSleepTimerDialog) {
+                        val s = musicPlayer.state.value
+                        com.lastwave.app.ui.player.QueueStatsFormatter
+                            .formatQueueStats(s.queue.drop((s.currentIndex + 1).coerceAtLeast(0)))
+                    }
+                    TextButton(
+                        onClick = {
+                            musicPlayer.setSleepTimerEndOfQueue()
+                            showSleepTimerDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "End of queue \u2014 $endOfQueueStats",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
                     listOf(0, 15, 30, 45, 60).forEach { minutes ->
                         TextButton(
                             onClick = {

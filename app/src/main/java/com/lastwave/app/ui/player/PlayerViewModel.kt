@@ -357,11 +357,21 @@ class PlayerViewModel @Inject constructor(
     private val routeNavigator: com.lastwave.app.ui.navigation.AppRouteNavigator,
     private val localMusicLibrary: com.lastwave.app.data.localmusic.LocalMusicLibrary,
     private val localOfflineRepository: com.lastwave.app.data.localmusic.LocalOfflineRepository,
+    private val previewQueueRepository: com.lastwave.app.data.queue.PreviewQueueRepository,
 ) : ViewModel() {
     val navEvents = navigator.events
     val state = player.state
     val chromeState = player.chromeState
     val progressState = player.progressState
+    /** Recently played queues, offered back inside the queue panel. */
+    val previewQueues: StateFlow<List<com.lastwave.app.data.queue.PreviewQueue>> =
+        previewQueueRepository.previewQueues
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun playPreviewQueue(queue: com.lastwave.app.data.queue.PreviewQueue) {
+        if (queue.tracks.isEmpty()) return
+        player.playQueue(queue.tracks, 0, sourceLabel = queue.title)
+    }
     /**
      * Sampled copy for the collapsed player's 3 dp bar / ring. Collecting the
      * 60 ms [progressState] from composition scheduled a Compose frame 15x/s

@@ -764,6 +764,11 @@ class SettingsViewModel @Inject constructor(
         settingsPreferences.setAutoplaySimilarEnabled(enabled)
     }
 
+    fun setPreviousNavigationMode(mode: com.lastwave.app.data.local.PreviousNavigationMode) =
+        launchSettingsAction("update previous navigation") {
+            settingsPreferences.setPreviousNavigationMode(mode)
+        }
+
     fun setCrossfadeEnabled(enabled: Boolean) = launchSettingsAction("update crossfade") {
         settingsPreferences.setCrossfadeEnabled(enabled)
         if (enabled) autoMixPreferences.setAutoMixEnabled(false)

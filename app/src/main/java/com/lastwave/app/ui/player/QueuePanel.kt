@@ -4,6 +4,7 @@ package com.lastwave.app.ui.player
 
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.History
 import com.lastwave.app.data.playlist.isLikedIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -334,6 +335,9 @@ internal fun QueuePanel(
     player: MusicPlayer,
     bottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
     modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
+    previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
+    onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
 ) {
     val isQueueLocked = isQueueLockedState
     val listState = rememberLazyListState()
@@ -431,6 +435,22 @@ internal fun QueuePanel(
             Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (onBack != null) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.14f)),
+                ) {
+                    Icon(
+                        Icons.Filled.ArrowBack,
+                        "Back to player",
+                        tint = Color.White.copy(alpha = 0.90f),
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+            }
             Column(Modifier.weight(1f)) {
                 Text(
                     "Up next",
@@ -439,8 +459,11 @@ internal fun QueuePanel(
                     color = Color.White,
                 )
                 if (state.queue.isNotEmpty()) {
+                    val upcomingTracks = state.queue.drop(state.currentIndex.coerceAtLeast(0) + 1)
+                    val remainingStats = QueueStatsFormatter.formatQueueStats(upcomingTracks)
                     Text(
-                        "${state.currentIndex.coerceAtLeast(0) + 1} playing",
+                        "${state.currentIndex.coerceAtLeast(0) + 1} playing" +
+                            if (upcomingTracks.isNotEmpty()) " \u2022 $remainingStats left" else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White.copy(alpha = 0.70f),
                     )
@@ -500,6 +523,53 @@ internal fun QueuePanel(
                 )
             }
 
+        }
+        // Recent queues: the last queues played, one tap to bring one back.
+        if (previewQueues.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                Text(
+                    "Recent queues",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.60f),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                ) {
+                    items(previewQueues, key = { it.id }) { queue ->
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color.White.copy(alpha = 0.08f))
+                                .clickable { onPlayPreviewQueue(queue) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.History,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.55f),
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                queue.title,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.88f),
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                            Text(
+                                "${queue.tracks.size}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.55f),
+                            )
+                        }
+                    }
+                }
+            }
         }
         if (shuffleUpcoming.isNotEmpty()) {
             Column(

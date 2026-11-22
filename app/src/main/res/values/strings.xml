@@ -655,6 +655,17 @@
     <string name="menu_custom_timer">Custom Timer</string>
     <string name="menu_timer_off">Off</string>
     <string name="menu_timer_minutes">%1$d minutes</string>
+    <string name="menu_timer_end_of_queue">End of queue \u2014 %1$s</string>
+
+    <!-- Smart Previous (played user-queued track) -->
+    <string name="previous_choice_title">Previous song</string>
+    <string name="previous_choice_message">The song before this was one you queued. Replay the queued song, or go back to your playlist\'s order?</string>
+    <string name="previous_choice_queued">Replay queued song</string>
+    <string name="previous_choice_context">Playlist order</string>
+    <string name="settings_previous_navigation">Previous button</string>
+    <string name="settings_previous_navigation_ask">Ask when a queued song played</string>
+    <string name="settings_previous_navigation_queue">Always replay queued song</string>
+    <string name="settings_previous_navigation_context">Always keep playlist order</string>
     <string name="menu_add_queue">Add to queue</string>
     <string name="menu_open_lastfm">Open in Last.fm</string>
     <string name="menu_copy_link">Copy link</string>

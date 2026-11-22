@@ -2,6 +2,7 @@
 
 package com.lastwave.app.ui.player
 
+import com.lastwave.app.R
 import com.lastwave.app.data.local.SeekbarStyle
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.filled.CheckCircle
@@ -388,6 +389,30 @@ fun PlayerHost(
         onDispose { com.lastwave.app.playback.PlaybackUiDemand.needsHighFrequency = false }
     }
     var playlistTrack by remember { mutableStateOf<PlayableTrack?>(null) }
+    // Smart-Previous ask: a played user-queued track is waiting on a choice.
+    var previousChoice by remember { mutableStateOf<MusicPlayer.PreviousChoice?>(null) }
+    LaunchedEffect(viewModel) {
+        viewModel.player.previousChoiceEvents.collect { previousChoice = it }
+    }
+    previousChoice?.let { choice ->
+        AlertDialog(
+            onDismissRequest = { previousChoice = null },
+            title = { Text(stringResource(R.string.previous_choice_title)) },
+            text = { Text(stringResource(R.string.previous_choice_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    previousChoice = null
+                    viewModel.player.previousChooseQueued()
+                }) { Text(stringResource(R.string.previous_choice_queued)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    previousChoice = null
+                    viewModel.player.previousChooseContext()
+                }) { Text(stringResource(R.string.previous_choice_context)) }
+            },
+        )
+    }
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val keepLyricsAwake = lyricsOpen && settings.keepLyricsScreenAwake
     val currentView = androidx.compose.ui.platform.LocalView.current
@@ -605,11 +630,12 @@ fun PlayerHost(
             }
 
             // Sleep Timer Overlay Button (shown whenever timer is active, regardless of mini-player or button mode)
-            if (!expanded && playbackState.sleepTimerRemainingMs != null) {
+            if (!expanded && (playbackState.sleepTimerRemainingMs != null || playbackState.sleepTimerEndOfQueue)) {
                 DraggableSleepTimerOverlay(
                     sleepTimerRemainingMs = playbackState.sleepTimerRemainingMs,
                     onCycleTimer = { viewModel.player.cycleSleepTimer() },
                     onCloseTimer = { viewModel.player.setSleepTimerMinutes(0) },
+                    sleepTimerEndOfQueue = playbackState.sleepTimerEndOfQueue,
                 )
             }
             val currentTrack = state.current
@@ -771,6 +797,7 @@ internal fun ExpandedPlayer(
         currentTrack.toGeneratedTrack().isLikedIn(likedTrackKeys)
     val youTubeLiked by viewModel.youTubeLiked.collectAsStateWithLifecycle()
     val lyricsOffsetMs by viewModel.liveLyricsOffsetMs.collectAsStateWithLifecycle()
+    val previewQueues by viewModel.previewQueues.collectAsStateWithLifecycle()
     FullPlayer(
         state = state,
         progressState = viewModel.progressState,
@@ -817,6 +844,8 @@ internal fun ExpandedPlayer(
         isOpen = isOpen,
         onSelectLyricsProvider = viewModel::selectLyricsProvider,
         onTryAnotherLyricsSource = viewModel::tryAnotherLyricsSource,
+        previewQueues = previewQueues,
+        onPlayPreviewQueue = viewModel::playPreviewQueue,
     )
 }
 
