@@ -517,9 +517,10 @@ internal const val YOUTUBE_ORIGIN = "https://www.youtube.com"
 
 /** Where googlevideo stops authorising some clients' URLs: the first MiB plays, the rest is 403. */
 internal const val PROBE_AUTH_BOUNDARY_BYTES = 1L * 1024 * 1024
-internal const val PROBE_WINDOW_BYTES = 1L * 1024 * 1024
+/** Keep probe range within the <=512 KB bounded-range limit enforced on token-free clients. */
+internal const val PROBE_WINDOW_BYTES = 256L * 1024
 /** How much of the probe's answer must arrive, so a body that stalls after its headers fails. */
-internal const val PROBE_READ_BYTES = 16L * 1024
+internal const val PROBE_READ_BYTES = 4L * 1024
 
 /**
  * A full 1 MiB window (two-byte probes hide media HTTP 403s), taken just past

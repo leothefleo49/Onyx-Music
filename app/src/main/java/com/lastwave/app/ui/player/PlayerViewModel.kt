@@ -375,21 +375,77 @@ class PlayerViewModel @Inject constructor(
         trackOverridesRepository.overrides
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    val undoQueueSwitch: StateFlow<com.lastwave.app.playback.QueueSwitchUndoSnapshot?> =
+        player.undoQueueSwitch
+
+    val autoMixEnabled: StateFlow<Boolean> = autoMixPreferences.settings
+        .map { it.autoMixEnabled }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun undoQueueSwitch() = player.undoQueueSwitch()
+
+    fun dismissQueueSwitchUndo() = player.dismissQueueSwitchUndo()
+
     fun playPreviewQueue(queue: com.lastwave.app.data.queue.PreviewQueue) {
         if (queue.tracks.isEmpty()) return
-        player.playQueue(queue.tracks, queue.startIndex, sourceLabel = queue.title)
+        player.playQueue(
+            tracks = queue.tracks,
+            startIndex = queue.startIndex,
+            sourceLabel = queue.title,
+            startShuffled = queue.shuffleEnabled,
+            startPositionMs = queue.positionMs,
+            savedShuffleOrder = queue.shuffleOrder,
+        )
     }
 
-    /** Spur-of-the-moment queue transitions: turn on the improved Automix
-     *  tier without sending the listener into deep settings. */
-    fun mixCurrentQueue() {
+    /** True ON/OFF toggle for spur-of-the-moment queue transitions (Automix). */
+    fun toggleQueueTransitions() {
         viewModelScope.launch {
+            val currentlyOn = autoMixEnabled.value
+            if (currentlyOn) {
+                autoMixPreferences.setAutoMixEnabled(false)
+                _toastMessage.emit("Smooth transitions OFF")
+            } else {
+                autoMixPreferences.setAutoMixEnabled(true)
+                autoMixPreferences.setAutoMixTier(
+                    com.lastwave.app.playback.automix.api.AutoMixTier.IMPROVED_SMART,
+                )
+                if (player.bitPerfectEnabled) {
+                    _toastMessage.emit("Smooth transitions ON (paused while Bit-Perfect mode is on)")
+                } else {
+                    _toastMessage.emit("Smooth transitions ON")
+                }
+            }
+        }
+    }
+
+    /** Disables Bit-Perfect mode so smooth transitions can run immediately. */
+    fun disableBitPerfectForTransitions() {
+        viewModelScope.launch {
+            settingsPreferences.setBitPerfectEnabled(false)
             autoMixPreferences.setAutoMixEnabled(true)
             autoMixPreferences.setAutoMixTier(
                 com.lastwave.app.playback.automix.api.AutoMixTier.IMPROVED_SMART,
             )
-            _toastMessage.emit("Queue transitions on")
+            _toastMessage.emit("Bit-Perfect turned off — smooth transitions active")
         }
+    }
+
+    /** Saves the currently playing queue directly as a Library playlist. */
+    fun saveCurrentQueueAsPlaylist() {
+        val snap = player.state.value
+        if (snap.queue.isEmpty()) return
+        savePreviewQueueAsPlaylist(
+            com.lastwave.app.data.queue.PreviewQueue(
+                id = System.currentTimeMillis().toString(),
+                title = snap.sourceLabel.takeIf { it.isNotBlank() && it != "Onyx" && it != "Home" }
+                    ?: (snap.current?.title?.let { "$it queue" } ?: "Saved queue"),
+                timestamp = System.currentTimeMillis(),
+                tracks = snap.queue,
+                artworkUrl = snap.current?.artworkUrl,
+                startIndex = snap.currentIndex.coerceAtLeast(0),
+            ),
+        )
     }
 
     /** Snapshots a recent queue into a normal library playlist. */
@@ -502,6 +558,12 @@ class PlayerViewModel @Inject constructor(
     fun setLyricsStyle(style: LyricsStyle) {
         viewModelScope.launch {
             settingsPreferences.setLyricsStyle(style)
+        }
+    }
+
+    fun setAodVisualizerMode(mode: String) {
+        viewModelScope.launch {
+            settingsPreferences.setAodVisualizerMode(mode)
         }
     }
 

@@ -726,11 +726,7 @@ fun ManualDjMixSheetContent(
                 onClick = { viewModel.triggerLivePreview(previewStarted, previewUnavailable) },
                 modifier = Modifier
                     .weight(1.3f)
-                    .height(48.dp)
-                    .liquidGlassChrome(
-                        shape = RoundedCornerShape(24.dp),
-                        preset = LiquidGlassPreset.PlayerControls,
-                    ),
+                    .height(48.dp),
             ) {
                 Icon(
                     imageVector = Icons.Rounded.PlayArrow,

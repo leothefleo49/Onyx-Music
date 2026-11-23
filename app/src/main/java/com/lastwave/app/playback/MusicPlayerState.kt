@@ -296,9 +296,35 @@ data class PlaybackProgressState(
 
 
 
+/** Canonical playhead identity shared by resetPlayhead and advancePlayhead. */
+internal fun PlayableTrack.playheadKey(): String =
+    videoId?.takeIf { it.isNotBlank() } ?: "$title|$artist"
+
+/** Snapshot of the queue that was playing immediately before a sudden switch. */
+@androidx.compose.runtime.Immutable
+data class QueueSwitchUndoSnapshot(
+    val tracks: List<PlayableTrack>,
+    val currentIndex: Int,
+    val positionMs: Long,
+    val sourceLabel: String,
+    val shuffleEnabled: Boolean = false,
+    val shuffleOrder: List<Int> = emptyList(),
+    val isEndlessQueue: Boolean = false,
+    /** Shown prominently for the first 1-2 songs after a sudden switch. */
+    val tracksRemainingBudget: Int = 2,
+) {
+    val activeTrack: PlayableTrack?
+        get() = tracks.getOrNull(currentIndex.coerceIn(0, tracks.lastIndex.coerceAtLeast(0)))
+
+    val displayLabel: String
+        get() = sourceLabel.takeIf { it.isNotBlank() && it != "Onyx" && it != "Home" }
+            ?: activeTrack?.title?.takeIf { it.isNotBlank() }
+            ?: "Previous queue"
+}
+
 internal const val EXCLUSIVE_DRIFT_ABORT_PPM = 20_000.0
 internal const val EXCLUSIVE_DRIFT_ABORT_TICKS = 2
-internal const val POSITION_PERSIST_INTERVAL_MS = 5_000L
+internal const val POSITION_PERSIST_INTERVAL_MS = 2_000L
 internal const val MAX_PERSISTED_QUEUE_SIZE = 200
 internal const val RESTORED_PREVIOUS_TRACKS = 50
 internal const val PLAYBACK_SESSION_KEY = "active_session"

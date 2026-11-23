@@ -109,11 +109,11 @@ class AlbumViewModel @Inject constructor(
         val state = _uiState.value as? AlbumUiState.Success ?: return
         val tracks = state.data.tracks
         if (tracks.isNotEmpty()) {
-            val shuffled = tracks.shuffled()
             musicPlayer.playQueue(
-                shuffled,
-                0,
+                tracks,
+                tracks.indices.random(),
                 sourceLabel = "${state.data.title} — ${state.data.artist}",
+                startShuffled = true,
             )
         }
     }

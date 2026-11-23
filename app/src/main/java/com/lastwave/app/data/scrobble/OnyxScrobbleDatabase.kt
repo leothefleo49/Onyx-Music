@@ -10,6 +10,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
 import androidx.room.Upsert
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -108,6 +110,23 @@ interface ScrobbleEventDao {
     @Query("SELECT scrobbledAtMs FROM scrobble_events ORDER BY scrobbledAtMs ASC")
     suspend fun getAllTimestamps(): List<Long>
 
+    @Query("UPDATE scrobble_events SET genre = :genre WHERE id = :id")
+    suspend fun updateGenreById(id: Long, genre: String)
+
+    @Query("UPDATE scrobble_events SET genre = :genre WHERE LOWER(TRIM(artist)) = :artistLower AND (genre IS NULL OR TRIM(genre) = '')")
+    suspend fun updateMissingGenreByArtist(artistLower: String, genre: String)
+
+    @Query("UPDATE scrobble_events SET mediaCategory = :category WHERE id = :id")
+    suspend fun updateMediaCategory(id: Long, category: String)
+
+    @Query(
+        "SELECT * FROM scrobble_events " +
+            "WHERE (mediaCategory = 'MUSIC' OR mediaCategory = '') " +
+            "AND scrobbledAtMs >= :startMs AND scrobbledAtMs <= :endMs " +
+            "ORDER BY scrobbledAtMs DESC",
+    )
+    suspend fun getMusicInRange(startMs: Long, endMs: Long): List<ScrobbleEventEntity>
+
     @Query("DELETE FROM scrobble_events")
     suspend fun clearAll()
 }
@@ -157,13 +176,26 @@ interface ScrobbleAppFilterDao {
         ScrobbleEditRuleEntity::class,
         ScrobbleAppFilterEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class OnyxScrobbleDatabase : RoomDatabase() {
     abstract fun scrobbleEventDao(): ScrobbleEventDao
     abstract fun scrobbleEditRuleDao(): ScrobbleEditRuleDao
     abstract fun scrobbleAppFilterDao(): ScrobbleAppFilterDao
+
+    companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE scrobble_events ADD COLUMN mediaCategory TEXT NOT NULL DEFAULT 'MUSIC'",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_scrobble_events_mediaCategory ON scrobble_events(mediaCategory)",
+                )
+            }
+        }
+    }
 }
 
 @Module
@@ -179,7 +211,7 @@ object OnyxScrobbleDatabaseModule {
         OnyxScrobbleDatabase::class.java,
         "onyx_scrobble.db",
     )
-        .fallbackToDestructiveMigration()
+        .addMigrations(OnyxScrobbleDatabase.MIGRATION_1_2)
         .fallbackToDestructiveMigrationOnDowngrade()
         .build()
 

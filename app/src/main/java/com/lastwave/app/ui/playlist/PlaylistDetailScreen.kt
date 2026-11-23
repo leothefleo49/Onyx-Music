@@ -301,6 +301,11 @@ fun PlaylistDetailScreen(
     val displayTracks = remember(playlist.tracks, displayTrackIndices) {
         displayTrackIndices.map { playlist.tracks[it] }
     }
+    LaunchedEffect(playlist.id, displayTracks.firstOrNull()?.name) {
+        if (displayTracks.isNotEmpty()) {
+            musicPlayer.warmLikelyPlays(displayTracks.take(4).map(GeneratedTrack::toPlayableTrack))
+        }
+    }
 
     val listState = rememberLazyListState()
 

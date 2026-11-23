@@ -151,8 +151,12 @@ class ArtistViewModel @Inject constructor(
         val state = _uiState.value as? ArtistUiState.Success ?: return
         val songs = state.data.topSongs
         if (songs.isNotEmpty()) {
-            val shuffled = songs.shuffled()
-            musicPlayer.playQueue(shuffled, 0, sourceLabel = state.data.name)
+            musicPlayer.playQueue(
+                songs,
+                songs.indices.random(),
+                sourceLabel = state.data.name,
+                startShuffled = true,
+            )
         }
     }
 

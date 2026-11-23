@@ -272,6 +272,14 @@ class DeepMixCuratorEngine @Inject constructor(
                 it.copy(stage = CurationStage.CANCELLED, statusDetail = "Mix curation cancelled")
             }
             throw ce
+        } catch (e: OutOfMemoryError) {
+            android.util.Log.e("DeepMixCurator", "Out of memory during curation", e)
+            _progress.update {
+                it.copy(
+                    stage = CurationStage.FAILED,
+                    errorMessage = "Ran low on memory while analyzing tracks. Try a smaller track count.",
+                )
+            }
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
             _progress.update {
@@ -507,9 +515,9 @@ class DeepMixCuratorEngine @Inject constructor(
         durationMs: Long,
         sourceHash: String,
     ): AcousticSignature {
-        val seed = abs("${track.artist.lowercase()}|${track.name.lowercase()}".hashCode())
+        val seed = "${track.artist.lowercase()}|${track.name.lowercase()}".hashCode() and 0x7FFFFFFF
         // Realistic popular music BPM distribution (88..136 BPM) clustered by artist tendency.
-        val artistHash = abs(track.artist.lowercase().hashCode())
+        val artistHash = track.artist.lowercase().hashCode() and 0x7FFFFFFF
         val artistBaseBpm = 92f + (artistHash % 38).toFloat()
         val trackOffset = ((seed % 11) - 5).toFloat()
         val bpm = (artistBaseBpm + trackOffset).coerceIn(76f, 152f)

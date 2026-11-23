@@ -4,12 +4,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -41,6 +45,72 @@ class ListenBrainzApi @Inject constructor(
         val username: String? = null,
         val message: String = "",
     )
+
+    data class ListenBrainzListen(
+        val title: String,
+        val artist: String,
+        val album: String,
+        val listenedAtSec: Long,
+        val durationMs: Long,
+    )
+
+    suspend fun fetchUserListens(
+        username: String,
+        maxTs: Long? = null,
+        count: Int = 100,
+    ): Result<List<ListenBrainzListen>> = withContext(Dispatchers.IO) {
+        val cleanUser = username.trim()
+        if (cleanUser.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("ListenBrainz username is empty"))
+        }
+        try {
+            val encodedUser = java.net.URLEncoder.encode(cleanUser, "UTF-8").replace("+", "%20")
+            val urlBuilder = StringBuilder("$BASE_URL/1/user/$encodedUser/listens?count=${count.coerceIn(1, 100)}")
+            if (maxTs != null && maxTs > 0L) {
+                urlBuilder.append("&max_ts=").append(maxTs)
+            }
+            val request = Request.Builder()
+                .url(urlBuilder.toString())
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            okHttpClient.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(IOException("ListenBrainz HTTP ${response.code}"))
+                }
+                val root = json.parseToJsonElement(body).jsonObject
+                val payload = root["payload"] as? JsonObject
+                val listens = payload?.get("listens") as? JsonArray ?: JsonArray(emptyList())
+                val out = mutableListOf<ListenBrainzListen>()
+                for (entry in listens) {
+                    val obj = entry as? JsonObject ?: continue
+                    val listenedAt = (obj["listened_at"] as? JsonPrimitive)?.longOrNull ?: continue
+                    val meta = obj["track_metadata"] as? JsonObject ?: continue
+                    val title = (meta["track_name"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                    val artist = (meta["artist_name"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                    val album = (meta["release_name"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                    if (title.isBlank() || artist.isBlank()) continue
+                    val info = meta["additional_info"] as? JsonObject
+                    val durMs = (info?.get("duration_ms") as? JsonPrimitive)?.longOrNull
+                        ?: ((info?.get("duration") as? JsonPrimitive)?.longOrNull?.times(1000L))
+                        ?: 210_000L
+                    out += ListenBrainzListen(
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        listenedAtSec = listenedAt,
+                        durationMs = durMs.coerceAtLeast(0L),
+                    )
+                }
+                Result.success(out)
+            }
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     suspend fun validateToken(token: String): TokenValidation = withContext(Dispatchers.IO) {
         val cleanToken = token.trim()

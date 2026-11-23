@@ -395,6 +395,7 @@ fun TrackContextMenuSheet(
     onRemoveFromQueue: (() -> Unit)? = null,
     onWatchVideo: (() -> Unit)? = null,
     canWatchVideo: Boolean = true,
+    onOpenLyricsOffset: (() -> Unit)? = null,
     genreResolverViewModel: GenreRowViewModel = hiltViewModel(),
     startMixViewModel: StartMixMenuViewModel = hiltViewModel(),
     exploreGenreViewModel: ExploreGenreMenuViewModel = hiltViewModel(),
@@ -500,87 +501,10 @@ fun TrackContextMenuSheet(
     }
 
     if (showTimerDialog) {
-        var customMinutes by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
-        val customDuration = customMinutes.toIntOrNull()?.takeIf { it > 0 }
-        var showCustomDialog by remember { mutableStateOf(false) }
-
-        if (showCustomDialog) {
-            AlertDialog(
-                onDismissRequest = { showCustomDialog = false },
-                title = { Text(stringResource(R.string.menu_custom_sleep_timer)) },
-                text = {
-                    OutlinedTextField(
-                        value = customMinutes,
-                        onValueChange = { customMinutes = it },
-                        label = { Text(stringResource(R.string.menu_minutes)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        isError = customMinutes.isNotEmpty() && customDuration == null,
-                        supportingText = {
-                            if (customMinutes.isNotEmpty() && customDuration == null) {
-                                Text(stringResource(R.string.menu_positive_number))
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                },
-                confirmButton = {
-                    TextButton(
-                        enabled = customDuration != null,
-                        onClick = {
-                            customDuration?.let { musicPlayer.setSleepTimerMinutes(it) }
-                            showCustomDialog = false
-                            showTimerDialog = false
-                        },
-                    ) { Text(stringResource(R.string.menu_set_timer)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showCustomDialog = false }) { Text(stringResource(R.string.common_cancel)) }
-                }
-            )
-        }
-
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showTimerDialog = false }) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(20.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.menu_sleep_timer), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        androidx.compose.material3.IconButton(
-                            onClick = { showCustomDialog = true },
-                            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                        ) {
-                            Icon(Icons.Filled.Add, stringResource(R.string.menu_custom_timer))
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    val endOfQueueStats = remember(showTimerDialog) {
-                        val s = musicPlayer.state.value
-                        com.lastwave.app.ui.player.QueueStatsFormatter
-                            .formatQueueStats(s.queue.drop((s.currentIndex + 1).coerceAtLeast(0)))
-                    }
-                    TextButton(
-                        onClick = {
-                            musicPlayer.setSleepTimerEndOfQueue()
-                            showTimerDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(stringResource(R.string.menu_timer_end_of_queue, endOfQueueStats)) }
-                    listOf(0, 15, 30, 60).forEach { minutes ->
-                        TextButton(
-                            onClick = {
-                                musicPlayer.setSleepTimerMinutes(minutes)
-                                showTimerDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(if (minutes == 0) stringResource(R.string.menu_timer_off) else stringResource(R.string.menu_timer_minutes, minutes)) }
-                    }
-                }
-            }
-        }
+        com.lastwave.app.ui.player.SleepTimerDialog(
+            musicPlayer = musicPlayer,
+            onDismiss = { showTimerDialog = false },
+        )
     }
 
     ModalBottomSheet(
@@ -660,6 +584,7 @@ fun TrackContextMenuSheet(
                 openJam = { showJamSheet = true },
                 openSyncedVideo = { showSyncedVideoDialog = true },
                 openTimer = { showTimerDialog = true },
+                onOpenLyricsOffset = onOpenLyricsOffset,
             )
         }
     }
@@ -699,6 +624,7 @@ private fun ColumnScope.RedesignedTrackMenuContent(
     openJam: () -> Unit,
     openSyncedVideo: () -> Unit,
     openTimer: () -> Unit,
+    onOpenLyricsOffset: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -980,6 +906,7 @@ private fun ColumnScope.ModernTrackMenuContent(
     openJam: () -> Unit,
     openSyncedVideo: () -> Unit,
     openTimer: () -> Unit,
+    onOpenLyricsOffset: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -1125,6 +1052,17 @@ private fun ColumnScope.ModernTrackMenuContent(
                         } else {
                             openSyncedVideo()
                         }
+                    }
+                }
+                if (onOpenLyricsOffset != null) add {
+                    ModernMenuActionRow(
+                        Icons.Outlined.Timer,
+                        stringResource(R.string.ly_offset_title),
+                        supportingText = "Adjust synced lyrics timing",
+                        enabled = !dismissing,
+                    ) {
+                        dismissMenu()
+                        onOpenLyricsOffset()
                     }
                 }
                 add {

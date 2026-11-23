@@ -69,6 +69,9 @@ fun AppUpdateDialogHost(viewModel: AppUpdateDialogViewModel = hiltViewModel()) {
         onUpdate = {
             manager.downloadAndInstall(context)
         },
+        onToggleAutoInstall = { enabled ->
+            manager.setAutoInstallUpdates(enabled)
+        },
         onOpenGitHub = { manager.openReleasePage(context) },
         onClose = { skipThisVersion ->
             if (skipThisVersion) manager.dismissUpdate(info.latestVersion)
@@ -81,6 +84,7 @@ fun AppUpdateDialogHost(viewModel: AppUpdateDialogViewModel = hiltViewModel()) {
 private fun AppUpdateDialog(
     info: UpdateInfo,
     onUpdate: () -> Unit,
+    onToggleAutoInstall: (Boolean) -> Unit,
     onOpenGitHub: () -> Unit,
     onClose: (skipThisVersion: Boolean) -> Unit,
 ) {
@@ -147,6 +151,17 @@ private fun AppUpdateDialog(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = info.autoInstallUpdates,
+                        onCheckedChange = onToggleAutoInstall,
+                    )
+                    Text(
+                        "Auto-install updates silently in background (Android 12+)",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = skipThisVersion, onCheckedChange = { skipThisVersion = it })
                     Text("Don't show again for this version", style = MaterialTheme.typography.bodyMedium)
                 }
@@ -162,10 +177,12 @@ private fun AppUpdateDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else if (info.installMessage != null) {
+                    val isError = info.installMessage.contains("failed", ignoreCase = true) ||
+                        info.installMessage.startsWith("Allow ", ignoreCase = true)
                     Text(
                         info.installMessage,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     )
                 }
 

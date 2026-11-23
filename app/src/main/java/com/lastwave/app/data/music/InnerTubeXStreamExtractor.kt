@@ -233,6 +233,10 @@ class InnerTubeXStreamExtractor @Inject constructor(
         refreshCipherAfterRejection()
     }
 
+    fun clearFailedProfiles() {
+        failedProfilesUntil.clear()
+    }
+
     /**
      * A rejected URL can mean the signature/n tables went stale: the cipher
      * produced a well-formed but wrong value, so nothing threw. Ask InnerTubeX

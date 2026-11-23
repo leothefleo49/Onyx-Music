@@ -483,7 +483,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
                                 .build(),
                             MediaBrowserCompat.MediaItem.FLAG_PLAYABLE,
                         )
-                    }.let { OriginOsMusicCard.singlePage(it, "Nothing playing", "Play something in LastWave") }
+                    }.let { OriginOsMusicCard.singlePage(it, "Nothing playing", "Play something in Onyx Music") }
                     OriginOsMusicCard.LIST_FAVORITE -> OriginOsMusicCard.singlePage(
                         withContext(Dispatchers.IO) {
                             androidAutoLibrary.loadChildren(AndroidAutoMediaLibrary.PLAYLISTS_ID, state)
@@ -496,7 +496,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
                             androidAutoLibrary.loadChildren(AndroidAutoMediaLibrary.DOWNLOADS_ID, state)
                         },
                         "No downloads",
-                        "Music downloaded in LastWave shows here",
+                        "Music downloaded in Onyx Music shows here",
                     )
                 }
             }.onFailure { error ->
@@ -693,10 +693,13 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
         // handled explicitly here.
         val shouldStop = musicPlayer.stopPlaybackOnTaskRemoved ||
             musicPlayer.state.value.current == null
+        // Always flush exact playback position to disk before task swipe or service death.
+        runCatching { musicPlayer.persistPlaybackSessionNow() }
         if (shouldStop) {
             // clearSession = false keeps the last queue/track restorable on the
             // next launch while still stopping audio, notification, cast and
             // wake/wifi locks immediately.
+            scrobbleRepository.clearNowPlaying()
             musicPlayer.stopAndClear(clearSession = false)
         }
         super.onTaskRemoved(rootIntent)
@@ -706,6 +709,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
         // Safety net: if the service is torn down while the singleton player is
         // still producing audio (an OEM stop, a system-initiated service stop
         // or a missed task-removal path), never leave orphaned playback behind.
+        scrobbleRepository.clearNowPlaying()
         val playerState = musicPlayer.state.value
         if (playerState.isPlaying || playerState.isBuffering) {
             musicPlayer.stopAndClear(clearSession = false)

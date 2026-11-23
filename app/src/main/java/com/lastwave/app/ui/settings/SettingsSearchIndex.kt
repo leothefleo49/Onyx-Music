@@ -261,7 +261,7 @@ object SettingsSearchIndex {
                 SettingsEntry(
                     id = "audio.stop_on_recents",
                     title = "Stop Playback When Swiped Away",
-                    subtitle = "Stop music when LastWave is removed from Recents",
+                    subtitle = "Stop music when Onyx Music is removed from Recents",
                     keywords = listOf(
                         "recents", "swipe", "swipe away", "stop playback", "background playback",
                         "continue playing", "task removed", "kill app", "close app"
@@ -500,7 +500,7 @@ object SettingsSearchIndex {
             add(
                 SettingsEntry(
                     id = "appearance.lastwave_theme",
-                    title = "LastWave Signature Theme",
+                    title = "Onyx Music Signature Theme",
                     subtitle = "Bespoke logo palette with Electric Lime and Obsidian Teal",
                     keywords = listOf(
                         "lastwave theme", "brand theme", "special theme", "logo theme", "lime",
@@ -1402,7 +1402,7 @@ object SettingsSearchIndex {
                 SettingsEntry(
                     id = "backup.restore",
                     title = "Restore from Backup",
-                    subtitle = "Import a previously saved LastWave backup file to restore settings & playlists",
+                    subtitle = "Import a previously saved Onyx Music backup file to restore settings & playlists",
                     keywords = listOf(
                         "restore", "import backup", "recover data", "load backup", "restore playlists",
                         "restore settings", "json restore"
@@ -1456,49 +1456,33 @@ object SettingsSearchIndex {
             add(
                 SettingsEntry(
                     id = "about.telegram_support",
-                    title = "Telegram Updates & Support",
-                    subtitle = "Join @clashprojects on Telegram for app news, beta builds, and support",
+                    title = "Report a Bug / Request a Feature",
+                    subtitle = "Submit issues & feedback directly on GitHub (leothefleo49/Onyx-Music)",
                     keywords = listOf(
-                        "telegram", "support", "community", "chat", "clashprojects", "help",
-                        "updates channel", "news"
+                        "bug", "report", "issue", "support", "feedback", "github", "help",
+                        "feature request", "onyx"
                     ),
                     icon = Icons.AutoMirrored.Filled.Send,
                     iconContainer = { MaterialTheme.colorScheme.primaryContainer },
                     iconTint = { MaterialTheme.colorScheme.onPrimaryContainer },
                     parentTab = SettingsTab.ABOUT,
-                    section = "About & Community",
-                    type = EntryType.ACTION,
-                )
-            )
-            add(
-                SettingsEntry(
-                    id = "about.discord_support",
-                    title = "Discord Support",
-                    subtitle = "Join our Discord community server for support and feedback",
-                    keywords = listOf(
-                        "discord", "community", "chat", "support", "feedback", "server", "discussion"
-                    ),
-                    icon = Icons.Filled.Group,
-                    iconContainer = { MaterialTheme.colorScheme.tertiaryContainer },
-                    iconTint = { MaterialTheme.colorScheme.onTertiaryContainer },
-                    parentTab = SettingsTab.ABOUT,
-                    section = "About & Community",
+                    section = "About & Support",
                     type = EntryType.ACTION,
                 )
             )
             add(
                 SettingsEntry(
                     id = "about.more_apps",
-                    title = "More Apps from Clash Projects",
-                    subtitle = "Join @MaterialYouApp on Telegram to discover other applications",
+                    title = "GitHub Releases & Changelogs",
+                    subtitle = "View all releases at github.com/leothefleo49/Onyx-Music/releases",
                     keywords = listOf(
-                        "more apps", "material you app", "other apps", "clash projects", "developer"
+                        "releases", "changelog", "github", "downloads", "apk", "versions"
                     ),
-                    icon = Icons.Filled.AutoAwesome,
-                    iconContainer = { MaterialTheme.colorScheme.primaryContainer },
-                    iconTint = { MaterialTheme.colorScheme.onPrimaryContainer },
+                    icon = Icons.Filled.CloudDownload,
+                    iconContainer = { MaterialTheme.colorScheme.tertiaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onTertiaryContainer },
                     parentTab = SettingsTab.ABOUT,
-                    section = "About & Community",
+                    section = "About & Support",
                     type = EntryType.ACTION,
                 )
             )
@@ -1515,7 +1499,7 @@ object SettingsSearchIndex {
                     iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
                     iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
                     parentTab = SettingsTab.ABOUT,
-                    section = "About & Community",
+                    section = "About & Support",
                     type = EntryType.ACTION,
                 )
             )
@@ -1532,7 +1516,7 @@ object SettingsSearchIndex {
                     iconContainer = { MaterialTheme.colorScheme.primaryContainer },
                     iconTint = { MaterialTheme.colorScheme.onPrimaryContainer },
                     parentTab = SettingsTab.ABOUT,
-                    section = "About & Community",
+                    section = "About & Support",
                     type = EntryType.ACTION,
                 )
             )
@@ -1549,23 +1533,7 @@ object SettingsSearchIndex {
                     iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
                     iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
                     parentTab = SettingsTab.ABOUT,
-                    section = "About & Community",
-                    type = EntryType.ACTION,
-                )
-            )
-            add(
-                SettingsEntry(
-                    id = "about.desktop_app",
-                    title = "Upstream Attribution (GPL-3.0)",
-                    subtitle = "Based on Clash-Projects/LastWave-Native",
-                    keywords = listOf(
-                        "upstream", "lastwave", "gpl", "license", "attribution", "clash-projects"
-                    ),
-                    icon = Icons.Filled.Code,
-                    iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
-                    iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
-                    parentTab = SettingsTab.ABOUT,
-                    section = "About & Community",
+                    section = "About & Support",
                     type = EntryType.ACTION,
                 )
             )

@@ -130,8 +130,8 @@ private fun RecognitionStartSheet(
     onStart: (Boolean, Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var hum by remember { mutableStateOf(defaultHum) }
-    var sensitivity by remember { mutableStateOf(defaultSensitivity.toFloat()) }
+    var hum by remember(defaultHum) { mutableStateOf(defaultHum) }
+    var sensitivity by remember(defaultSensitivity) { mutableStateOf(defaultSensitivity.toFloat()) }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),

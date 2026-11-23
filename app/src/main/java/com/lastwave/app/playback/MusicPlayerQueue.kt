@@ -237,12 +237,27 @@ internal fun MusicPlayer.replaceMediaItemPreservingShuffle(index: Int, mediaItem
             }
             player.replaceMediaItem(index, mediaItem)
             if (order.size == count && index in order) {
-                player.setShuffleOrder(DefaultShuffleOrder(order.toIntArray(), Random.nextLong()))
+                runCatching {
+                    player.setShuffleOrder(DefaultShuffleOrder(order.toIntArray(), Random.nextLong()))
+                }
             }
         }
-        val standby = secondaryPlayer
-        if (standby != null && crossfadeStandbyArmed && index in 0 until standby.mediaItemCount) {
-            standby.replaceMediaItem(index, mediaItem)
+        // Use currentStandby() (never secondaryPlayer directly: after a deck swap,
+        // secondaryPlayer IS the active player, so touching it here scrambled the
+        // live player's shuffle order!).
+        val standby = currentStandby()
+        if (standby != null && standby !== player && crossfadeStandbyArmed && index in 0 until standby.mediaItemCount) {
+            if (!standby.shuffleModeEnabled || standby.currentTimeline.isEmpty) {
+                standby.replaceMediaItem(index, mediaItem)
+            } else {
+                val stOrder = currentPlayOrder(standby)
+                standby.replaceMediaItem(index, mediaItem)
+                if (stOrder.size == standby.mediaItemCount && index in stOrder) {
+                    runCatching {
+                        standby.setShuffleOrder(DefaultShuffleOrder(stOrder.toIntArray(), Random.nextLong()))
+                    }
+                }
+            }
         }
     }
 
@@ -292,6 +307,9 @@ internal fun MusicPlayer.playPendingQueueItem(index: Int, pendingState: MusicPla
         if (index in 0 until player.mediaItemCount) {
             resolveAndPlayQueueItem(index)
         } else {
+            val activeOrder = if (pendingState.shuffleEnabled) {
+                currentPlayOrder().takeIf { it.size == pendingState.queue.size }.orEmpty()
+            } else emptyList()
             startResolvedQueuePlayback(
                 tracks = pendingState.queue,
                 selectedIndex = index,
@@ -299,6 +317,7 @@ internal fun MusicPlayer.playPendingQueueItem(index: Int, pendingState: MusicPla
                 sourceLabel = pendingState.sourceLabel,
                 endlessDiscover = pendingState.isEndlessQueue,
                 startShuffled = pendingState.shuffleEnabled,
+                savedShuffleOrder = activeOrder,
             )
         }
     }
@@ -311,12 +330,21 @@ internal fun MusicPlayer.playPendingQueueItem(index: Int, pendingState: MusicPla
      * ("plays a moment then jumps"). Only seek when still at the very start.
      */
     @MainThread
-internal fun MusicPlayer.takeOverPlayback(index: Int, expectedMediaId: String) {
+internal fun MusicPlayer.takeOverPlayback(
+    index: Int,
+    expectedMediaId: String,
+    startPositionMs: Long = 0L,
+) {
         val alreadyAudible = player.currentMediaItemIndex == index &&
             player.currentMediaItem?.mediaId == expectedMediaId &&
             (player.isPlaying || player.currentPosition > 1_500L)
         if (!alreadyAudible) {
-            player.seekToDefaultPosition(index)
+            val safeStart = startPositionMs.coerceAtLeast(0L)
+            if (safeStart > 0L) {
+                player.seekTo(index, safeStart)
+            } else {
+                player.seekToDefaultPosition(index)
+            }
         }
         resetRenderWatchdog()
         if (player.playbackState == Player.STATE_IDLE) {
@@ -327,7 +355,10 @@ internal fun MusicPlayer.takeOverPlayback(index: Int, expectedMediaId: String) {
     }
 
     @MainThread
-internal fun MusicPlayer.resolveAndPlayQueueItem(index: Int) {
+internal fun MusicPlayer.resolveAndPlayQueueItem(
+    index: Int,
+    startPositionMs: Long = 0L,
+) {
         if (index !in 0 until player.mediaItemCount) {
             playPendingQueueItem(index, _state.value)
             return
@@ -383,7 +414,7 @@ internal fun MusicPlayer.resolveAndPlayQueueItem(index: Int) {
             }
             PlaybackStartupLog.cacheLookupStart()
             PlaybackStartupLog.cacheLookupEnd(hit = true)
-            takeOverPlayback(index, mediaItem.mediaId)
+            takeOverPlayback(index, mediaItem.mediaId, startPositionMs)
             val playing = prepared
             scheduleStartupFollowUp { preloadNextQueueItem(index) }
             if (playing != null && !playing.isLossless && playing.audioCodec != "DOLBY ATMOS") {
@@ -398,7 +429,8 @@ internal fun MusicPlayer.resolveAndPlayQueueItem(index: Int) {
         }
 
         val expectedMediaId = mediaItem.mediaId
-        resetPlayhead(0L, expectedMediaId)
+        val targetStartPos = startPositionMs.coerceAtLeast(0L)
+        resetPlayhead(targetStartPos, track.playheadKey())
         resetRenderWatchdog()
         resolvingMediaIds[expectedMediaId] = generation
         // Screen-off continuity: do NOT player.pause() here. Pausing drops
@@ -413,7 +445,7 @@ internal fun MusicPlayer.resolveAndPlayQueueItem(index: Int) {
             it.copy(
                 current = track,
                 currentIndex = index,
-                positionMs = 0L,
+                positionMs = targetStartPos,
                 bufferedPositionMs = 0L,
                 durationMs = track.durationMs ?: findKnownDuration(track) ?: 0L,
                 isPlaying = true,
@@ -459,7 +491,7 @@ internal fun MusicPlayer.resolveAndPlayQueueItem(index: Int) {
                     cacheCurrentTrackStream(resolved)
                     learnQueueVideoId(index, track, resolved.youtubeCandidate?.videoId, resolved.rematchedFromVideoId)
                     replaceMediaItemPreservingShuffle(index, track.toMediaItem(resolved))
-                    takeOverPlayback(index, expectedMediaId)
+                    takeOverPlayback(index, expectedMediaId, targetStartPos)
                     enrichUpcomingQueue(index)
                     if (!resolved.isLossless && resolved.audioCodec != "DOLBY ATMOS") {
                         scheduleQualityUpgrade(
@@ -474,9 +506,14 @@ internal fun MusicPlayer.resolveAndPlayQueueItem(index: Int) {
                         scheduleDeferredRecommendations()
                     }
                 }
-            } catch (cancellation: CancellationException) {
-                throw cancellation
             } catch (error: Throwable) {
+                if (error is CancellationException &&
+                    (error !is com.lastwave.app.playback.resolve.StaleResolveException ||
+                        !currentCoroutineContext().isActive ||
+                        generation != playRequestGeneration.get())
+                ) {
+                    throw error
+                }
                 logResolutionFailure(track, "queue-resolve", 0, error)
                 if (expectedMediaId !in losslessBypassMediaIds) {
                     losslessBypassMediaIds += expectedMediaId
@@ -504,7 +541,7 @@ internal fun MusicPlayer.resolveAndPlayQueueItem(index: Int) {
                             logStreamEvent("queue-prepare-yt-fallback", ytFallback, retry = 0)
                             cacheCurrentTrackStream(ytFallback)
                             replaceMediaItemPreservingShuffle(index, track.toMediaItem(ytFallback))
-                            takeOverPlayback(index, expectedMediaId)
+                            takeOverPlayback(index, expectedMediaId, targetStartPos)
                             enrichUpcomingQueue(index)
                             scheduleDeferredRecommendations()
                             preloadNextQueueItem(index)

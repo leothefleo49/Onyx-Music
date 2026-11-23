@@ -72,6 +72,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -228,22 +229,18 @@ fun PlaylistScreen(
                         ) {
                             Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.pl_delete_selected_cd), tint = MaterialTheme.colorScheme.error)
                         }
-                        IconButton(
-                            onClick = { selectedPlaylists = setOf() },
-                            modifier = Modifier.size(40.dp),
-                        ) {
-                            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.pl_clear_selection_cd))
-                        }
+                        HeaderActionIcon(
+                            Icons.Filled.Close,
+                            stringResource(R.string.pl_clear_selection_cd),
+                        ) { selectedPlaylists = setOf() }
                     } else {
-                        HeaderActionIcon(Icons.Filled.Search, "Search", onOpenSearch)
                         com.lastwave.app.ui.recognition.MusicRecognitionButton(key = "recognition_library")
-                        HeaderActionIcon(Icons.Filled.Person, "Profile", onOpenSettings)
-                        HeaderActionIcon(Icons.Filled.Group, "Friends", onOpenFriends)
                         HeaderActionIcon(
                             Icons.Filled.Add,
                             stringResource(R.string.pl_create_cd),
                             viewModel::openCreateDialog,
                         )
+                        HeaderActionIcon(Icons.Filled.Settings, "Settings", onOpenSettings)
                     }
                 },
             )

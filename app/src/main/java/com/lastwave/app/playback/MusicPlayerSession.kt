@@ -174,23 +174,28 @@ internal fun MusicPlayer.restorePlaybackSession(): Boolean {
             ?: restoredQueue[restoredIndex].durationMs
             ?: findKnownDuration(restoredQueue[restoredIndex])
             ?: 0L
+        val restoredPos = session.positionMs.coerceAtLeast(0L)
         _state.update { live -> MusicPlayerState(
             current = restoredQueue[restoredIndex],
             queue = restoredQueue,
             currentIndex = restoredIndex,
             sourceLabel = session.sourceLabel,
             isEndlessQueue = session.isEndlessQueue,
-            positionMs = session.positionMs.coerceAtLeast(0),
+            positionMs = restoredPos,
             durationMs = restoredDuration,
             shuffleEnabled = session.shuffleEnabled,
             repeatMode = session.repeatMode,
             speed = session.speed,
             pitch = session.pitch,
         ).withSubsystemStateFrom(live) }
+        // Seed playhead so the very first ticker tick preserves the restored position
+        // instead of seeing a key mismatch and wiping positionMs back to 0:00.
+        resetPlayhead(restoredPos, restoredQueue[restoredIndex].playheadKey())
         durationOwnerMediaId = restoredQueue[restoredIndex].mediaIdKey()
         pendingRestoredSession = session.copy(
             queue = restoredQueue,
             currentIndex = restoredIndex,
+            positionMs = restoredPos,
         )
         restoredQueue[restoredIndex].videoId?.takeIf(String::isNotBlank)?.let { videoId ->
             applicationScope.launch(Dispatchers.IO) { innerTube.warmPlaybackCipher(videoId) }
@@ -234,13 +239,28 @@ internal fun MusicPlayer.isUnsupportedMediaFailure(error: Throwable): Boolean =
 internal fun Throwable.causeChain(): Sequence<Throwable> =
         generateSequence(this) { it.cause }.take(12)
 
-internal fun MusicPlayer.persistPlaybackSession() {
+internal fun MusicPlayer.persistPlaybackSession(immediate: Boolean = false) {
         val snapshot = _state.value
         val sourceQueue = snapshot.queue.ifEmpty {
             snapshot.current?.let(::listOf).orEmpty()
         }
         if (sourceQueue.isEmpty()) return
         val sourceIndex = snapshot.currentIndex.coerceIn(sourceQueue.indices)
+        // Prefer the live ExoPlayer playhead when on the main thread so pause/crash/stop
+        // saves the exact second rather than a lagging ticker snapshot.
+        val livePosMs = if (
+            Looper.myLooper() == Looper.getMainLooper() &&
+            playerDelegate.isInitialized() &&
+            player.playbackState != Player.STATE_IDLE &&
+            isCurrentMediaMatch(player, snapshot.current)
+        ) {
+            runCatching { player.currentPosition.coerceAtLeast(0L) }
+                .getOrDefault(snapshot.positionMs)
+                .takeIf { it > 0L || snapshot.positionMs <= 0L }
+                ?: snapshot.positionMs
+        } else {
+            snapshot.positionMs
+        }.coerceAtLeast(0L)
         // A queue that fits is saved whole. Trimming played songs off the
         // front shrank playlists after a restart, and under shuffle those
         // "earlier" list positions are usually songs that have not played yet.
@@ -259,11 +279,12 @@ internal fun MusicPlayer.persistPlaybackSession() {
             Looper.myLooper() == Looper.getMainLooper() && playerDelegate.isInitialized() &&
             player.shuffleModeEnabled && player.mediaItemCount == sourceQueue.size
         ) currentPlayOrder() else emptyList()
+        val posBucket = if (immediate) livePosMs else (livePosMs / POSITION_PERSIST_INTERVAL_MS)
         val signature = buildString {
             append(persistedQueue.size).append('|')
             append(persistedIndex).append('|')
             append(persistedQueue[persistedIndex].queueKey()).append('|')
-            append(snapshot.positionMs / POSITION_PERSIST_INTERVAL_MS).append('|')
+            append(posBucket).append('|')
             append(snapshot.sourceLabel).append('|')
             append(snapshot.isEndlessQueue).append('|')
             append(snapshot.shuffleEnabled).append('|')
@@ -272,14 +293,14 @@ internal fun MusicPlayer.persistPlaybackSession() {
             append(snapshot.pitch).append('|')
             append(persistedShuffleOrder.hashCode())
         }
-        if (signature == lastPersistedSignature) return
+        if (!immediate && signature == lastPersistedSignature) return
         val currentDuration = snapshot.durationMs.takeIf { it > 0L }
             ?: snapshot.current?.durationMs
             ?: 0L
         val session = PersistedPlaybackSession(
             queue = persistedQueue,
             currentIndex = persistedIndex,
-            positionMs = snapshot.positionMs.coerceAtLeast(0),
+            positionMs = livePosMs,
             sourceLabel = snapshot.sourceLabel,
             isEndlessQueue = snapshot.isEndlessQueue,
             shuffleEnabled = snapshot.shuffleEnabled,
@@ -292,6 +313,16 @@ internal fun MusicPlayer.persistPlaybackSession() {
         lastPersistedSignature = signature
         val generation = ++persistenceGeneration
         playbackPersistenceJob?.cancel()
+        if (immediate) {
+            val encoded = runCatching { persistenceJson.encodeToString(session) }.getOrNull() ?: return
+            synchronized(playbackPersistenceLock) {
+                if (generation == persistenceGeneration) {
+                    // Synchronous commit guarantees exact playback position survives crashes & swipes.
+                    playbackPreferences.edit().putString(PLAYBACK_SESSION_KEY, encoded).commit()
+                }
+            }
+            return
+        }
         playbackPersistenceJob = applicationScope.launch(Dispatchers.IO) {
             val encoded = runCatching { persistenceJson.encodeToString(session) }.getOrNull()
                 ?: return@launch

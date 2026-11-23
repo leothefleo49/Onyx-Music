@@ -257,6 +257,7 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
      */
     override fun onStop() {
         super.onStop()
+        runCatching { musicPlayer.get().persistPlaybackSessionNow() }
         com.lastwave.app.diagnostics.AppLog.flush()
     }
 

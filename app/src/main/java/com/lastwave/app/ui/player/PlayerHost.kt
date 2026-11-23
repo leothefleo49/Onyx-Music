@@ -399,6 +399,7 @@ fun PlayerHost(
     // Always-on display overlay (full-screen clock/artwork/lyrics).
     var aodActive by rememberSaveable { mutableStateOf(false) }
     val lyricsState by viewModel.lyricsState.collectAsStateWithLifecycle()
+    val undoQueueSwitch by viewModel.undoQueueSwitch.collectAsStateWithLifecycle()
     // Smart-Previous ask: a played user-queued track is waiting on a choice.
     var previousChoice by remember { mutableStateOf<MusicPlayer.PreviousChoice?>(null) }
     LaunchedEffect(viewModel) {
@@ -601,8 +602,127 @@ fun PlayerHost(
                     },
             ) {
                 Box(Modifier.fillMaxSize().liquidGlassSource(if (miniGlass) miniBackdrop else null)) {
-                    com.lastwave.app.ui.common.AmbientAnimationsGate(visible = { !contentCovered }) {
-                        content()
+                    // Never expose miniBackdrop inside its own capture subtree — any screen
+                    // inside content() that invokes liquidGlassChrome would otherwise trigger
+                    // a fatal Kyant drawBackdrop recursive self-capture crash.
+                    CompositionLocalProvider(LocalLiquidGlassBackdrop provides null) {
+                        com.lastwave.app.ui.common.AmbientAnimationsGate(visible = { !contentCovered }) {
+                            content()
+                        }
+                    }
+                }
+            }
+            // Bottom-chrome tap shield: absorbs stray taps in the gaps/margins around the
+            // floating bottom nav bar and mini player so accidental misses never click songs
+            // scrolled behind the bar, while vertical scrolling still passes through.
+            if (!expanded && (hasBottomNavigation || miniPlayerVisible)) {
+                val shieldHeight = when {
+                    hasBottomNavigation && miniPlayerVisible -> 158.dp
+                    hasBottomNavigation -> 86.dp
+                    else -> 88.dp
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+                        .height(shieldHeight)
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                var dragged = false
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) {
+                                        if (!dragged) change.consume()
+                                        break
+                                    }
+                                    if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                                        dragged = true
+                                        break
+                                    }
+                                }
+                            }
+                        },
+                )
+            }
+            // Prominent "Return to previous queue" floating pill right above the mini player
+            // for the first 1-2 songs after a sudden switch (accidental click protection).
+            AnimatedVisibility(
+                visible = !expanded && undoQueueSwitch != null && !hideMiniPlayer,
+                enter = slideInVertically { it / 2 } + fadeIn(),
+                exit = slideOutVertically { it / 2 } + fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .zIndex(2f)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                    .padding(
+                        bottom = (if (hasBottomNavigation) 84.dp else 14.dp) +
+                            if (miniPlayerVisible) 80.dp else 10.dp,
+                        start = 16.dp,
+                        end = 16.dp,
+                    ),
+            ) {
+                val snap = undoQueueSwitch
+                if (snap != null) {
+                    Surface(
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.96f),
+                        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                        shadowElevation = 10.dp,
+                        tonalElevation = 6.dp,
+                        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.undoQueueSwitch() }
+                                .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Filled.ArrowBack,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.inversePrimary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = "Back to ${snap.displayLabel}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "Tap to resume where you left off",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.72f),
+                                    maxLines = 1,
+                                )
+                            }
+                            TextButton(
+                                onClick = viewModel::undoQueueSwitch,
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.inversePrimary,
+                                ),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            ) {
+                                Text("Go back", fontWeight = FontWeight.Bold)
+                            }
+                            IconButton(
+                                onClick = viewModel::dismissQueueSwitchUndo,
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Dismiss",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -642,13 +762,20 @@ fun PlayerHost(
                 )
             }
 
+            var showOverlaySleepTimerDialog by remember { mutableStateOf(false) }
             // Sleep Timer Overlay Button (shown whenever timer is active, regardless of mini-player or button mode)
             if (!expanded && (playbackState.sleepTimerRemainingMs != null || playbackState.sleepTimerEndOfQueue)) {
                 DraggableSleepTimerOverlay(
                     sleepTimerRemainingMs = playbackState.sleepTimerRemainingMs,
-                    onCycleTimer = { viewModel.player.cycleSleepTimer() },
+                    onCycleTimer = { showOverlaySleepTimerDialog = true },
                     onCloseTimer = { viewModel.player.setSleepTimerMinutes(0) },
                     sleepTimerEndOfQueue = playbackState.sleepTimerEndOfQueue,
+                )
+            }
+            if (showOverlaySleepTimerDialog) {
+                SleepTimerDialog(
+                    musicPlayer = viewModel.player,
+                    onDismiss = { showOverlaySleepTimerDialog = false },
                 )
             }
             val currentTrack = state.current
@@ -767,7 +894,7 @@ fun PlayerHost(
                     positionMs = playbackState.positionMs,
                     lyricsOffsetMs = settings.lyricsOffsetMs,
                     glow = EdgeGlowConfig(
-                        enabled = settings.edgeGlowEnabled,
+                        enabled = true,
                         mode = settings.edgeGlowMode,
                         motion = settings.edgeGlowMotion,
                         intensity = settings.edgeGlowIntensity,
@@ -779,6 +906,7 @@ fun PlayerHost(
                     onPlayPause = viewModel.player::togglePlayPause,
                     onPrevious = viewModel.player::previous,
                     onNext = viewModel.player::next,
+                    onChangeVisualizerMode = viewModel::setAodVisualizerMode,
                     visualizerMode = settings.aodVisualizerMode,
                     showControls = settings.aodShowControls,
                     showArtwork = settings.aodShowArtwork,
@@ -854,6 +982,8 @@ internal fun ExpandedPlayer(
     val themePrimary = MaterialTheme.colorScheme.primary
     val themeSecondary = MaterialTheme.colorScheme.secondary
     val previewQueues by viewModel.previewQueues.collectAsStateWithLifecycle()
+    val autoMixEnabled by viewModel.autoMixEnabled.collectAsStateWithLifecycle()
+    val undoQueueSwitch by viewModel.undoQueueSwitch.collectAsStateWithLifecycle()
     FullPlayer(
         state = state,
         progressState = viewModel.progressState,
@@ -904,7 +1034,13 @@ internal fun ExpandedPlayer(
         previewQueues = previewQueues,
         onPlayPreviewQueue = viewModel::playPreviewQueue,
         onSaveRecentQueue = viewModel::savePreviewQueueAsPlaylist,
-        onMixQueue = viewModel::mixCurrentQueue,
+        onSaveCurrentQueue = viewModel::saveCurrentQueueAsPlaylist,
+        autoMixEnabled = autoMixEnabled,
+        onToggleQueueTransitions = viewModel::toggleQueueTransitions,
+        onDisableBitPerfectForTransitions = viewModel::disableBitPerfectForTransitions,
+        undoQueueSwitch = undoQueueSwitch,
+        onUndoQueueSwitch = viewModel::undoQueueSwitch,
+        onDismissUndoQueueSwitch = viewModel::dismissQueueSwitchUndo,
         edgeGlow = remember(
             settings.edgeGlowEnabled,
             settings.edgeGlowMode,

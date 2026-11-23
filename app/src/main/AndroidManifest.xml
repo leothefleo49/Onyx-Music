@@ -17,6 +17,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <!-- Target audio playback and known music players without requiring QUERY_ALL_PACKAGES -->
     <queries>
         <intent>
@@ -55,6 +56,12 @@
         <package android:name="com.hiby.music" />
         <package android:name="com.foobar2000.foobar2000" />
         <package android:name="app.symfonik.music.player" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.pandora.android" />
+        <package android:name="com.arn.scrobble" />
+        <package android:name="tv.twitch.android.app" />
+        <package android:name="au.com.shiftyjelly.pocketcasts" />
+        <package android:name="de.danoeh.antennapod" />
     </queries>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />

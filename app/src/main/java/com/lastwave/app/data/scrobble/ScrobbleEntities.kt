@@ -12,6 +12,21 @@ object ScrobbleSyncStatus {
 }
 
 /**
+ * Distinguishes pure music listens from non-music videos, podcasts, or other media
+ * so Stats can keep Music pure by default while still scrobbling and showing videos
+ * and podcasts under the "Videos & Other" tab.
+ */
+object ScrobbleMediaCategory {
+    const val MUSIC = "MUSIC"
+    const val VIDEO = "VIDEO"
+    const val PODCAST = "PODCAST"
+    const val OTHER = "OTHER"
+
+    fun isMusic(category: String?): Boolean =
+        category.isNullOrBlank() || category.equals(MUSIC, ignoreCase = true)
+}
+
+/**
  * Canonical normalized track key shared across scrobble deduplication,
  * stats aggregation, and two-way Last.fm love synchronization.
  */
@@ -26,6 +41,7 @@ fun normalizeScrobbleTrackKey(artist: String, title: String): String =
         Index(value = ["sourcePackage"]),
         Index(value = ["lastFmSyncStatus"]),
         Index(value = ["listenBrainzSyncStatus"]),
+        Index(value = ["mediaCategory"]),
     ],
 )
 data class ScrobbleEventEntity(
@@ -46,6 +62,7 @@ data class ScrobbleEventEntity(
     val lastFmSyncStatus: String = ScrobbleSyncStatus.PENDING,
     val listenBrainzSyncStatus: String = ScrobbleSyncStatus.SKIPPED,
     val retryCount: Int = 0,
+    val mediaCategory: String = ScrobbleMediaCategory.MUSIC,
 )
 
 @Entity(tableName = "scrobble_edit_rules")

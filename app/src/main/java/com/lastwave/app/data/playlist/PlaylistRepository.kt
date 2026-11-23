@@ -523,7 +523,7 @@ class PlaylistRepository @Inject constructor(
                 return@withLock persist(
                     entity.copy(
                         title = LIKED_SONGS_TITLE,
-                        subtitle = "Songs you like in LastWave",
+                        subtitle = "Songs you like in Onyx Music",
                         mode = LIKED_SONGS_MODE,
                         isPinned = true,
                     ),
@@ -532,7 +532,7 @@ class PlaylistRepository @Inject constructor(
         }
         val created = save(
             title = LIKED_SONGS_TITLE,
-            subtitle = "Songs you like in LastWave",
+            subtitle = "Songs you like in Onyx Music",
             mode = LIKED_SONGS_MODE,
             tracks = emptyList(),
         )

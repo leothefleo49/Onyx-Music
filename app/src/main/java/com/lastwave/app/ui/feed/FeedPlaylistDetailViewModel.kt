@@ -84,6 +84,17 @@ class FeedPlaylistDetailViewModel @Inject constructor(
         loadJob?.cancel()
         val previous = if (playlistId == currentPlaylistId) _uiState.value as? FeedPlaylistDetailUiState.Success else null
         currentPlaylistId = playlistId
+        val cachedResolved = if (!force) {
+            resolvedPlaylistCache[playlistId]?.takeIf { System.currentTimeMillis() - it.first < RESOLVED_CACHE_TTL_MS }?.second
+        } else null
+        if (cachedResolved != null && cachedResolved.tracks.isNotEmpty()) {
+            _uiState.value = FeedPlaylistDetailUiState.Success(
+                playlist = cachedResolved,
+                isLoadingMore = false,
+                loadError = null,
+            )
+            return
+        }
         _uiState.value = previous?.copy(isLoadingMore = true, loadError = null) ?: FeedPlaylistDetailUiState.Loading
         loadJob = viewModelScope.launch {
             val isSpotify = playlistId.startsWith("sp_") || playlistId.startsWith("spotify:")
@@ -136,9 +147,11 @@ class FeedPlaylistDetailViewModel @Inject constructor(
                         spotifyPlaylistImporter.fetchPlaylist(cleanId)
                     }
                     val spTracks = mutableListOf<YouTubeMusicTrack>()
-                    val limiter = Semaphore(4)
+                    val limiter = Semaphore(8)
                     val totalRows = spResult.rows
-                    for (batch in totalRows.chunked(10)) {
+                    val firstWave = totalRows.take(4)
+                    val remainingWaves = totalRows.drop(4).chunked(16)
+                    for (batch in listOf(firstWave).filter { it.isNotEmpty() } + remainingWaves) {
                         coroutineContext.ensureActive()
                         val resolved = coroutineScope {
                             batch.map { row ->
@@ -198,10 +211,18 @@ class FeedPlaylistDetailViewModel @Inject constructor(
                 }
                 if (result != null) {
                     val distinctTracks = result.tracks.distinctPlaylistSongs()
+                    val finalPlaylist = result.copy(
+                        id = playlistId,
+                        title = if (liked || recent) title else result.title.ifBlank { title },
+                        author = result.author?.takeIf(String::isNotBlank) ?: author,
+                        tracks = distinctTracks,
+                        trackCount = distinctTracks.size,
+                    )
+                    if (distinctTracks.isNotEmpty()) {
+                        resolvedPlaylistCache[playlistId] = System.currentTimeMillis() to finalPlaylist
+                    }
                     _uiState.value = FeedPlaylistDetailUiState.Success(
-                        result.copy(id = playlistId, title = if (liked || recent) title else result.title.ifBlank { title },
-                            author = result.author?.takeIf(String::isNotBlank) ?: author,
-                            tracks = distinctTracks, trackCount = distinctTracks.size),
+                        finalPlaylist,
                         // Truncated continuation pages still show what loaded, with
                         // an inline retry for the remainder (fixes logged-out
                         // playlists that previously collapsed to a dead Error).
@@ -267,10 +288,12 @@ class FeedPlaylistDetailViewModel @Inject constructor(
     fun shuffleTracks(tracks: List<YouTubeMusicTrack>) {
         val playlist = (_uiState.value as? FeedPlaylistDetailUiState.Success)?.playlist ?: return
         if (tracks.isEmpty()) return
+        val playable = tracks.map { it.toPlayableTrack() }
         musicPlayer.playQueue(
-            tracks = tracks.shuffled().map { it.toPlayableTrack() },
-            startIndex = 0,
+            tracks = playable,
+            startIndex = playable.indices.random(),
             sourceLabel = playlist.title.ifBlank { "Feed mix" },
+            startShuffled = true,
         )
     }
 
@@ -303,5 +326,7 @@ class FeedPlaylistDetailViewModel @Inject constructor(
 
     private companion object {
         const val WARM_CANDIDATES = 6
+        const val RESOLVED_CACHE_TTL_MS = 10L * 60L * 1000L
+        val resolvedPlaylistCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, YouTubePlaylistResult>>()
     }
 }

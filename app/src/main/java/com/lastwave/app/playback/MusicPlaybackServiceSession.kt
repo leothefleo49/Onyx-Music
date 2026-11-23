@@ -216,19 +216,25 @@ internal fun MusicPlaybackService.startDetector() {
                 val track = state.current
 
                 if (track == null) {
+                    if (wasPlaying || nowPlayingAnnouncedKey.isNotEmpty()) {
+                        scrobbleRepository.clearNowPlaying()
+                        nowPlayingAnnouncedKey = ""
+                    }
                     wasPlaying = false
                     continue
                 }
 
-                if (track.mediaType != com.lastwave.app.playback.MediaType.SONG ||
+                val isPodcast = track.mediaType != com.lastwave.app.playback.MediaType.SONG ||
                     !track.showId.isNullOrBlank() ||
                     track.artist.equals("Podcast", ignoreCase = true)
-                ) {
-                    // Podcast episodes are never scrobbled. The detector still
-                    // has to keep its position bookkeeping in sync so the
-                    // timer below does not count stale seconds. The scrobble
-                    // latch stays untouched: the next song must be able to
-                    // scrobble normally.
+
+                if (isPodcast) {
+                    // Podcasts are tracked locally under Videos & Other (not pushed to Last.fm music charts)
+                    // and clear music Now Playing when paused or stopped.
+                    if (!state.isPlaying && (wasPlaying || nowPlayingAnnouncedKey.isNotEmpty())) {
+                        scrobbleRepository.clearNowPlaying()
+                        nowPlayingAnnouncedKey = ""
+                    }
                     wasPlaying = state.isPlaying
                     lastPositionMs = state.positionMs
                     accumulatedMs = 0L
@@ -241,6 +247,11 @@ internal fun MusicPlaybackService.startDetector() {
                 // Announce Now Playing when transitioning to playing or if not yet announced
                 if (state.isPlaying && (!wasPlaying || key != nowPlayingAnnouncedKey)) {
                     announceNowPlaying(state)
+                }
+                if (!state.isPlaying && (wasPlaying || nowPlayingAnnouncedKey.isNotEmpty())) {
+                    // Clear Now Playing immediately on pause so Stats never shows a stale "Now Playing" banner.
+                    scrobbleRepository.clearNowPlaying()
+                    nowPlayingAnnouncedKey = ""
                 }
                 wasPlaying = state.isPlaying
 

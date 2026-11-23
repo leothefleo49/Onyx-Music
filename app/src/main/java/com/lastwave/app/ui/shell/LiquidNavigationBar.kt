@@ -167,7 +167,29 @@ private fun LiquidNavigationBarContent(
     } else 360.dp
 
     Box(
-        modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+        modifier
+            .fillMaxWidth()
+            .pointerInput(Unit) {
+                // Absorb stray taps in the padding/margins around the glass pill so they
+                // never click songs or playlists scrolled behind the bottom bar.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var moved = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            if (!moved) change.consume()
+                            break
+                        }
+                        if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                            moved = true
+                            break
+                        }
+                    }
+                }
+            }
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
             .padding(horizontal = 16.dp, vertical = if (compact) 12.dp else 8.dp),
         contentAlignment = Alignment.Center,
     ) {

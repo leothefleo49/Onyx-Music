@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.os.SystemClock
 import android.util.Log
+import com.lastwave.app.data.genre.GenreResolver
 import com.lastwave.app.data.local.ScrobblerPreferences
 import com.lastwave.app.data.local.ScrobblerSettings
 import com.lastwave.app.data.local.SessionPreferences
@@ -37,6 +38,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import java.io.IOException
+import java.io.InputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -47,6 +49,7 @@ data class ActiveNowPlaying(
     val sourcePackage: String = "",
     val sourceAppName: String = "",
     val startedAtMs: Long = System.currentTimeMillis(),
+    val mediaCategory: String = ScrobbleMediaCategory.MUSIC,
 )
 
 data class SyncFlushReport(
@@ -71,6 +74,7 @@ class ScrobbleSyncEngine @Inject constructor(
     private val appFilterDao: ScrobbleAppFilterDao,
     private val lastFmApi: LastFmApiService,
     private val listenBrainzApi: ListenBrainzApi,
+    private val genreResolver: GenreResolver,
     private val sessionPreferences: SessionPreferences,
     private val scrobblerPreferences: ScrobblerPreferences,
     private val rateGuard: LastFmRateGuard,
@@ -79,6 +83,7 @@ class ScrobbleSyncEngine @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val lastFmMutex = Mutex()
     private val flushMutex = Mutex()
+    private val genreBackfillMutex = Mutex()
     private var lastWriteAtElapsed = 0L
     @Volatile private var lastNowPlayingKey: String? = null
 
@@ -125,10 +130,8 @@ class ScrobbleSyncEngine @Inject constructor(
         durationMs: Long = 0L,
         sourcePackage: String = context.packageName,
         sourceAppName: String = DEFAULT_OWN_APP_NAME,
+        mediaCategory: String = ScrobbleMediaCategory.MUSIC,
     ): RemoteResult {
-        if (artist.equals("Podcast", ignoreCase = true) || track.equals("Podcast", ignoreCase = true)) {
-            return RemoteResult.Success
-        }
         val rules = runCatching { editRuleDao.getEnabledRules() }.getOrDefault(emptyList())
         val cleaned = ScrobbleRulesEngine.cleanMetadata(ScrobbleMetadata(track, artist, album.orEmpty()))
         val edited = ScrobbleRulesEngine.applyRules(cleaned, rules)
@@ -141,7 +144,13 @@ class ScrobbleSyncEngine @Inject constructor(
             sourcePackage = sourcePackage,
             sourceAppName = sourceAppName,
             startedAtMs = System.currentTimeMillis(),
+            mediaCategory = mediaCategory,
         )
+
+        // Non-music (videos, podcasts, streams) stays tracked locally without polluting external Last.fm/LB music status.
+        if (!ScrobbleMediaCategory.isMusic(mediaCategory)) {
+            return RemoteResult.Success
+        }
 
         val key = "${normalizeScrobbleTrackKey(edited.artist, edited.title)}|$sourcePackage"
         if (key == lastNowPlayingKey) {
@@ -202,11 +211,8 @@ class ScrobbleSyncEngine @Inject constructor(
         startedAtSec: Long = System.currentTimeMillis() / 1000L,
         sourcePackage: String = context.packageName,
         sourceAppName: String = DEFAULT_OWN_APP_NAME,
+        mediaCategory: String = ScrobbleMediaCategory.MUSIC,
     ): RemoteResult = withContext(Dispatchers.IO) {
-        if (artist.equals("Podcast", ignoreCase = true) || track.equals("Podcast", ignoreCase = true)) {
-            return@withContext RemoteResult.Success
-        }
-
         val rules = runCatching { editRuleDao.getEnabledRules() }.getOrDefault(emptyList())
         val cleaned = ScrobbleRulesEngine.cleanMetadata(ScrobbleMetadata(track, artist, album.orEmpty()))
         val edited = ScrobbleRulesEngine.applyRules(cleaned, rules)
@@ -214,11 +220,26 @@ class ScrobbleSyncEngine @Inject constructor(
             return@withContext RemoteResult.Success
         }
 
+        val resolvedCategory = if (mediaCategory.isBlank()) {
+            MediaCategoryClassifier.classify(
+                title = edited.title,
+                artist = edited.artist,
+                album = edited.album,
+                genre = genre,
+                sourcePackage = sourcePackage,
+                sourceAppName = sourceAppName,
+                durationMs = durationMs,
+            )
+        } else {
+            mediaCategory
+        }
+        val isMusic = ScrobbleMediaCategory.isMusic(resolvedCategory)
+
         val nowMs = System.currentTimeMillis()
         val startedAtMs = if (startedAtSec > 0L) startedAtSec * 1000L else nowMs
         val trackKey = normalizeScrobbleTrackKey(edited.artist, edited.title)
 
-        // Deduplicate rapid/mirror scrobbles within +/- 120 seconds
+        // Deduplicate rapid/mirror scrobbles within +/- 45 seconds
         val existing = eventDao.findRecentDuplicate(
             trackKey = trackKey,
             minTimeMs = nowMs - ScrobbleRulesEngine.DEFAULT_DEDUP_WINDOW_MS,
@@ -230,8 +251,8 @@ class ScrobbleSyncEngine @Inject constructor(
 
         val session = sessionPreferences.awaitLoadedSession()
         val settings = currentScrobblerSettings()
-        val wantsLastFm = session.apiKey.isNotBlank() && session.apiSecret.isNotBlank() && session.sessionKey.isNotBlank()
-        val wantsListenBrainz = settings.listenBrainzEnabled && settings.listenBrainzToken.isNotBlank()
+        val wantsLastFm = isMusic && session.apiKey.isNotBlank() && session.apiSecret.isNotBlank() && session.sessionKey.isNotBlank()
+        val wantsListenBrainz = isMusic && settings.listenBrainzEnabled && settings.listenBrainzToken.isNotBlank()
 
         val effectiveDuration = if (durationMs > 0L) durationMs else 210_000L
         val effectiveListened = if (listenedMs > 0L) listenedMs else effectiveDuration
@@ -254,9 +275,30 @@ class ScrobbleSyncEngine @Inject constructor(
                 lastFmSyncStatus = if (wantsLastFm) ScrobbleSyncStatus.PENDING else ScrobbleSyncStatus.SKIPPED,
                 listenBrainzSyncStatus = if (wantsListenBrainz) ScrobbleSyncStatus.PENDING else ScrobbleSyncStatus.SKIPPED,
                 retryCount = 0,
+                mediaCategory = resolvedCategory,
             ),
         )
         _scrobbleEvents.tryEmit(Unit)
+
+        // Enrich missing genre asynchronously for music scrobbles so Genre Stats stay accurate.
+        if (isMusic && genre.isBlank()) {
+            externalScope.launch(Dispatchers.IO) {
+                val resolvedGenre = runCatching { genreResolver.resolve(edited.title, edited.artist) }
+                    .getOrDefault("")
+                    .trim()
+                if (resolvedGenre.isNotBlank()) {
+                    runCatching {
+                        eventDao.updateGenreById(insertedId, resolvedGenre)
+                        eventDao.updateMissingGenreByArtist(edited.artist.trim().lowercase(), resolvedGenre)
+                        _scrobbleEvents.tryEmit(Unit)
+                    }
+                }
+            }
+        }
+
+        if (!isMusic) {
+            return@withContext RemoteResult.Success
+        }
 
         // Attempt ListenBrainz submission asynchronously if configured
         if (wantsListenBrainz) {
@@ -590,44 +632,110 @@ class ScrobbleSyncEngine @Inject constructor(
         _scrobbleEvents.tryEmit(Unit)
     }
 
+    suspend fun updateScrobbleCategory(id: Long, category: String) = withContext(Dispatchers.IO) {
+        eventDao.updateMediaCategory(id, category)
+        _scrobbleEvents.tryEmit(Unit)
+    }
+
+    /**
+     * Resolves missing genre tags for the user's top untagged music artists in Room
+     * via [GenreResolver] (Last.fm top tags + iTunes fallback) so Genre Stats show
+     * real genre breakdowns even for YouTube Music / Spotify / Last.fm imports.
+     */
+    suspend fun backfillMissingGenres(maxArtists: Int = 35): Int = withContext(Dispatchers.IO) {
+        genreBackfillMutex.withLock {
+            val all = eventDao.getAll()
+            val musicMissing = all.filter {
+                ScrobbleMediaCategory.isMusic(it.mediaCategory) &&
+                    it.genre.isBlank() &&
+                    it.artist.isNotBlank() &&
+                    it.title.isNotBlank()
+            }
+            if (musicMissing.isEmpty()) return@withLock 0
+
+            val byArtist = musicMissing
+                .groupBy { it.artist.trim().lowercase() }
+                .entries
+                .sortedByDescending { it.value.size }
+                .take(maxArtists.coerceAtLeast(1))
+
+            var enrichedArtists = 0
+            for ((artistLower, events) in byArtist) {
+                val sample = events.first()
+                val resolved = runCatching { genreResolver.resolve(sample.title, sample.artist) }
+                    .getOrDefault("")
+                    .trim()
+                if (resolved.isNotBlank()) {
+                    eventDao.updateMissingGenreByArtist(artistLower, resolved)
+                    enrichedArtists++
+                }
+                delay(120L)
+            }
+            if (enrichedArtists > 0) {
+                _scrobbleEvents.tryEmit(Unit)
+            }
+            enrichedArtists
+        }
+    }
+
     suspend fun importScrobbles(rawText: String): ScrobbleImportExport.ImportResult =
         withContext(Dispatchers.IO) {
             val parsed = ScrobbleImportExport.importFromText(rawText)
-            if (parsed.events.isEmpty()) return@withContext parsed
+            importScrobbleEvents(parsed.events, parsed.formatDetected, parsed.skippedCount)
+        }
 
-            val rules = runCatching { editRuleDao.getEnabledRules() }.getOrDefault(emptyList())
-            val existing = eventDao.getAll()
-            val existingKeys = existing.map { "${it.trackKey}|${it.scrobbledAtMs / 60_000L}" }.toHashSet()
+    suspend fun importFromStream(
+        inputStream: InputStream,
+        fileNameHint: String? = null,
+    ): ScrobbleImportExport.ImportResult = withContext(Dispatchers.IO) {
+        val parsed = ScrobbleImportExport.importFromStream(inputStream, fileNameHint)
+        importScrobbleEvents(parsed.events, parsed.formatDetected, parsed.skippedCount)
+    }
 
-            val toInsert = mutableListOf<ScrobbleEventEntity>()
-            var skippedDupes = 0
-            for (rawEvent in parsed.events) {
-                val edited = ScrobbleRulesEngine.applyRules(
-                    ScrobbleMetadata(rawEvent.title, rawEvent.artist, rawEvent.album),
-                    rules,
-                )
-                val key = normalizeScrobbleTrackKey(edited.artist, edited.title)
-                val dedupBucket = "$key|${rawEvent.scrobbledAtMs / 60_000L}"
-                if (!existingKeys.add(dedupBucket)) {
-                    skippedDupes++
-                    continue
-                }
-                toInsert += rawEvent.copy(
-                    trackKey = key,
-                    title = edited.title,
-                    artist = edited.artist,
-                    album = edited.album,
-                )
+    suspend fun importScrobbleEvents(
+        events: List<ScrobbleEventEntity>,
+        formatLabel: String,
+        initialSkipped: Int = 0,
+    ): ScrobbleImportExport.ImportResult = withContext(Dispatchers.IO) {
+        if (events.isEmpty()) {
+            return@withContext ScrobbleImportExport.ImportResult(emptyList(), formatLabel, initialSkipped)
+        }
+
+        val rules = runCatching { editRuleDao.getEnabledRules() }.getOrDefault(emptyList())
+        val existing = eventDao.getAll()
+        // 15-second bucket prevents collapsing back-to-back plays while deduping re-imports cleanly.
+        val existingKeys = existing.map { "${it.trackKey}|${it.scrobbledAtMs / 15_000L}" }.toHashSet()
+
+        val toInsert = mutableListOf<ScrobbleEventEntity>()
+        var skippedDupes = 0
+        for (rawEvent in events) {
+            val edited = ScrobbleRulesEngine.applyRules(
+                ScrobbleMetadata(rawEvent.title, rawEvent.artist, rawEvent.album),
+                rules,
+            )
+            val key = normalizeScrobbleTrackKey(edited.artist, edited.title)
+            val dedupBucket = "$key|${rawEvent.scrobbledAtMs / 15_000L}"
+            if (!existingKeys.add(dedupBucket)) {
+                skippedDupes++
+                continue
             }
-            if (toInsert.isNotEmpty()) {
-                toInsert.chunked(250).forEach { chunk -> eventDao.insertAll(chunk) }
-                _scrobbleEvents.tryEmit(Unit)
-            }
-            parsed.copy(
-                events = toInsert,
-                skippedCount = parsed.skippedCount + skippedDupes,
+            toInsert += rawEvent.copy(
+                trackKey = key,
+                title = edited.title,
+                artist = edited.artist,
+                album = edited.album,
             )
         }
+        if (toInsert.isNotEmpty()) {
+            toInsert.chunked(250).forEach { chunk -> eventDao.insertAll(chunk) }
+            _scrobbleEvents.tryEmit(Unit)
+        }
+        ScrobbleImportExport.ImportResult(
+            events = toInsert,
+            formatDetected = formatLabel,
+            skippedCount = initialSkipped + skippedDupes,
+        )
+    }
 
     suspend fun exportJson(): String = withContext(Dispatchers.IO) {
         ScrobbleImportExport.exportToJson(eventDao.getAll())

@@ -102,6 +102,7 @@ class SettingsViewModel @Inject constructor(
     private val fileExportHelper: FileExportHelper,
     private val scrobblerPreferences: ScrobblerPreferences,
     private val scrobbleSyncEngine: com.lastwave.app.data.scrobble.ScrobbleSyncEngine,
+    val historySyncManager: com.lastwave.app.data.scrobble.UniversalHistorySyncManager,
     private val discordPresencePreferences: com.lastwave.app.presence.DiscordPresencePreferences,
     private val equalizerPreferences: com.lastwave.app.data.local.EqualizerPreferences,
     private val loudnessPrefs: com.lastwave.app.playback.LoudnessPrefs,
@@ -124,9 +125,25 @@ class SettingsViewModel @Inject constructor(
 
     val authState: StateFlow<com.lastwave.app.data.model.AuthState> = authRepository.authState
     val updateInfo = appUpdateManager.updateInfo
+    val activeAudioOutput: StateFlow<com.lastwave.app.playback.ActiveAudioOutput> =
+        musicPlayer.outputRouteMonitor.activeOutput
 
     fun checkForUpdates() = appUpdateManager.checkForUpdate(isSilent = false)
     fun openUpdate(context: android.content.Context) = appUpdateManager.openUpdate(context)
+    fun setAutoInstallUpdates(enabled: Boolean) = appUpdateManager.setAutoInstallUpdates(enabled)
+    fun setAutoBestAudioOutput(enabled: Boolean) = launchSettingsAction("update auto-best output") {
+        settingsPreferences.setAutoBestAudioOutput(enabled)
+    }
+    fun setAutoSourcePriority(priority: com.lastwave.app.data.local.AutoSourcePriority) =
+        launchSettingsAction("update auto source priority") {
+            settingsPreferences.setAutoSourcePriority(priority)
+        }
+    fun setResamplerQuality(quality: Int) = launchSettingsAction("update resampler quality") {
+        settingsPreferences.setResamplerQuality(quality)
+    }
+    fun setDitherEnabled(enabled: Boolean) = launchSettingsAction("update dithering") {
+        settingsPreferences.setDitherEnabled(enabled)
+    }
 
     val spotifyConnected: StateFlow<Boolean> = spotifyPreferences.isConnected
         .withSettingsFallback("Spotify connection", false)
@@ -493,49 +510,16 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Pulls the account's entire Last.fm history into local stats. */
+    /** Pulls the account's entire Last.fm history into local stats in application scope. */
     fun importLastFmHistory() {
-        launchSettingsAction("import Last.fm history") {
-            lastFmImportStatus.value = "Fetching play history…"
-            val events = org.json.JSONArray()
-            var page = 1
-            var totalPages = 1
-            while (page <= totalPages && page <= 200) {
-                val data = homeRepository.fetchRecentTracks(
-                    page = page,
-                    limit = 200,
-                    forceRefresh = true,
-                ).getOrNull() ?: break
-                totalPages = data.totalPages.coerceAtLeast(1)
-                data.tracks.filterNot { it.isNowPlaying }.forEach { track ->
-                    val seconds = track.date?.uts?.toLongOrNull() ?: return@forEach
-                    if (track.name.isBlank() || track.artist.name.isBlank()) return@forEach
-                    events.put(
-                        org.json.JSONObject().apply {
-                            put("title", track.name)
-                            put("artist", track.artist.name)
-                            put("album", track.album.name)
-                            put("scrobbledAtMs", seconds * 1000L)
-                            put("startedAtMs", seconds * 1000L)
-                            put("durationMs", 0L)
-                            put("listenedMs", 0L)
-                            put("sourcePackage", "fm.last.android")
-                            put("sourceAppName", "Last.fm Import")
-                        },
-                    )
+        historySyncManager.syncLastFmFullHistory()
+        viewModelScope.launch {
+            historySyncManager.progress.collect { progress ->
+                lastFmImportStatus.value = progress.statusText
+                if (!progress.isRunning && !progress.lastCompletedSummary.isNullOrBlank()) {
+                    _uiState.update { it.copy(toastMessage = progress.lastCompletedSummary) }
+                    return@collect
                 }
-                lastFmImportStatus.value = "Fetched ${events.length()} plays (page $page/$totalPages)…"
-                page++
-            }
-            if (events.length() == 0) {
-                lastFmImportStatus.value = "No Last.fm history found"
-                return@launchSettingsAction
-            }
-            val payload = org.json.JSONObject().put("events", events).toString()
-            val result = scrobbleSyncEngine.importScrobbles(payload)
-            lastFmImportStatus.value = "Imported ${result.events.size} plays"
-            _uiState.update {
-                it.copy(toastMessage = "Imported ${result.events.size} Last.fm plays into Stats")
             }
         }
     }

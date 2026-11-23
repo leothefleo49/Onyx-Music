@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lastwave.app.R
 import com.lastwave.app.data.scrobble.ScrobbleEventEntity
+import com.lastwave.app.data.scrobble.ScrobbleMediaCategory
 import com.lastwave.app.data.scrobble.ScrobbleSyncStatus
 import com.lastwave.app.ui.common.ArtworkImage
 import java.text.SimpleDateFormat
@@ -82,27 +83,37 @@ fun ScrobbleHistorySheet(
         applyRetroactively: Boolean,
     ) -> Unit,
     onPlayTrack: (ScrobbleEventEntity) -> Unit,
+    onChangeCategory: ((ScrobbleEventEntity, String) -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by remember { mutableStateOf("") }
+    var selectedMediaTab by remember { mutableStateOf(MediaCategoryTab.MUSIC) }
     var selectedSource by remember { mutableStateOf<String?>(null) }
     var editingEvent by remember { mutableStateOf<ScrobbleEventEntity?>(null) }
     var confirmingDelete by remember { mutableStateOf<ScrobbleEventEntity?>(null) }
+
+    val musicCount = remember(events) { events.count { ScrobbleMediaCategory.isMusic(it.mediaCategory) } }
+    val otherCount = events.size - musicCount
 
     val availableSources = remember(events) {
         events.map { it.sourceAppName.ifBlank { "Onyx Music" } }.distinct().sorted()
     }
 
-    val filtered = remember(events, query, selectedSource) {
+    val filtered = remember(events, query, selectedSource, selectedMediaTab) {
         val q = query.trim().lowercase()
         events.filter { ev ->
+            val matchesMedia = when (selectedMediaTab) {
+                MediaCategoryTab.MUSIC -> ScrobbleMediaCategory.isMusic(ev.mediaCategory)
+                MediaCategoryTab.OTHER -> !ScrobbleMediaCategory.isMusic(ev.mediaCategory)
+                MediaCategoryTab.ALL -> true
+            }
             val appName = ev.sourceAppName.ifBlank { "Onyx Music" }
             val matchesSource = selectedSource == null || appName == selectedSource
             val matchesQuery = q.isEmpty() ||
                 ev.title.lowercase().contains(q) ||
                 ev.artist.lowercase().contains(q) ||
                 ev.album.lowercase().contains(q)
-            matchesSource && matchesQuery
+            matchesMedia && matchesSource && matchesQuery
         }
     }
 
@@ -153,6 +164,25 @@ fun ScrobbleHistorySheet(
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            Spacer(Modifier.height(10.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                items(MediaCategoryTab.entries) { tab ->
+                    val label = when (tab) {
+                        MediaCategoryTab.MUSIC -> "Music ($musicCount)"
+                        MediaCategoryTab.OTHER -> if (otherCount > 0) "Videos & Other ($otherCount)" else "Videos & Other"
+                        MediaCategoryTab.ALL -> "All (${events.size})"
+                    }
+                    StatsFilterChip(
+                        label = label,
+                        selected = selectedMediaTab == tab,
+                        onClick = { selectedMediaTab = tab },
+                    )
+                }
+            }
 
             if (availableSources.size > 1) {
                 Spacer(Modifier.height(10.dp))
@@ -209,6 +239,16 @@ fun ScrobbleHistorySheet(
                             onToggleLove = { onToggleLove(event) },
                             onEdit = { editingEvent = event },
                             onDelete = { confirmingDelete = event },
+                            onToggleCategory = onChangeCategory?.let { handler ->
+                                {
+                                    val next = if (ScrobbleMediaCategory.isMusic(event.mediaCategory)) {
+                                        ScrobbleMediaCategory.VIDEO
+                                    } else {
+                                        ScrobbleMediaCategory.MUSIC
+                                    }
+                                    handler(event, next)
+                                }
+                            },
                         )
                     }
                 }
@@ -260,6 +300,7 @@ private fun ScrobbleHistoryRow(
     onToggleLove: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onToggleCategory: (() -> Unit)? = null,
 ) {
     val timeText = remember(event.scrobbledAtMs) {
         SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(event.scrobbledAtMs))
@@ -330,6 +371,19 @@ private fun ScrobbleHistoryRow(
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             )
                         }
+                        if (!ScrobbleMediaCategory.isMusic(event.mediaCategory)) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                            ) {
+                                Text(
+                                    text = event.mediaCategory.lowercase().replaceFirstChar { it.uppercase() },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
                         Text(
                             text = timeText,
                             style = MaterialTheme.typography.labelSmall,
@@ -347,6 +401,14 @@ private fun ScrobbleHistoryRow(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (onToggleCategory != null) {
+                    TextButton(onClick = onToggleCategory) {
+                        Text(
+                            text = if (ScrobbleMediaCategory.isMusic(event.mediaCategory)) "Mark Video" else "Mark Music",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
                 IconButton(onClick = onPlay, modifier = Modifier.size(40.dp)) {
                     Icon(
                         imageVector = Icons.Filled.PlayArrow,

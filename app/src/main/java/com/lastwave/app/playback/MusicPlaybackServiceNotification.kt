@@ -441,7 +441,7 @@ internal fun MusicPlaybackService.notificationRemoteViews(
         // Expanded art is shown at 96dp (288px @3x); compact at 54dp where
         // 192px is already sharp. Two sizes keep the Binder parcel small.
         if (art != null) setImageViewBitmap(R.id.notification_artwork, scaledBitmap(art, if (expanded) 288 else 192))
-        else setImageViewResource(R.id.notification_artwork, R.mipmap.ic_launcher)
+        else setImageViewBitmap(R.id.notification_artwork, themedLogoBitmap(if (expanded) 192 else 128, palette))
         setTextViewText(R.id.notification_title, state.current?.title ?: "Onyx Music")
         setTextViewText(R.id.notification_artist, state.current?.artist ?: "Music player")
         setTextColor(R.id.notification_title, palette.onSurface)
@@ -571,7 +571,7 @@ internal fun MusicPlaybackService.createNotificationChannel() {
             runCatching { nm.deleteNotificationChannel(LEGACY_CHANNEL_ID_V1) }
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Music playback", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "Native LastWave playback controls"
+                    description = "Onyx Music playback controls"
                     setShowBadge(false)
                     setSound(null, null)
                     enableVibration(false)
@@ -581,6 +581,30 @@ internal fun MusicPlaybackService.createNotificationChannel() {
             android.util.Log.w("MusicPlaybackService", "Notification channel unavailable", error)
         }
     }
+
+internal fun MusicPlaybackService.themedLogoBitmap(
+    sizePx: Int,
+    palette: NotificationPalette,
+): Bitmap {
+    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = palette.primary
+        style = Paint.Style.FILL
+    }
+    val radius = sizePx * 0.24f
+    canvas.drawRoundRect(RectF(0f, 0f, sizePx.toFloat(), sizePx.toFloat()), radius, radius, paint)
+    runCatching {
+        val drawable = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.ic_lastwave_logo_mono)?.mutate()
+        if (drawable != null) {
+            drawable.setTint(palette.onPrimary)
+            val pad = (sizePx * 0.22f).toInt()
+            drawable.setBounds(pad, pad, sizePx - pad, sizePx - pad)
+            drawable.draw(canvas)
+        }
+    }
+    return bmp
+}
 
 internal data class NotificationPalette(
     val primary: Int,

@@ -1,5 +1,7 @@
 package com.lastwave.app.ui.stats
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +28,8 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
@@ -80,6 +84,15 @@ fun ListeningStatsScreen(
     var showScrobblerControls by remember { mutableStateOf(false) }
     var showCustomDatePicker by remember { mutableStateOf(false) }
     var showWrapped by remember { mutableStateOf(false) }
+    var showSyncHubSheet by remember { mutableStateOf(false) }
+
+    val importFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importHistoryFromUri(uri, uri.lastPathSegment)
+        }
+    }
 
     if (showScrobblerControls) {
         ScrobblerSettingsScreen(
@@ -277,9 +290,80 @@ fun ListeningStatsScreen(
                 }
             }
 
-            // ── TIME WINDOW CHIPS ──
+            if (uiState.syncProgress.isRunning || !uiState.syncProgress.statusText.isNullOrBlank()) {
+                item {
+                    val sync = uiState.syncProgress
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (sync.lastError != null && !sync.isRunning) {
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            if (sync.isRunning) {
+                                CircularProgressIndicator(
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.CloudSync,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            Text(
+                                text = sync.statusText.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = {
+                                    if (sync.isRunning) viewModel.cancelHistorySync()
+                                    else viewModel.dismissSyncBanner()
+                                },
+                            ) {
+                                Text(if (sync.isRunning) "Stop" else "OK")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── MEDIA CATEGORY TABS (MUSIC vs VIDEOS & OTHER) + TIME WINDOW CHIPS ──
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        items(MediaCategoryTab.entries) { tab ->
+                            val chipLabel = when (tab) {
+                                MediaCategoryTab.MUSIC -> "Music (${uiState.musicScrobbleCount})"
+                                MediaCategoryTab.OTHER -> if (uiState.otherScrobbleCount > 0) {
+                                    "Videos & Other (${uiState.otherScrobbleCount})"
+                                } else {
+                                    "Videos & Other"
+                                }
+                                MediaCategoryTab.ALL -> "All"
+                            }
+                            StatsFilterChip(
+                                label = chipLabel,
+                                selected = uiState.selectedMediaTab == tab,
+                                onClick = { viewModel.setMediaTab(tab) },
+                            )
+                        }
+                    }
+
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth(),
@@ -326,10 +410,10 @@ fun ListeningStatsScreen(
                         }
                     }
 
-                    // Quick Hub Action Bar (Scrobble Feed + Scrobbler Controls)
+                    // Quick Hub Action Bar (Play Feed + Sync & Import + Scrobbler)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Surface(
                             onClick = { showHistorySheet = true },
@@ -338,7 +422,7 @@ fun ListeningStatsScreen(
                             modifier = Modifier.weight(1f),
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.Center,
                             ) {
@@ -346,13 +430,41 @@ fun ListeningStatsScreen(
                                     imageVector = Icons.Filled.History,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp),
+                                    modifier = Modifier.size(16.dp),
                                 )
-                                Spacer(Modifier.width(8.dp))
+                                Spacer(Modifier.width(6.dp))
                                 Text(
-                                    text = "Play Feed (${uiState.recentScrobbles.size})",
-                                    style = MaterialTheme.typography.labelLarge,
+                                    text = "Feed",
+                                    style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                        Surface(
+                            onClick = { showSyncHubSheet = true },
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                            modifier = Modifier.weight(1.25f),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.CloudSync,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "Sync & Import",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 1,
                                 )
                             }
                         }
@@ -363,7 +475,7 @@ fun ListeningStatsScreen(
                             modifier = Modifier.weight(1f),
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.Center,
                             ) {
@@ -371,13 +483,14 @@ fun ListeningStatsScreen(
                                     imageVector = Icons.Filled.Tune,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp),
+                                    modifier = Modifier.size(16.dp),
                                 )
-                                Spacer(Modifier.width(8.dp))
+                                Spacer(Modifier.width(6.dp))
                                 Text(
-                                    text = "Scrobbler & Rules",
-                                    style = MaterialTheme.typography.labelLarge,
+                                    text = "Rules",
+                                    style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
                                 )
                             }
                         }
@@ -436,12 +549,30 @@ fun ListeningStatsScreen(
                             )
                             Spacer(Modifier.height(12.dp))
                             if (uiState.categoryItems.isEmpty()) {
-                                Text(
-                                    text = "No ${uiState.selectedCategory.label.lowercase()} captured in this window yet.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(vertical = 10.dp),
-                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        text = when {
+                                            uiState.selectedCategory == CategoryFilter.GENRE && uiState.isBackfillingGenres ->
+                                                "Detecting genres from your music library…"
+                                            uiState.selectedCategory == CategoryFilter.GENRE ->
+                                                "No genre tags found for this window yet. Tap below to detect genres from your artists."
+                                            else ->
+                                                "No ${uiState.selectedCategory.label.lowercase()} captured in this window yet."
+                                        },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (uiState.selectedCategory == CategoryFilter.GENRE && !uiState.isBackfillingGenres) {
+                                        androidx.compose.material3.FilledTonalButton(
+                                            onClick = { viewModel.backfillGenresNow(silent = false) },
+                                        ) {
+                                            Text("Detect Genres Now")
+                                        }
+                                    }
+                                }
                             } else {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     uiState.categoryItems.forEach { item ->
@@ -699,7 +830,93 @@ fun ListeningStatsScreen(
                     sourceLabel = "Scrobble History",
                 )
             },
+            onChangeCategory = viewModel::changeScrobbleCategory,
         )
+    }
+
+    if (showSyncHubSheet) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { showSyncHubSheet = false },
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Sync & Import Listening History",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Pull your full history from connected accounts or drop an export file (.zip, .json, .jsonl, or .csv) from Spotify, YouTube / YT Music Takeout, SoundCloud, stats.fm, Pano Scrobbler, Last.fm, ListenBrainz, or Apple Music.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                androidx.compose.material3.Button(
+                    onClick = {
+                        viewModel.syncLastFmNow()
+                        showSyncHubSheet = false
+                    },
+                    enabled = !uiState.syncProgress.isRunning,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Filled.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Sync All Past Last.fm History")
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    androidx.compose.material3.FilledTonalButton(
+                        onClick = {
+                            viewModel.syncYouTubeMusicNow()
+                            showSyncHubSheet = false
+                        },
+                        enabled = !uiState.syncProgress.isRunning,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("YouTube Music")
+                    }
+                    androidx.compose.material3.FilledTonalButton(
+                        onClick = {
+                            viewModel.syncListenBrainzNow()
+                            showSyncHubSheet = false
+                        },
+                        enabled = !uiState.syncProgress.isRunning,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("ListenBrainz")
+                    }
+                }
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = {
+                        showSyncHubSheet = false
+                        importFileLauncher.launch(
+                            arrayOf("application/zip", "application/json", "text/csv", "text/plain", "*/*"),
+                        )
+                    },
+                    enabled = !uiState.syncProgress.isRunning,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Import Export File / ZIP (Spotify, Takeout, SoundCloud, stats.fm, Pano…)")
+                }
+                TextButton(
+                    onClick = {
+                        showSyncHubSheet = false
+                        showScrobblerControls = true
+                    },
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text("Open Scrobbler & App Filter Settings")
+                }
+            }
+        }
     }
 
     uiState.selectedArtistDetail?.let { artistDetail ->

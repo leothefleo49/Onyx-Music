@@ -199,7 +199,31 @@ enum class HiResStart(val id: String, val title: String, val subtitle: String) {
     }
 }
 
-/** Cellular-only streaming choice: adapt to the link and buffer, never above the Wi-Fi choice. */
+/** Where Auto-Best Output Mode pulls audio from and in what priority order. */
+enum class AutoSourcePriority(val id: String, val title: String, val subtitle: String) {
+    LOCAL_LOSSLESS_YT(
+        id = "local_lossless_yt",
+        title = "Downloads → Lossless Addon → YouTube Music",
+        subtitle = "Play offline files first, then Hi-Res/CD Lossless addon & modules, then YouTube Music",
+    ),
+    LOSSLESS_FIRST(
+        id = "lossless_first",
+        title = "Lossless Addon & Modules → YouTube Music",
+        subtitle = "Always prioritize highest studio FLAC resolution first",
+    ),
+    LOCAL_YT(
+        id = "local_yt",
+        title = "Downloads → YouTube Music (Fastest)",
+        subtitle = "Use offline downloads or direct YouTube Music Opus streams for instant start",
+    );
+
+    companion object {
+        fun fromId(id: String?): AutoSourcePriority =
+            entries.firstOrNull { it.id == id } ?: LOCAL_LOSSLESS_YT
+    }
+}
+
+/** Adaptive streaming choice: adapt to the output device, link and buffer. */
 const val CELLULAR_QUALITY_AUTO = 0
 
 data class MiscSettings(
@@ -405,8 +429,8 @@ data class MiscSettings(
     val edgeGlowMotion: EdgeGlowMotion = EdgeGlowMotion.BEAT,
     /** Always-on display: show the current lyric line. */
     val aodShowLyrics: Boolean = true,
-    /** AOD edge animation: glow, bars, wave or off. */
-    val aodVisualizerMode: String = "glow",
+    /** AOD edge animation: wave, glow, bars, aurora or off. */
+    val aodVisualizerMode: String = "wave",
     val aodShowControls: Boolean = true,
     val aodShowArtwork: Boolean = true,
     /** Progress-bar colours: follow artwork, or use the two custom colours below. */
@@ -423,6 +447,14 @@ data class MiscSettings(
     val spatialBassMono: Boolean = false,
     /** App background treatment outside the player. */
     val appBackgroundStyle: AppBackgroundStyle = AppBackgroundStyle.ARTWORK,
+    /** Automatically optimizes quality ceiling, clarity curve, and DSP for the connected Bluetooth, wired, USB DAC, or speaker output. */
+    val autoBestAudioOutput: Boolean = true,
+    /** Source resolution order used when Auto-Best Output or Auto quality is active. */
+    val autoSourcePriority: AutoSourcePriority = AutoSourcePriority.LOCAL_LOSSLESS_YT,
+    /** Resampler precision (0 = Fast Linear, 1 = High Cubic, 2 = Ultra SoXR Sinc). */
+    val resamplerQuality: Int = 2,
+    /** Triangular PDF dithering when quantizing 32-bit float DSP to 16/24-bit output. */
+    val ditherEnabled: Boolean = true,
 )
 
 val MiscSettings.musicHapticsConfig: MusicHapticsConfig
@@ -674,6 +706,10 @@ class SettingsPreferences @Inject constructor(
         val MUSIC_HAPTICS_BATTERY_SAVER = booleanPreferencesKey("lw_music_haptics_battery_saver")
         val USE_LEGACY_TRACK_MENU = booleanPreferencesKey("lw_use_legacy_track_menu")
         val USE_MENU_BLUR = booleanPreferencesKey("lw_use_menu_blur")
+        val AUTO_BEST_AUDIO_OUTPUT = booleanPreferencesKey("lw_auto_best_audio_output")
+        val AUTO_SOURCE_PRIORITY = stringPreferencesKey("lw_auto_source_priority")
+        val RESAMPLER_QUALITY = intPreferencesKey("lw_resampler_quality")
+        val DITHER_ENABLED = booleanPreferencesKey("lw_dither_enabled")
     }
 
     val settings: Flow<MiscSettings> = dataStore.data
@@ -722,7 +758,7 @@ class SettingsPreferences @Inject constructor(
                 hiResStart = HiResStart.fromId(p.readSafely(Keys.HI_RES_START), p.readSafely(Keys.AUTO_UPGRADE_HI_RES)),
                 preferProviderModules = p.readSafely(Keys.PREFER_PROVIDER_MODULES) ?: true,
                 wifiStreamingQuality = p.readSafely(Keys.WIFI_STREAMING_QUALITY)
-                    ?.let(::normalizeStreamingQuality)
+                    ?.let { it.takeIf { q -> q == CELLULAR_QUALITY_AUTO } ?: normalizeStreamingQuality(it) }
                     ?: p.readSafely(Keys.LOSSLESS_QUALITY)?.let(::normalizeStreamingQuality)
                     ?: 27,
                 cellularStreamingQuality = p.readSafely(Keys.CELLULAR_STREAMING_QUALITY)
@@ -736,9 +772,8 @@ class SettingsPreferences @Inject constructor(
                 musicVideoNowPlayingButtonEnabled = p.readSafely(Keys.MUSIC_VIDEO_NP_BUTTON_ENABLED) ?: false,
                 showAutoEqInVolumePanel = p.readSafely(Keys.SHOW_AUTO_EQ_IN_VOLUME_PANEL) ?: true,
                 isStudioMasterClarityEnabled = p.readSafely(Keys.MUSIC_ENHANCER) ?: true,
-                // Clarity is a single on/off again: always the Reference curve, never bypassed on spatial.
-                clarityPreset = 0,
-                clarityAtmosBypass = false,
+                clarityPreset = (p.readSafely(Keys.CLARITY_PRESET) ?: 0).coerceIn(0, 3),
+                clarityAtmosBypass = p.readSafely(Keys.CLARITY_ATMOS_BYPASS) ?: false,
                 isBitPerfectEnabled = p.readSafely(Keys.BIT_PERFECT_ENABLED) ?: false,
                 wordByWordLyrics = p.readSafely(Keys.WORD_BY_WORD_LYRICS) ?: true,
                 lyricsProvider = LyricsProvider.fromId(p.readSafely(Keys.LYRICS_PROVIDER)),
@@ -812,7 +847,7 @@ class SettingsPreferences @Inject constructor(
                 edgeGlowThickness = (p.readSafely(Keys.EDGE_GLOW_THICKNESS) ?: 0.38f).coerceIn(0.05f, 1f),
                 edgeGlowMotion = EdgeGlowMotion.fromId(p.readSafely(Keys.EDGE_GLOW_MOTION)),
                 aodShowLyrics = p.readSafely(Keys.AOD_SHOW_LYRICS) ?: true,
-                aodVisualizerMode = p.readSafely(Keys.AOD_VISUALIZER_MODE) ?: "glow",
+                aodVisualizerMode = p.readSafely(Keys.AOD_VISUALIZER_MODE) ?: "wave",
                 aodShowControls = p.readSafely(Keys.AOD_SHOW_CONTROLS) ?: true,
                 aodShowArtwork = p.readSafely(Keys.AOD_SHOW_ARTWORK) ?: true,
                 seekbarMatchTrackColors = p.readSafely(Keys.SEEKBAR_MATCH_TRACK_COLORS) ?: true,
@@ -823,6 +858,10 @@ class SettingsPreferences @Inject constructor(
                 spatialWidth = (p.readSafely(Keys.SPATIAL_WIDTH) ?: 1f).coerceIn(0.3f, 2f),
                 spatialBassMono = p.readSafely(Keys.SPATIAL_BASS_MONO) ?: false,
                 appBackgroundStyle = AppBackgroundStyle.fromId(p.readSafely(Keys.APP_BACKGROUND_STYLE)),
+                autoBestAudioOutput = p.readSafely(Keys.AUTO_BEST_AUDIO_OUTPUT) ?: true,
+                autoSourcePriority = AutoSourcePriority.fromId(p.readSafely(Keys.AUTO_SOURCE_PRIORITY)),
+                resamplerQuality = (p.readSafely(Keys.RESAMPLER_QUALITY) ?: 2).coerceIn(0, 2),
+                ditherEnabled = p.readSafely(Keys.DITHER_ENABLED) ?: true,
             )
         }
         // Cold, every one of ~60 collectors (mostly on Main) re-ran this mapping and
@@ -1123,7 +1162,7 @@ class SettingsPreferences @Inject constructor(
 
     suspend fun setWifiStreamingQuality(quality: Int) {
         dataStore.edit {
-            val q = quality.takeIf { it in STREAMING_QUALITIES } ?: 27
+            val q = quality.takeIf { it == CELLULAR_QUALITY_AUTO || it in STREAMING_QUALITIES } ?: 27
             if (it[Keys.CELLULAR_STREAMING_QUALITY] == null) {
                 // Preserve an existing one-profile preference on both networks the first time
                 // the user opens the new controls; fresh installs start cellular at 320 kbps.
@@ -1131,9 +1170,27 @@ class SettingsPreferences @Inject constructor(
                     it[Keys.LOSSLESS_QUALITY]?.let(::normalizeStreamingQuality) ?: 5
             }
             it[Keys.WIFI_STREAMING_QUALITY] = q
-            // Keep the old preference in sync for downgrade compatibility.
-            it[Keys.LOSSLESS_QUALITY] = q
+            if (q != CELLULAR_QUALITY_AUTO) {
+                // Keep the old preference in sync for downgrade compatibility.
+                it[Keys.LOSSLESS_QUALITY] = q
+            }
         }
+    }
+
+    suspend fun setAutoBestAudioOutput(enabled: Boolean) {
+        dataStore.edit { it[Keys.AUTO_BEST_AUDIO_OUTPUT] = enabled }
+    }
+
+    suspend fun setAutoSourcePriority(priority: AutoSourcePriority) {
+        dataStore.edit { it[Keys.AUTO_SOURCE_PRIORITY] = priority.id }
+    }
+
+    suspend fun setResamplerQuality(quality: Int) {
+        dataStore.edit { it[Keys.RESAMPLER_QUALITY] = quality.coerceIn(0, 2) }
+    }
+
+    suspend fun setDitherEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.DITHER_ENABLED] = enabled }
     }
 
     suspend fun setCellularStreamingQuality(quality: Int) {

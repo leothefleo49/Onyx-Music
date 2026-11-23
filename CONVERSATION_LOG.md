@@ -232,3 +232,27 @@ Lyrics could not be closed; lock queue/tutorial/help still not visible enough; J
 
 ### Not built
 iOS, macOS, Windows, Linux, Wear OS and a full PWA. KMP is the correct future path, but this repo's Android-only Media3/Oboe/Cast/Hilt/Room/services and the lack of macOS/Xcode + Apple signing prevent producing those from this machine/session.
+
+---
+
+## Session 8 — 2026-11-23 (1.2.5 full ZCode history audit, playback & network hardening, UI declutter, universal history sync, AOD wave overhaul & release)
+
+### Reported
+Full audit of all prior Z.ai / ZCode chat messages plus new live issues:
+- Lyrics sync offset button in FullPlayer covered title text and belonged in the `⋮` menu; Queue header had too many upfront buttons that belonged in a `⋮` Queue options menu; Smooth Transitions button only turned ON (never OFF).
+- Needed better help/guidance for confusing UI controls and a real interactive tutorial.
+- Auto-updater prompted manually instead of updating silently; some popups showed the app icon in default lime instead of the selected App Icon color.
+- AOD icon looked like a sleep timer moon; AOD Wave mode needed a massively improved glowy look; Sleep Timer needed custom times.
+- Top-right profile icon had inconsistent colors across tabs and should be a unified Settings icon; Friends should live in Settings; duplicate top search icon in Library should be removed.
+- Stats genre showcase arrow had no label, genres weren't shown, and top genre showed 100%; past Last.fm data wasn't syncing completely; needed fast multi-platform history sync/import (Spotify, SoundCloud, YouTube, YT Music, Last.fm, stats.fm, Pano Scrobbler, ListenBrainz) and automatic separation of Music vs. Videos/Other scrobbles; Stats showed Now Playing on a song that wasn't playing.
+- Accidental clicks behind the bottom bar/MiniPlayer switched tracks with no easy way to revert to the previous queue at its exact song and position; replaying an old/recent queue played backwards; Deep Transition Mix crashed immediately; closing/crashing saved the song but not the timestamp within the song.
+- Leaving home Wi-Fi onto cellular data caused `"Unexpected runtime error"`, repeated song switching, and reshuffling; playlists and songs needed to boot up and load much faster.
+- Third-party developer/support branding (`@clashprojects`, `@MaterialYouApp`, `LastWave Discord`, `More from us` apps) needed to be removed and bug reports directed to `leothefleo49/Onyx-Music`.
+
+### Delivered in 1.2.5
+- **Network handoff, runtime error & shuffle stability:** `onNetworkRouteChanged()` evicts Wi-Fi-bound `googlevideo.com` URLs and sockets on Wi-Fi ↔ Cellular switches; `ChunkedRangeDataSource` refreshes URLs across mid-song IO/chunk boundaries and wraps runtime exceptions into `IOException`; `ResolvingDataSource` and `onPlayerError` treat runtime/loader errors as retryable transport failures instead of showing `"Unexpected runtime error"` and auto-skipping; fixed `replaceMediaItemPreservingShuffle` touching `secondaryPlayer` when it was the active deck (stopping unwanted reshuffling) and preserved `savedShuffleOrder` across all fallback/retry/resume paths.
+- **Fast song & playlist startup:** 250ms initial playback buffer, 256 KB / 4 KB stream probe window within the 512 KB bounded-range limit, `warmLikelyPlays` stream registration + title/artist warming, 10-minute in-memory caching for resolved YouTube & Spotify playlists (including Liked Songs), and automatic top-track warming when opening library playlists.
+- **Deep Transition Mix & playback position persistence:** removed recursive `.liquidGlassChrome` self-capture on Deep Mix / Manual DJ buttons; hardened `AcousticSignatureExtractor`; persisted live playback position every 2s, on pause/stop/task-removed, and on crash; restored exact song timestamp and shuffle order on restart and Recent Queue replay; fixed Stats → Recent history playing forward chronologically; absorbed stray taps behind bottom chrome and added `"↩ Back to <Previous Queue>"` undo banner/pill.
+- **Queue & FullPlayer declutter:** moved Lyrics Sync Offset into the track `⋮` menu; consolidated Queue header actions into a `⋮` Queue Options sheet with a real ON/OFF Smooth Transitions switch.
+- **Stats, Genres & Universal History Sync:** live Now Playing derivation; labeled `"Genres →"` pill + genre chips; true percentage share in `GenresRepository` + Room scrobble integration + multi-source genre backfill; `UniversalHistorySyncManager` for full Last.fm (`artist.displayName`), ListenBrainz, YT Music, and `.zip`/`.json`/`.jsonl`/`.csv` imports; **Music | Videos & Other | All** tabs powered by `MediaCategoryClassifier`.
+- **AOD, Sleep Timer, Unified Settings Header, Dynamic Brand Logo, Help & Audio/Updater:** `AutoAwesome` AOD icon + multi-layer neon Wave/Bars/Aurora/Glow AOD visualizers; custom hours/minutes `SleepTimerDialog`; unified top-right Settings gear across Feed/Stats/Library; dynamic `OnyxBrandLogo` matching selected App Icon; 6-step `OnyxInteractiveTourDialog` + searchable `OnyxHelpCenterSheet`; `AudioOutputRouteMonitor` + Smart Output & Advanced Audio sheet; Android 12+ silent background self-updates; removed third-party support/branding and pointed bug reports & releases to `github.com/leothefleo49/Onyx-Music`.

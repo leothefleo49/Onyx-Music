@@ -124,7 +124,20 @@ object SpatialAudioStage {
     @Volatile var bassMono: Boolean = false
     @Volatile var headYawRadians: Float = 0f
 
+    // Persistent one-pole filter states across consecutive buffers to avoid boundary clicks.
+    @Volatile private var lpL: Float = 0f
+    @Volatile private var lpR: Float = 0f
+    @Volatile private var bassL: Float = 0f
+    @Volatile private var bassR: Float = 0f
+
     fun isActive(): Boolean = mode != SpatialAudioMode.OFF
+
+    fun reset() {
+        lpL = 0f
+        lpR = 0f
+        bassL = 0f
+        bassR = 0f
+    }
 
     /**
      * Applies width, crossfeed and head-tracked balance to interleaved stereo
@@ -155,23 +168,21 @@ object SpatialAudioStage {
         val gainL = 1f - pan
         val gainR = 1f + pan
 
-        var lpL = 0f
-        var lpR = 0f
-        var bassL = 0f
-        var bassR = 0f
+        var curLpL = lpL
+        var curLpR = lpR
+        var curBassL = bassL
+        var curBassR = bassR
         for (i in 0 until frames) {
             val idx = i * 2
             var l = floats.get(idx)
             var r = floats.get(idx + 1)
 
             if (bassMono) {
-                // Cheap bass management: everything below ~120 Hz is summed
-                // to mono, the rest of the image stays untouched.
-                bassL += bassCoeff * (l - bassL)
-                bassR += bassCoeff * (r - bassR)
-                val lowMono = (bassL + bassR) * 0.5f
-                l = (l - bassL) + lowMono
-                r = (r - bassR) + lowMono
+                curBassL += bassCoeff * (l - curBassL)
+                curBassR += bassCoeff * (r - curBassR)
+                val lowMono = (curBassL + curBassR) * 0.5f
+                l = (l - curBassL) + lowMono
+                r = (r - curBassR) + lowMono
             }
 
             // Mid/side width.
@@ -181,13 +192,80 @@ object SpatialAudioStage {
             r = mid - side
 
             // Crossfeed: a little of the opposite ear's low end.
-            lpL += lpCoeff * (l - lpL)
-            lpR += lpCoeff * (r - lpR)
-            val outL = l + lpR * cf
-            val outR = r + lpL * cf
+            curLpL += lpCoeff * (l - curLpL)
+            curLpR += lpCoeff * (r - curLpR)
+            val outL = l + curLpR * cf
+            val outR = r + curLpL * cf
 
             floats.put(idx, outL * gainL)
             floats.put(idx + 1, outR * gainR)
         }
+        lpL = curLpL
+        lpR = curLpR
+        bassL = curBassL
+        bassR = curBassR
+    }
+
+    /**
+     * Applies width, crossfeed and head-tracked balance to interleaved stereo
+     * 16-bit signed integer PCM in place, so standard 16-bit FLAC / AAC decoders
+     * also receive full spatial rendering.
+     */
+    fun processPcm16(buffer: java.nio.ByteBuffer, sampleRate: Int) {
+        if (!isActive()) return
+        val shorts = buffer.asShortBuffer()
+        val frames = shorts.remaining() / 2
+        if (frames <= 0) return
+
+        val safeWidth = width.coerceIn(0.3f, 2f)
+        val safeCrossfeed = crossfeed.coerceIn(0f, 1f)
+        val cf = safeCrossfeed * 0.45f
+        val lpCoeff = (1f - Math.exp(-2.0 * PI * 700.0 / sampleRate.coerceAtLeast(8_000))).toFloat()
+        val bassCoeff = (1f - Math.exp(-2.0 * PI * 120.0 / sampleRate.coerceAtLeast(8_000))).toFloat()
+
+        val yaw = if (mode == SpatialAudioMode.HEAD_TRACKED) {
+            headYawRadians.coerceIn(-HeadTracker.MAX_YAW, HeadTracker.MAX_YAW)
+        } else 0f
+        val pan = sin(yaw) * 0.42f
+        val gainL = 1f - pan
+        val gainR = 1f + pan
+
+        var curLpL = lpL
+        var curLpR = lpR
+        var curBassL = bassL
+        var curBassR = bassR
+        val invScale = 1f / 32768f
+        for (i in 0 until frames) {
+            val idx = i * 2
+            var l = shorts.get(idx) * invScale
+            var r = shorts.get(idx + 1) * invScale
+
+            if (bassMono) {
+                curBassL += bassCoeff * (l - curBassL)
+                curBassR += bassCoeff * (r - curBassR)
+                val lowMono = (curBassL + curBassR) * 0.5f
+                l = (l - curBassL) + lowMono
+                r = (r - curBassR) + lowMono
+            }
+
+            val mid = (l + r) * 0.5f
+            val side = (l - r) * 0.5f * safeWidth
+            l = mid + side
+            r = mid - side
+
+            curLpL += lpCoeff * (l - curLpL)
+            curLpR += lpCoeff * (r - curLpR)
+            val outL = (l + curLpR * cf) * gainL
+            val outR = (r + curLpL * cf) * gainR
+
+            val sL = (outL * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+            val sR = (outR * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+            shorts.put(idx, sL)
+            shorts.put(idx + 1, sR)
+        }
+        lpL = curLpL
+        lpR = curLpR
+        bassL = curBassL
+        bassR = curBassR
     }
 }

@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.automirrored.filled.Sort
@@ -219,9 +220,7 @@ fun HomeScreen(
                         ) { showScrobblerControls = true }
                         HeaderActionIcon(Icons.Filled.Search, "Search", onOpenSearch)
                         com.lastwave.app.ui.recognition.MusicRecognitionButton(key = "recognition_stats")
-                        IconButton(onClick = onOpenSettings) {
-                            ProfileAvatar(avatarUrl = uiState.stats?.avatarUrl, modifier = Modifier.size(38.dp))
-                        }
+                        HeaderActionIcon(Icons.Filled.Settings, "Settings", onOpenSettings)
                     },
                 )
             }
@@ -294,6 +293,7 @@ fun HomeScreen(
                                 artistCount = stats.artistCount,
                                 albumCount = stats.albumCount,
                                 headlineLabel = headlineLabel,
+                                topGenres = uiState.topTags,
                                 onOpenGenres = onOpenGenres,
                                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 0.dp),
                             )
@@ -341,8 +341,9 @@ fun HomeScreen(
                 // doc comment on `rows` for why this used to jank on every
                 // Last.fm poll tick when it ran inline here instead.
                 val rows by viewModel.rows.collectAsStateWithLifecycle()
-                val playbackQueue = remember(rows) {
-                    rows.mapNotNull { row ->
+                val isRecentChronological = uiState.sortMode == HomeSortMode.RECENT
+                val playbackQueue = remember(rows, isRecentChronological) {
+                    val raw = rows.mapNotNull { row ->
                         (row as? HomeRow.Track)?.track?.let { track ->
                             com.lastwave.app.playback.PlayableTrack(
                                 title = track.name,
@@ -352,11 +353,20 @@ fun HomeScreen(
                             )
                         }
                     }
+                    // Recent history is displayed newest-first, so reverse into forward chronological
+                    // order when playing so replaying a past listening stretch goes forward, not backwards.
+                    if (isRecentChronological) raw.asReversed() else raw
                 }
-                val playbackIndexByRow = remember(rows) {
+                val playbackIndexByRow = remember(rows, isRecentChronological) {
+                    val totalTracks = rows.count { it is HomeRow.Track }
                     var nextPlaybackIndex = 0
                     IntArray(rows.size) { rowIndex ->
-                        if (rows[rowIndex] is HomeRow.Track) nextPlaybackIndex++ else -1
+                        if (rows[rowIndex] is HomeRow.Track) {
+                            val idx = nextPlaybackIndex++
+                            if (isRecentChronological) (totalTracks - 1 - idx).coerceAtLeast(0) else idx
+                        } else {
+                            -1
+                        }
                     }
                 }
                 // Content keys without the row index. Suffixing the index made

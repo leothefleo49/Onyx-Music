@@ -84,10 +84,22 @@ class ChunkedRangeDataSource(
         chunked = isYouTube && (dataSpec.length == C.LENGTH_UNSET.toLong() || dataSpec.length > effectiveChunkSize)
         if (!chunked) {
             // Non-YouTube requests or small requests pass through directly
-            return openUpstream(dataSpec)
+            return try {
+                openUpstream(dataSpec)
+            } catch (e: IOException) {
+                throw e
+            } catch (e: RuntimeException) {
+                throw IOException(e.message ?: "Upstream open error", e)
+            }
         }
 
-        openNextChunk()
+        try {
+            openNextChunk()
+        } catch (e: IOException) {
+            throw e
+        } catch (e: RuntimeException) {
+            throw IOException(e.message ?: "Chunk open error", e)
+        }
         return if (requestedLength != C.LENGTH_UNSET.toLong()) {
             requestedLength
         } else if (totalLength != C.LENGTH_UNSET.toLong()) {
@@ -150,6 +162,13 @@ class ChunkedRangeDataSource(
                 val refreshable = error.responseCode == 403 || error.responseCode == 410 || unexpected416
                 if (!refreshable) throw error
                 spec = tryRefreshSpec(spec) ?: throw error
+            } catch (error: IOException) {
+                // Mid-song network handoff (e.g. Wi-Fi -> Cellular) at a chunk boundary:
+                // attempt in-place URL refresh before failing the stream.
+                if (currentPosition <= 0L && bytesReadTotal <= 0L) throw error
+                spec = tryRefreshSpec(spec) ?: throw error
+            } catch (error: RuntimeException) {
+                throw IOException(error.message ?: "Chunk open runtime failure", error)
             }
         }
     }
@@ -238,6 +257,13 @@ class ChunkedRangeDataSource(
                     continue
                 }
                 throw error
+            } catch (error: RuntimeException) {
+                closeCurrentChunk()
+                val spec = currentDataSpec
+                if (spec != null && tryRefreshSpec(spec) != null) {
+                    continue
+                }
+                throw IOException(error.message ?: "Chunk read runtime failure", error)
             }
             if (bytesRead == C.RESULT_END_OF_INPUT) {
                 // This chunk closed early (connection dropped) or exactly at

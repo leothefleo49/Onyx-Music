@@ -270,6 +270,7 @@ data class ToggleDetailInfo(
     val title: String,
     val subtitle: String,
     val checked: Boolean,
+    val isAction: Boolean = false,
 )
 
 val LocalToggleDetailViewer = staticCompositionLocalOf<((ToggleDetailInfo) -> Unit)?> { null }
@@ -586,6 +587,7 @@ internal fun SettingsActionCard(
     val titleColor = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
     val shape = groupShape(position)
     val detailViewer = LocalToggleDetailViewer.current
+    val haptic = LocalHapticFeedback.current
 
     Card(
         shape = shape,
@@ -606,7 +608,8 @@ internal fun SettingsActionCard(
                 // Action rows open a sheet/dialog; long-press explains what
                 // that screen changes, same as the toggle cards.
                 onLongClick = {
-                    detailViewer?.invoke(ToggleDetailInfo(title, subtitle, false))
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    detailViewer?.invoke(ToggleDetailInfo(title, subtitle, checked = false, isAction = true))
                 },
             )
             .settingHighlightGlow(isHighlighted = isHighlighted, shape = shape),

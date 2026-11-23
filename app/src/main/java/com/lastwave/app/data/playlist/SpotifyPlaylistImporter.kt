@@ -407,6 +407,8 @@ class SpotifyPlaylistImporter @Inject constructor(
      * Fetches the user's Spotify Liked Songs collection via Pathfinder.
      */
     suspend fun fetchLikedSongs(): ExternalPlaylistResult = withContext(Dispatchers.IO) {
+        playlistCache["__liked_songs__"]?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
+            ?.let { return@withContext it.second }
         val token = spotifyAuthRepository.getPersonalToken()
             ?: throw IllegalStateException("Spotify account is not connected.")
         val clientToken = spotifyAuthRepository.getClientToken()
@@ -458,7 +460,11 @@ class SpotifyPlaylistImporter @Inject constructor(
             title = "Spotify Liked Songs",
             author = "Spotify",
             rows = rows,
-        )
+        ).also { result ->
+            if (result.rows.isNotEmpty()) {
+                playlistCache["__liked_songs__"] = System.currentTimeMillis() to result
+            }
+        }
     }
 
     /**

@@ -282,6 +282,7 @@ class DualDeckTransportCoordinator @Inject constructor(
         durationMs: Long,
         nextTrackStreamUrl: String? = null,
     ) {
+        val previousIncomingKey = currentIncomingTrack?.let { it.videoId ?: "${it.artist}|${it.title}" }
         currentPrimaryPlayer = primaryPlayer
         currentSecondaryPlayer = secondaryPlayer
         currentOutgoingTrack = currentTrack
@@ -301,6 +302,7 @@ class DualDeckTransportCoordinator @Inject constructor(
             return
         }
 
+        val incomingKey = nextTrack?.let { it.videoId ?: "${it.artist}|${it.title}" }
         val trackKey = currentTrack.videoId ?: "${currentTrack.artist}|${currentTrack.title}"
         if (activeTrackKey != trackKey) {
             activeTrackKey = trackKey
@@ -328,6 +330,14 @@ class DualDeckTransportCoordinator @Inject constructor(
                     }
                 }
             }
+        } else if (incomingKey != previousIncomingKey && activeSpliceJob?.isActive != true) {
+            // Next song changed (reorder, play-next, shuffle toggle) — re-plan for the new upcoming track.
+            currentSplicePlan = null
+            currentSmartPlan = null
+            currentIncomingSignature = null
+            if (_telemetry.value.phase == BlendPhase.ARMED || _telemetry.value.phase == BlendPhase.PRE_ANALYZING) {
+                _telemetry.value = DeckBlendTelemetry.IDLE.copy(activeTier = currentSettings.tier)
+            }
         }
 
         // A plan built for a different length (the stream's real duration
@@ -336,7 +346,8 @@ class DualDeckTransportCoordinator @Inject constructor(
             currentSplicePlan = null
             currentSmartPlan = null
             if (_telemetry.value.phase == BlendPhase.ARMED) {
-                _telemetry.update { it.copy(phase = BlendPhase.PRE_ANALYZING) }
+                // Reset to IDLE (not PRE_ANALYZING) so the look-ahead planner actually re-runs.
+                _telemetry.update { it.copy(phase = BlendPhase.IDLE) }
             }
         }
 
@@ -566,7 +577,10 @@ class DualDeckTransportCoordinator @Inject constructor(
         }
 
         secondaryPlayer.volume = 0.0f
-        secondaryPlayer.seekTo(plan.cueInStartMs)
+        // Avoid forcing a network re-buffer when the standby is already cued at 0:00.
+        if (plan.cueInStartMs > 500L && kotlin.math.abs(secondaryPlayer.currentPosition - plan.cueInStartMs) > 500L) {
+            secondaryPlayer.seekTo(plan.cueInStartMs)
+        }
         secondaryPlayer.play()
 
         activeSpliceJob = scope.launch {

@@ -64,6 +64,8 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
         val title: String,
         val artist: String,
         val album: String,
+        val genre: String,
+        val mediaCategory: String,
         val artworkUrl: String?,
         val durationMs: Long,
         var startedAtEpochSec: Long,
@@ -238,12 +240,16 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
             ?: metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
             ?: ""
         val rawAlbum = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: ""
+        val rawGenre = metadata.getString(MediaMetadata.METADATA_KEY_GENRE) ?: ""
         val durationMs = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
         val artworkUrl = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
             ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
             ?: metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
 
-        if (rawTitle.isBlank() || rawArtist.isBlank()) return
+        if (rawTitle.isBlank() || rawArtist.isBlank()) {
+            if (!isPlaying) syncEngine.clearNowPlaying(pkg)
+            return
+        }
 
         val cleaned = ScrobbleRulesEngine.cleanMetadata(ScrobbleMetadata(rawTitle, rawArtist, rawAlbum))
         val trackKey = normalizeScrobbleTrackKey(cleaned.artist, cleaned.title)
@@ -264,6 +270,15 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
             }
 
             val appName = resolveAppLabel(pkg)
+            val mediaCategory = MediaCategoryClassifier.classify(
+                title = rawTitle,
+                artist = rawArtist,
+                album = rawAlbum,
+                genre = rawGenre,
+                sourcePackage = pkg,
+                sourceAppName = appName,
+                durationMs = durationMs,
+            )
             val created = TrackedExternalSession(
                 packageName = pkg,
                 appName = appName,
@@ -271,6 +286,8 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
                 title = cleaned.title,
                 artist = cleaned.artist,
                 album = cleaned.album,
+                genre = rawGenre.trim(),
+                mediaCategory = mediaCategory,
                 artworkUrl = artworkUrl,
                 durationMs = durationMs,
                 startedAtEpochSec = System.currentTimeMillis() / 1000L,
@@ -283,11 +300,17 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
             if (isPlaying && settings.submitNowPlaying) {
                 created.nowPlayingSent = true
                 announceNowPlayingAsync(created)
+            } else if (!isPlaying) {
+                syncEngine.clearNowPlaying(pkg)
             }
             return
         }
 
         if (!isPlaying) {
+            if (existing.nowPlayingSent) {
+                existing.nowPlayingSent = false
+                syncEngine.clearNowPlaying(pkg)
+            }
             existing.lastTickElapsedMs = nowElapsed
             existing.lastReportedPosMs = reportedPos
             return
@@ -336,6 +359,7 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
                     durationMs = session.durationMs,
                     sourcePackage = session.packageName,
                     sourceAppName = session.appName,
+                    mediaCategory = session.mediaCategory,
                 )
             }
         }
@@ -350,12 +374,14 @@ class OnyxNotificationScrobblerService : NotificationListenerService() {
                     artist = session.artist,
                     track = session.title,
                     album = session.album.ifBlank { null },
+                    genre = session.genre,
                     artworkUrl = session.artworkUrl,
                     durationMs = session.durationMs,
                     listenedMs = listenedSnapshot,
                     startedAtSec = session.startedAtEpochSec,
                     sourcePackage = session.packageName,
                     sourceAppName = session.appName,
+                    mediaCategory = session.mediaCategory,
                 )
             }.onFailure { err ->
                 Log.w(TAG, "External scrobble failed for ${session.packageName}: ${err.message}")

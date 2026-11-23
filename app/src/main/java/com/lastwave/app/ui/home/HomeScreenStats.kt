@@ -330,6 +330,7 @@ internal fun StatsCard(
     onOpenGenres: () -> Unit,
     modifier: Modifier = Modifier,
     headlineLabel: String = "Scrobbles",
+    topGenres: List<String> = emptyList(),
 ) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { visible = true }
@@ -352,10 +353,14 @@ internal fun StatsCard(
                     color = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
                         Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.align(Alignment.Center),
+                            horizontalAlignment = Alignment.Start,
+                            modifier = Modifier.weight(1f),
                         ) {
                             Text(
                                 formatCount(rememberAnimatedCount(scrobbles)),
@@ -370,18 +375,27 @@ internal fun StatsCard(
                             )
                         }
                         Surface(
+                            onClick = onOpenGenres,
                             shape = ExpressivePillShape,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(46.dp).align(Alignment.CenterEnd),
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                IconButton(onClick = onOpenGenres) {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.ArrowForward,
-                                        contentDescription = stringResource(R.string.home_view_genres_cd),
-                                        tint = MaterialTheme.colorScheme.onPrimary,
-                                    )
-                                }
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(
+                                    text = "Genres",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = stringResource(R.string.home_view_genres_cd),
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(16.dp),
+                                )
                             }
                         }
                     }
@@ -393,6 +407,32 @@ internal fun StatsCard(
                     StatPill("Tracks", trackCount, Modifier.weight(1f))
                     StatPill("Artists", artistCount, Modifier.weight(1f))
                     StatPill("Albums", albumCount, Modifier.weight(1f))
+                }
+
+                if (topGenres.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        items(topGenres.take(4)) { tag ->
+                            Surface(
+                                onClick = onOpenGenres,
+                                shape = RoundedCornerShape(50),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                            ) {
+                                Text(
+                                    text = tag.replaceFirstChar { it.uppercase() },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -492,15 +532,27 @@ internal fun StatsCompactRow(
             CompactStat("Artists", artistCount, Modifier.weight(1f))
             CompactStat("Albums", albumCount, Modifier.weight(1f))
             Surface(
+                onClick = onOpenGenres,
                 shape = ExpressivePillShape,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(44.dp),
             ) {
-                IconButton(onClick = onOpenGenres) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = "Genres",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        maxLines = 1,
+                    )
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = stringResource(R.string.home_view_genres_cd),
                         tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(14.dp),
                     )
                 }
             }

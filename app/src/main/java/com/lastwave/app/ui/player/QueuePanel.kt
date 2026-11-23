@@ -328,7 +328,7 @@ import kotlin.math.abs
 
 internal var isQueueLockedState by mutableStateOf(false)
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun QueuePanel(
     state: MusicPlayerState,
@@ -339,9 +339,18 @@ internal fun QueuePanel(
     previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
     onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
     onSaveRecentQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
-    onMixQueue: () -> Unit = {},
+    onSaveCurrentQueue: () -> Unit = {},
+    autoMixEnabled: Boolean = false,
+    onToggleQueueTransitions: () -> Unit = {},
+    onDisableBitPerfectForTransitions: () -> Unit = {},
+    undoQueueSwitch: com.lastwave.app.playback.QueueSwitchUndoSnapshot? = null,
+    onUndoQueueSwitch: () -> Unit = {},
+    onDismissUndoQueueSwitch: () -> Unit = {},
 ) {
     val isQueueLocked = isQueueLockedState
+    var showQueueOptionsSheet by remember { mutableStateOf(false) }
+    var showRecentQueuesSheet by remember { mutableStateOf(false) }
+    var showQueueHelpDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
@@ -438,67 +447,58 @@ internal fun QueuePanel(
     Box(modifier = modifier) {
         Column(Modifier.fillMaxSize()) {
         Row(
-            Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 4.dp),
+            Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (onBack != null) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color.White.copy(alpha = 0.14f)),
-                ) {
-                    Icon(
-                        Icons.Filled.ArrowBack,
-                        "Back to player",
-                        tint = Color.White.copy(alpha = 0.90f),
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-            }
-            // Lock sits beside Back, not over the "Up next" title.
-            IconButton(
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                    isQueueLockedState = !isQueueLockedState
-                },
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color.White.copy(alpha = 0.14f)),
-            ) {
-                Icon(
-                    imageVector = if (isQueueLocked) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                    contentDescription = if (isQueueLocked) "Unlock queue" else "Lock queue",
-                    tint = if (isQueueLocked) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.90f),
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            IconButton(
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                    onMixQueue()
-                },
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color.White.copy(alpha = 0.14f)),
-            ) {
-                Icon(
-                    imageVector = com.lastwave.app.ui.player.QualityGlyphs.AutoMix,
-                    contentDescription = "Mix this queue",
-                    tint = Color.White.copy(alpha = 0.90f),
-                )
-            }
-            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    "Up next",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "Up next",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                    )
+                    if (isQueueLocked) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    Icons.Filled.Lock,
+                                    contentDescription = "Queue locked",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp),
+                                )
+                                Text(
+                                    "Locked",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White,
+                                )
+                            }
+                        }
+                    }
+                    if (autoMixEnabled) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                        ) {
+                            Text(
+                                if (player.bitPerfectEnabled) "Mix paused" else "Mix ON",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                }
                 if (state.queue.isNotEmpty()) {
                     val upcomingTracks = if (state.shuffleEnabled && shuffleUpcoming.isNotEmpty()) {
                         shuffleUpcoming.mapNotNull { state.queue.getOrNull(it) }
@@ -508,126 +508,80 @@ internal fun QueuePanel(
                     val remainingStats = QueueStatsFormatter.formatQueueStats(upcomingTracks)
                     Text(
                         "${state.currentIndex.coerceAtLeast(0) + 1} playing" +
-                            if (upcomingTracks.isNotEmpty()) " \u2022 $remainingStats left" else "",
+                            if (upcomingTracks.isNotEmpty()) " \u2022 $remainingStats left" else "" +
+                            if (state.isEndlessQueue) " \u2022 Unlimited" else "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.70f),
+                        color = Color.White.copy(alpha = 0.72f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (state.isEndlessQueue) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AllInclusive,
-                            contentDescription = "Unlimited queue",
-                            tint = Color.White.copy(alpha = 0.55f),
-                            modifier = Modifier.size(13.dp),
-                        )
-                        Text(
-                            "Unlimited",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.55f),
-                        )
-                    }
-                }
-            }
-            IconButton(
-                onClick = {
-                    userScrollHoldUntil = 0L
-                    scope.launch { listState.animateScrollToItem(state.currentIndex.coerceAtLeast(0)) }
-                },
-                enabled = state.currentIndex >= 0 && state.currentIndex < state.queue.size,
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color.White.copy(alpha = 0.14f)),
-            ) {
-                Icon(
-                    Icons.Filled.Visibility,
-                    "Scroll to current song",
-                    tint = Color.White.copy(alpha = 0.90f),
-                )
             }
             Spacer(Modifier.width(8.dp))
             IconButton(
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                    clearedQueue = ClearedQueueSnapshot(
-                        tracks = state.queue.toList(),
-                        index = state.currentIndex.coerceAtLeast(0),
-                        positionMs = player.state.value.positionMs,
-                    )
-                    player.clearQueueKeepCurrent()
+                    showQueueOptionsSheet = true
                 },
-                enabled = state.queue.size > 1 && !isQueueLocked,
                 modifier = Modifier
                     .size(44.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color.White.copy(alpha = 0.14f)),
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Clear queue except playing song",
-                    tint = if (state.queue.size > 1 && !isQueueLocked) Color.White.copy(alpha = 0.90f) else Color.White.copy(alpha = 0.35f),
+                    imageVector = Icons.Filled.MoreVert,
+                    contentDescription = "Queue options",
+                    tint = Color.White.copy(alpha = 0.94f),
                 )
             }
-
         }
-        // Recent queues: the last queues played, one tap to bring one back.
-        if (previewQueues.isNotEmpty()) {
-            Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                Text(
-                    "Recent queues",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.60f),
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                )
-                LazyRow(
+        // Prominent undo banner when user just switched away from another queue.
+        if (undoQueueSwitch != null) {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f),
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onUndoQueueSwitch() }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 6.dp),
                 ) {
-                    items(previewQueues, key = { it.id }) { queue ->
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(Color.White.copy(alpha = 0.08f))
-                                .clickable { onPlayPreviewQueue(queue) }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Icon(
-                                Icons.Filled.History,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.55f),
-                                modifier = Modifier.size(14.dp),
-                            )
-                            Text(
-                                queue.title,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.88f),
-                                maxLines = 1,
-                                softWrap = false,
-                            )
-                            Text(
-                                "${queue.tracks.size}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.55f),
-                            )
-                            IconButton(
-                                onClick = { onSaveRecentQueue(queue) },
-                                modifier = Modifier.size(24.dp),
-                            ) {
-                                Icon(
-                                    Icons.Filled.PlaylistAdd,
-                                    contentDescription = "Save queue as playlist",
-                                    tint = Color.White.copy(alpha = 0.70f),
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            }
-                        }
+                    Icon(
+                        imageVector = Icons.Filled.History,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Back to ${undoQueueSwitch.displayLabel}",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "Resume track #${undoQueueSwitch.currentIndex + 1} right where you left off",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
+                            maxLines = 1,
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismissUndoQueueSwitch,
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Dismiss",
+                            modifier = Modifier.size(16.dp),
+                        )
                     }
                 }
             }
@@ -1022,10 +976,10 @@ internal fun QueuePanel(
                     TextButton(
                         onClick = {
                             player.playQueue(
-                                cleared.tracks,
-                                cleared.index.coerceIn(0, cleared.tracks.lastIndex.coerceAtLeast(0)),
+                                tracks = cleared.tracks,
+                                startIndex = cleared.index.coerceIn(0, cleared.tracks.lastIndex.coerceAtLeast(0)),
+                                startPositionMs = cleared.positionMs,
                             )
-                            player.seekTo(cleared.positionMs)
                             clearedQueue = null
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                         },
@@ -1055,6 +1009,362 @@ internal fun QueuePanel(
         } else {
             menuIndex = null
         }
+    }
+
+    if (showQueueOptionsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showQueueOptionsSheet = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Queue options",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+
+                // 1. Smooth transitions (true ON/OFF toggle)
+                Surface(
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        onToggleQueueTransitions()
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Icon(
+                                imageVector = com.lastwave.app.ui.player.QualityGlyphs.AutoMix,
+                                contentDescription = null,
+                                tint = if (autoMixEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp),
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "Smooth transitions (Automix)",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    if (autoMixEnabled) {
+                                        if (player.bitPerfectEnabled) "ON, but paused while Bit-Perfect audio is active"
+                                        else "ON — beat-aware blending between upcoming songs"
+                                    } else {
+                                        "OFF — songs play back-to-back without fading"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = autoMixEnabled,
+                                onCheckedChange = { onToggleQueueTransitions() },
+                            )
+                        }
+                        if (autoMixEnabled && player.bitPerfectEnabled) {
+                            Spacer(Modifier.height(6.dp))
+                            TextButton(
+                                onClick = { onDisableBitPerfectForTransitions() },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text("Turn off Bit-Perfect so transitions can play")
+                            }
+                        }
+                    }
+                }
+
+                // 2. Lock queue (true ON/OFF toggle)
+                Surface(
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        isQueueLockedState = !isQueueLockedState
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (isQueueLocked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                            contentDescription = null,
+                            tint = if (isQueueLocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Lock queue",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                "Prevent accidental reordering, swipe-removes, or clearing",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = isQueueLocked,
+                            onCheckedChange = { isQueueLockedState = it },
+                        )
+                    }
+                }
+
+                // 3. Jump to current song
+                Surface(
+                    onClick = {
+                        showQueueOptionsSheet = false
+                        userScrollHoldUntil = 0L
+                        scope.launch { listState.animateScrollToItem(state.currentIndex.coerceAtLeast(0)) }
+                    },
+                    enabled = state.currentIndex in state.queue.indices,
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Jump to current song", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("Scroll the queue straight to what's playing now", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                // 4. Recent queues
+                Surface(
+                    onClick = {
+                        showQueueOptionsSheet = false
+                        showRecentQueuesSheet = true
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(Icons.Filled.History, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Recent queues (${previewQueues.size})", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("Replay past queues from your exact spot or save them as playlists", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                // 5. Save current queue as playlist
+                Surface(
+                    onClick = {
+                        showQueueOptionsSheet = false
+                        onSaveCurrentQueue()
+                    },
+                    enabled = state.queue.isNotEmpty(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(Icons.Filled.PlaylistAdd, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Save queue as playlist", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("Keep all ${state.queue.size} songs in your Library", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                // 6. Clear upcoming songs
+                Surface(
+                    onClick = {
+                        showQueueOptionsSheet = false
+                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        clearedQueue = ClearedQueueSnapshot(
+                            tracks = state.queue.toList(),
+                            index = state.currentIndex.coerceAtLeast(0),
+                            positionMs = player.state.value.positionMs,
+                        )
+                        player.clearQueueKeepCurrent()
+                    },
+                    enabled = state.queue.size > 1 && !isQueueLocked,
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = null,
+                            tint = if (state.queue.size > 1 && !isQueueLocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text("Clear upcoming songs", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text(
+                                if (isQueueLocked) "Unlock queue first to clear" else "Keep only the current song (with Undo)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                // 7. Queue help
+                Surface(
+                    onClick = {
+                        showQueueOptionsSheet = false
+                        showQueueHelpDialog = true
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(Icons.Filled.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("How Queue works", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("Quick guide to shuffle order, transitions, locking & history", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showRecentQueuesSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showRecentQueuesSheet = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Recent queues",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Tap any queue to pick up right where you left off, or save it as a playlist.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                if (previewQueues.isEmpty()) {
+                    Text(
+                        "No recent queues saved yet. Play any playlist or album and it will show up here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                    )
+                } else {
+                    previewQueues.forEach { queue ->
+                        Surface(
+                            onClick = {
+                                showRecentQueuesSheet = false
+                                onPlayPreviewQueue(queue)
+                            },
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(Icons.Filled.History, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        queue.title,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    val posSec = (queue.positionMs / 1000L).coerceAtLeast(0L)
+                                    val posLabel = if (posSec > 0L) " \u2022 ${posSec / 60}:${"%02d".format(posSec % 60)}" else ""
+                                    Text(
+                                        "${queue.tracks.size} songs \u2022 Track #${queue.startIndex + 1}$posLabel" +
+                                            if (queue.shuffleEnabled) " \u2022 Shuffled" else "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onSaveRecentQueue(queue) },
+                                ) {
+                                    Icon(
+                                        Icons.Filled.PlaylistAdd,
+                                        contentDescription = "Save queue as playlist",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showQueueHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showQueueHelpDialog = false },
+            title = { Text("How Queue works") },
+            text = {
+                Text(
+                    "• Reorder songs: Drag the handle on the right of any song.\n" +
+                        "• Remove a song: Swipe it left or right (tap Undo if accidental).\n" +
+                        "• Lock queue: Freezes drag, swipe, and Clear so nothing moves by mistake.\n" +
+                        "• Smooth transitions: Blends one song into the next automatically (requires Bit-Perfect mode OFF).\n" +
+                        "• Recent queues: Every queue you play is saved with your exact song & timestamp so you can jump back anytime.\n" +
+                        "• Accidental switch? Tap the 'Go back' banner above the mini player to return right where you were.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showQueueHelpDialog = false }) { Text("Got it") }
+            },
+        )
     }
 }
 

@@ -20,14 +20,18 @@ import javax.inject.Singleton
 private const val TAG = "GenresRepository"
 
 @Immutable
-data class GenreStat(val name: String, val count: Long, val percentOfTop: Float)
+data class GenreStat(
+    val name: String,
+    val count: Long,
+    val percentOfTop: Float,
+    val sharePercent: Float = percentOfTop,
+)
 
 /**
- * Faithful port of genres.js's data derivation (§5.2): tries user.getTopTags
- * first; if too sparse, derives from the user's top artists' own top tags,
- * weighted by artist playcount. Also owns Genre Detail's track list (§5.3),
- * "Discover More" (§5.5), and "Explore This Genre" (§5.4) — all of which
- * reuse GenerateRepository's authenticated call path and taste profile.
+ * Faithful port of genres.js's data derivation (§5.2): tries local Room music
+ * scrobbles and Last.fm user.getTopTags / user.getTopArtists -> artist.getTopTags,
+ * weighted by playcount, with true share-of-total percentages (never forcing the
+ * #1 genre to 100% when multiple genres exist).
  */
 @Singleton
 class GenresRepository @Inject constructor(
@@ -37,7 +41,25 @@ class GenresRepository @Inject constructor(
     private val tasteProfileProvider: TasteProfileProvider,
     private val viewingProfileState: com.lastwave.app.data.repository.ViewingProfileState,
 ) {
+    @Inject
+    internal lateinit var injectedScrobbleEventDao: com.lastwave.app.data.scrobble.ScrobbleEventDao
+
+    @Inject
+    internal lateinit var injectedGenreResolver: com.lastwave.app.data.genre.GenreResolver
+
+    private val scrobbleEventDao: com.lastwave.app.data.scrobble.ScrobbleEventDao?
+        get() = if (::injectedScrobbleEventDao.isInitialized) injectedScrobbleEventDao else null
+
+    private val genreResolver: com.lastwave.app.data.genre.GenreResolver?
+        get() = if (::injectedGenreResolver.isInitialized) injectedGenreResolver else null
+
     private val json = Json { ignoreUnknownKeys = true }
+
+    private val ignoredTags = setOf(
+        "seen live", "favorites", "favorite", "favourites", "favourite",
+        "my favorite", "awesome", "love", "albums i own", "check out",
+        "spotify", "music", "under 2000 listeners", "all",
+    )
 
     /** Whichever profile is currently being viewed on Home (a friend's, via
      *  the friend-switcher, or your own by default) — same ViewingProfileState
@@ -49,24 +71,34 @@ class GenresRepository @Inject constructor(
 
     private suspend fun call(params: Map<String, String>): JsonObject = generateRepository.call(params)
 
-    /** Periods use only dated Last.fm listening; missing period history stays empty.
+    /** Periods use only dated listening; missing period history stays empty.
      *  Overall retains the personal-tag fast path and undated guest/profile/chart fallbacks. */
     suspend fun fetchGenreStats(period: String): List<GenreStat> {
         val overall = period == "overall"
         val user = username()
         val guest = user.isBlank() || user.equals("Guest User", ignoreCase = true)
+        val isOwnProfile = viewingProfileState.viewingUsername.value == null
+
+        // First check local Room music scrobbles when viewing own profile and Room has real genre tags.
+        if (isOwnProfile && scrobbleEventDao != null) {
+            val localStats = fetchLocalRoomGenreStats(period)
+            if (localStats.size >= 3 || (guest && localStats.isNotEmpty())) {
+                return localStats
+            }
+        }
+
         if (!overall && guest) return emptyList()
 
         // user.gettoptags has no period parameter and cannot represent a week/month.
         if (overall && !guest) try {
-            val d = call(mapOf("method" to "user.gettoptags", "user" to user, "limit" to "18"))
+            val d = call(mapOf("method" to "user.gettoptags", "user" to user, "limit" to "25"))
             val tags = GenerateJson.asObjectList(d["toptags"]?.jsonObject?.get("tag"))
                 .mapNotNull { obj ->
-                    val name = (obj["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return@mapNotNull null
+                    val name = (obj["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim() ?: return@mapNotNull null
                     val count = (obj["count"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() ?: 0L
                     name to count
                 }
-                .filter { it.second > 0 }
+                .filter { it.second > 0 && it.first.lowercase() !in ignoredTags }
             if (tags.size >= 3) return normalizeStats(tags)
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
@@ -107,8 +139,9 @@ class GenresRepository @Inject constructor(
                             val tags = try {
                                 val td = call(mapOf("method" to "artist.gettoptags", "artist" to artistName))
                                 GenerateJson.asObjectList(td["toptags"]?.jsonObject?.get("tag"))
-                                    .mapNotNull { (it["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content }
-                                    .take(5)
+                                    .mapNotNull { (it["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim() }
+                                    .filter { it.isNotBlank() && it.lowercase() !in ignoredTags }
+                                    .take(4)
                             } catch (e: Exception) {
                                 currentCoroutineContext().ensureActive()
                                 Log.d(TAG, "artist.gettoptags miss for $artistName", e)
@@ -133,15 +166,70 @@ class GenresRepository @Inject constructor(
         }
     }
 
+    private suspend fun fetchLocalRoomGenreStats(period: String): List<GenreStat> {
+        val dao = scrobbleEventDao ?: return emptyList()
+        val now = System.currentTimeMillis()
+        val startMs = when (period) {
+            "7day" -> now - 7L * 86_400_000L
+            "1month" -> now - 30L * 86_400_000L
+            "12month" -> now - 365L * 86_400_000L
+            else -> 0L
+        }
+        val events = runCatching { dao.getMusicInRange(startMs, now) }.getOrDefault(emptyList())
+        if (events.isEmpty()) return emptyList()
+
+        // If most local events lack genre tags yet, enrich top 8 untagged artists on-demand via GenreResolver.
+        val taggedCount = events.count { it.genre.isNotBlank() }
+        val resolver = genreResolver
+        if (resolver != null && taggedCount < (events.size / 3).coerceAtLeast(3)) {
+            val topUntagged = events
+                .filter { it.genre.isBlank() && it.artist.isNotBlank() && it.title.isNotBlank() }
+                .groupBy { it.artist.trim().lowercase() }
+                .entries
+                .sortedByDescending { it.value.size }
+                .take(8)
+            coroutineScope {
+                topUntagged.map { (artistLower, list) ->
+                    async(Dispatchers.IO) {
+                        val sample = list.first()
+                        val resolved = runCatching { resolver.resolve(sample.title, sample.artist) }
+                            .getOrDefault("")
+                            .trim()
+                        if (resolved.isNotBlank()) {
+                            runCatching { dao.updateMissingGenreByArtist(artistLower, resolved) }
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+
+        val refreshed = runCatching { dao.getMusicInRange(startMs, now) }.getOrDefault(events)
+        val counts = mutableMapOf<String, Long>()
+        for (ev in refreshed) {
+            if (ev.genre.isBlank()) continue
+            ev.genre.split(",", ";", "/")
+                .map { it.trim().lowercase() }
+                .filter { it.isNotBlank() && it !in ignoredTags }
+                .distinct()
+                .take(2)
+                .forEach { tag ->
+                    counts[tag] = (counts[tag] ?: 0L) + 1L
+                }
+        }
+        val sorted = counts.entries.sortedByDescending { it.value }.take(15).map { it.key to it.value }
+        return normalizeStats(sorted)
+    }
+
     private suspend fun fetchChartTags(): List<GenreStat> {
         return try {
             val d = call(mapOf("method" to "chart.gettoptags", "limit" to "18"))
             val tags = GenerateJson.asObjectList(d["tags"]?.jsonObject?.get("tag"))
                 .mapNotNull { obj ->
-                    val name = (obj["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return@mapNotNull null
+                    val name = (obj["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim() ?: return@mapNotNull null
                     val count = (obj["count"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() ?: 100L
                     name to count
                 }
+                .filter { it.first.lowercase() !in ignoredTags }
             normalizeStats(tags)
         } catch (_: Exception) {
             emptyList()
@@ -150,8 +238,16 @@ class GenresRepository @Inject constructor(
 
     private fun normalizeStats(tags: List<Pair<String, Long>>): List<GenreStat> {
         if (tags.isEmpty()) return emptyList()
-        val top = tags.maxOf { it.second }.coerceAtLeast(1)
-        return tags.map { (name, count) -> GenreStat(name, count, (count.toFloat() / top.toFloat())) }
+        val top = tags.maxOf { it.second }.coerceAtLeast(1L)
+        val total = tags.sumOf { it.second }.coerceAtLeast(1L)
+        return tags.map { (name, count) ->
+            GenreStat(
+                name = name,
+                count = count,
+                percentOfTop = count.toFloat() / top.toFloat(),
+                sharePercent = count.toFloat() / total.toFloat(),
+            )
+        }
     }
 
     /**

@@ -21,9 +21,14 @@ object CrashHandler {
 
     private const val TAG = "CrashHandler"
 
+    /** Optional hook (e.g. MusicPlayer) to synchronously flush live state before process death. */
+    @Volatile
+    var onEmergencyPersist: (() -> Unit)? = null
+
     fun install(context: Context) {
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching { onEmergencyPersist?.invoke() }
             runCatching {
                 AppLog.flush()
                 CrashRecorder.record(CrashType.UNCAUGHT_EXCEPTION, thread, error)

@@ -31,6 +31,7 @@ import com.lastwave.app.data.repository.ThemeUiState
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.staticCompositionLocalOf
+import com.lastwave.app.data.local.AppIcon
 import com.lastwave.app.data.local.ThemeMode
 
 /** Shared composition local indicating whether the active theme is dark mode. */
@@ -39,6 +40,8 @@ val LocalIsDarkTheme = staticCompositionLocalOf { true }
 val LocalHideNavTabs = staticCompositionLocalOf { false }
 /** Settings "Use Bold Font": every text, lyrics included, drawn heavier. */
 val LocalUseBoldFont = staticCompositionLocalOf { false }
+/** Active user-selected app icon variant so all in-app branding & popups match. */
+val LocalAppIcon = staticCompositionLocalOf { AppIcon.DEFAULT }
 
 /** Swallows every haptic request; provided app-wide when Settings > Haptic Feedback is off. */
 private object SilentHapticFeedback : HapticFeedback {
@@ -186,6 +189,7 @@ fun LastWaveTheme(
                 LocalHideNavTabs provides themeState.hideNavTabs,
                 LocalUseBoldFont provides themeState.useBoldFont,
                 LocalIsDarkTheme provides isDark,
+                LocalAppIcon provides themeState.appIcon,
             ) {
                 content()
             }

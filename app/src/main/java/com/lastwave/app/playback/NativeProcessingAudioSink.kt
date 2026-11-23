@@ -711,10 +711,13 @@ class NativeProcessingAudioSink(
      * decoder memory is copied first (same crash history as the EQ path).
      */
     private fun maybeApplySpatial(source: ByteBuffer): ByteBuffer {
+        if (bitPerfectRequested || usbExclusive) return source
         val format = configuredFormat ?: return source
         if (!com.lastwave.app.playback.spatial.SpatialAudioStage.isActive()) return source
+        val isFloat = format.pcmEncoding == C.ENCODING_PCM_FLOAT
+        val isPcm16 = format.pcmEncoding == C.ENCODING_PCM_16BIT
         if (format.sampleMimeType != MimeTypes.AUDIO_RAW ||
-            format.pcmEncoding != C.ENCODING_PCM_FLOAT ||
+            (!isFloat && !isPcm16) ||
             format.channelCount != 2
         ) {
             return source
@@ -725,7 +728,11 @@ class NativeProcessingAudioSink(
         } else {
             source
         }
-        com.lastwave.app.playback.spatial.SpatialAudioStage.process(target, format.sampleRate)
+        if (isFloat) {
+            com.lastwave.app.playback.spatial.SpatialAudioStage.process(target, format.sampleRate)
+        } else {
+            com.lastwave.app.playback.spatial.SpatialAudioStage.processPcm16(target, format.sampleRate)
+        }
         spatialRoutedSource = source
         spatialRouted = target
         return target

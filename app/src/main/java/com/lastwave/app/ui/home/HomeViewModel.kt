@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -240,6 +241,7 @@ class HomeViewModel @Inject constructor(
     private val scrobbleEventDao: com.lastwave.app.data.scrobble.ScrobbleEventDao,
     private val scrobbleSyncEngine: com.lastwave.app.data.scrobble.ScrobbleSyncEngine,
     private val artworkRepository: com.lastwave.app.data.artwork.ArtworkRepository,
+    private val musicPlayer: com.lastwave.app.playback.MusicPlayer,
 ) : ViewModel() {
 
     companion object {
@@ -335,6 +337,32 @@ class HomeViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            combine(
+                musicPlayer.chromeState,
+                scrobbleSyncEngine.nowPlaying,
+            ) { chrome, externalNp ->
+                chrome to externalNp
+            }.collect { (chrome, externalNp) ->
+                if (_uiState.value.isViewingFriend) return@collect
+                val liveNowPlaying = deriveOwnNowPlaying(
+                    chrome = chrome,
+                    externalNp = externalNp,
+                    previous = _uiState.value.nowPlaying,
+                )
+                val prev = _uiState.value.nowPlaying
+                val changed = prev?.name != liveNowPlaying?.name ||
+                    prev?.artist != liveNowPlaying?.artist ||
+                    (prev == null) != (liveNowPlaying == null)
+                if (changed) {
+                    _listenElapsedSeconds.value = 0
+                    notifyNowPlayingArtwork(liveNowPlaying)
+                }
+                _uiState.update { state ->
+                    if (state.isViewingFriend) state else state.copy(nowPlaying = liveNowPlaying)
+                }
+            }
+        }
+        viewModelScope.launch {
             uiState
                 .map {
                     RowsKey(
@@ -420,14 +448,61 @@ class HomeViewModel @Inject constructor(
         return nowPlayingHome to (recentAsHome + extra)
     }
 
+    private fun deriveOwnNowPlaying(
+        chrome: com.lastwave.app.playback.PlaybackChromeState = musicPlayer.chromeState.value,
+        externalNp: com.lastwave.app.data.scrobble.ActiveNowPlaying? = scrobbleSyncEngine.nowPlaying.value,
+        previous: HomeTrack? = _uiState.value.nowPlaying,
+    ): HomeTrack? {
+        val currentTrack = chrome.current
+        if (chrome.isPlaying && currentTrack != null &&
+            currentTrack.mediaType == com.lastwave.app.playback.MediaType.SONG &&
+            currentTrack.showId.isNullOrBlank()
+        ) {
+            val same = previous != null && previous.isNowPlaying &&
+                previous.name.equals(currentTrack.title, ignoreCase = true) &&
+                previous.artist.equals(currentTrack.artist, ignoreCase = true)
+            return HomeTrack(
+                name = currentTrack.title,
+                artist = currentTrack.artist,
+                artworkUrl = currentTrack.artworkUrl,
+                timestampMillis = if (same && previous != null) previous.timestampMillis else System.currentTimeMillis(),
+                playCount = 0,
+                isNowPlaying = true,
+                videoId = currentTrack.videoId,
+            )
+        }
+        if (externalNp != null &&
+            com.lastwave.app.data.scrobble.ScrobbleMediaCategory.isMusic(externalNp.mediaCategory) &&
+            externalNp.title.isNotBlank() &&
+            externalNp.artist.isNotBlank()
+        ) {
+            val same = previous != null && previous.isNowPlaying &&
+                previous.name.equals(externalNp.title, ignoreCase = true) &&
+                previous.artist.equals(externalNp.artist, ignoreCase = true)
+            return HomeTrack(
+                name = externalNp.title,
+                artist = externalNp.artist,
+                artworkUrl = previous?.takeIf { same }?.artworkUrl,
+                timestampMillis = if (same && previous != null) previous.timestampMillis else externalNp.startedAtMs,
+                playCount = 0,
+                isNowPlaying = true,
+            )
+        }
+        return null
+    }
+
     private fun applyLastFmInitialData(
         username: String,
         data: HomeInitialData,
         connected: Boolean,
     ) {
         cachedTopTracks = data.topTracks
-        val (nowPlaying, merged) = mergeRecentWithTop(data.recent.nowPlaying, data.recent.tracks, data.topTracks)
-        notifyNowPlayingArtwork(nowPlaying)
+        val isFriend = username.isNotBlank() && username != _uiState.value.username
+        val (lastFmNowPlaying, merged) = mergeRecentWithTop(data.recent.nowPlaying, data.recent.tracks, data.topTracks)
+        // Own profile strictly reflects live playback (Onyx or active external app) so paused/stopped tracks
+        // never stay stuck as "Now Playing" from stale Last.fm cache. Friend profiles still show Last.fm status.
+        val resolvedNowPlaying = if (isFriend) lastFmNowPlaying else deriveOwnNowPlaying()
+        notifyNowPlayingArtwork(resolvedNowPlaying)
         val resetFallbackSort = fallbackForcedMostPlayed
         fallbackForcedMostPlayed = false
         _uiState.update { state ->
@@ -436,7 +511,7 @@ class HomeViewModel @Inject constructor(
                 isRefreshing = false,
                 viewingUsername = username,
                 stats = data.stats,
-                nowPlaying = nowPlaying,
+                nowPlaying = resolvedNowPlaying,
                 allTracks = merged,
                 topTracksOverall = data.topTracks,
                 page = data.recent.page,
@@ -471,7 +546,7 @@ class HomeViewModel @Inject constructor(
                 isRefreshing = false,
                 viewingUsername = username,
                 stats = local.stats,
-                nowPlaying = null,
+                nowPlaying = deriveOwnNowPlaying(),
                 // Use Recent when real timestamped scrobble events exist;
                 // fall back to Most Played when only library aggregates exist.
                 sortMode = if (hasTimestampedRecent) HomeSortMode.RECENT else HomeSortMode.MOST_PLAYED,
@@ -628,8 +703,9 @@ class HomeViewModel @Inject constructor(
                 val statsResult = homeRepository.fetchStats(username = target, forceRefresh = true)
                 recent.fold(
                     onSuccess = { page ->
-                        val (nowPlaying, merged) = mergeRecentWithTop(page.nowPlaying, page.tracks, cachedTopTracks)
-                        notifyNowPlayingArtwork(nowPlaying)
+                        val (lastFmNp, merged) = mergeRecentWithTop(page.nowPlaying, page.tracks, cachedTopTracks)
+                        val resolvedNp = if (_uiState.value.isViewingFriend) lastFmNp else deriveOwnNowPlaying()
+                        notifyNowPlayingArtwork(resolvedNp)
                         val freshStats = statsResult.getOrNull()
                         _uiState.update { state ->
                             val baseStats = freshStats ?: state.stats
@@ -639,7 +715,7 @@ class HomeViewModel @Inject constructor(
                             state.copy(
                                 isRefreshing = false,
                                 stats = resolvedStats,
-                                nowPlaying = nowPlaying,
+                                nowPlaying = resolvedNp,
                                 allTracks = merged,
                                 page = page.page,
                                 totalPages = page.totalPages,
@@ -871,8 +947,9 @@ class HomeViewModel @Inject constructor(
                 val recent = homeRepository.fetchRecentTracks(username = target, forceRefresh = true)
                 recent.onSuccess { page ->
                     recentTotalScrobbles = page.totalScrobbles
-                    val (nowPlaying, merged) = mergeRecentWithTop(page.nowPlaying, page.tracks, cachedTopTracks)
-                    notifyNowPlayingArtwork(nowPlaying)
+                    val (lastFmNp, merged) = mergeRecentWithTop(page.nowPlaying, page.tracks, cachedTopTracks)
+                    val resolvedNp = if (_uiState.value.isViewingFriend) lastFmNp else deriveOwnNowPlaying()
+                    notifyNowPlayingArtwork(resolvedNp)
                     _uiState.update { state ->
                         val baseStats = state.stats
                         val resolvedStats = if (baseStats != null && baseStats.scrobbles <= 0L && page.totalScrobbles > 0L) {
@@ -880,7 +957,7 @@ class HomeViewModel @Inject constructor(
                         } else baseStats
                         state.copy(
                             stats = resolvedStats,
-                            nowPlaying = nowPlaying,
+                            nowPlaying = resolvedNp,
                             allTracks = merged,
                             page = page.page,
                             totalPages = page.totalPages,

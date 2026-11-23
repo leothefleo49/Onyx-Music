@@ -596,29 +596,10 @@ internal fun AboutCard(
             Modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(
-                Modifier
-                    .size(72.dp)
-                    .clip(CircleShape)
-                    // The launcher icon is an <adaptive-icon> XML on API 26+
-                    // (mipmap-anydpi-v26/ic_launcher_round.xml) — Compose's
-                    // painterResource() can only parse plain bitmap/vector
-                    // drawables, not that root element, and throws the
-                    // instant this composable enters composition. Rebuilding
-                    // the same mark from its two real layers (the lime
-                    // background color + the bars vector, both plain
-                    // resources) reproduces it exactly without touching the
-                    // adaptive icon resource at all.
-                    .background(colorResource(appIcon.backgroundRes)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(appIcon.logoRes),
-                    contentDescription = "Onyx Music",
-                    tint = Color.Unspecified,
-                    modifier = Modifier.size(72.dp),
-                )
-            }
+            com.lastwave.app.ui.common.OnyxBrandLogo(
+                size = 72.dp,
+                appIcon = appIcon,
+            )
             Spacer(Modifier.height(14.dp))
             Text("Onyx Music", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))

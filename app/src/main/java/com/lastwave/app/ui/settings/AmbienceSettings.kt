@@ -93,7 +93,8 @@ internal fun AmbienceSettingsDialog(
                     checked = settings.edgeGlowEnabled,
                     onChange = onEdgeGlowEnabled,
                 )
-                if (settings.edgeGlowEnabled) {
+                val showGlowControls = settings.edgeGlowEnabled || settings.aodVisualizerMode != "off"
+                if (showGlowControls) {
                     OptionRow(
                         label = stringResource(R.string.settings_edge_glow_color_mode),
                         options = listOf(
@@ -187,9 +188,10 @@ internal fun AmbienceSettingsDialog(
                 OptionRow(
                     label = "Edge animation",
                     options = listOf(
+                        "wave" to "Wave",
                         "glow" to "Glow",
                         "bars" to "Bars",
-                        "wave" to "Wave",
+                        "aurora" to "Aurora",
                         "off" to "Off",
                     ),
                     selected = settings.aodVisualizerMode,

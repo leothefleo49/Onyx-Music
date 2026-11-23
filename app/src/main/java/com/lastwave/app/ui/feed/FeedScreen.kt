@@ -61,6 +61,7 @@ import com.lastwave.app.data.generate.youtubeVideoIdOrNull
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.PlayArrow
@@ -1648,9 +1649,7 @@ fun FeedScreen(
                 actions = {
                     HeaderActionIcon(Icons.Filled.Search, "Search", onOpenSearch)
                     com.lastwave.app.ui.recognition.MusicRecognitionButton(key = "recognition_feed")
-                    IconButton(onClick = onOpenSettings) {
-                        com.lastwave.app.ui.home.ProfileAvatar(avatarUrl = state.avatarUrl, modifier = Modifier.size(38.dp))
-                    }
+                    HeaderActionIcon(Icons.Filled.Settings, "Settings", onOpenSettings)
                 },
             )
             if (state.homeChips.isNotEmpty()) {

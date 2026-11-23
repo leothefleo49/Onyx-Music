@@ -121,8 +121,8 @@ fun LastWaveJamSheet(
     val context = LocalContext.current
 
     val isDark = com.lastwave.app.ui.theme.LocalIsDarkTheme.current
-    val LimeAccent = if (isDark) Color(0xFFC9FB00) else Color(0xFF2E6B12)
-    val DarkTeal = if (isDark) Color(0xFF012226) else Color.White
+    val LimeAccent = MaterialTheme.colorScheme.primary
+    val DarkTeal = MaterialTheme.colorScheme.onPrimary
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var chatInputText by remember { mutableStateOf("") }
@@ -161,20 +161,7 @@ fun LastWaveJamSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(LimeAccent),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_lastwave_logo_mono),
-                            contentDescription = null,
-                            tint = DarkTeal,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
+                    com.lastwave.app.ui.common.OnyxBrandLogo(size = 32.dp)
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(

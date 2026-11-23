@@ -478,6 +478,7 @@ fun LastWaveNavHost(
                     onOpenSpotifyTokenImport = { navController.navigate(Screen.SpotifyTokenImport.route) },
                     onOpenExternalImport = { navController.navigate(Screen.ExternalPlaylistImport.route) },
                     onOpenJam = { navController.navigate(Screen.Jam.createRoute()) },
+                    onOpenFriends = { navController.navigate(Screen.Friends.route) },
                 )
             }
         }
@@ -792,29 +793,10 @@ fun LastWaveNavHost(
 private fun LaunchGate() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Surface(
+            com.lastwave.app.ui.common.OnyxBrandLogo(
+                size = 88.dp,
                 shape = RoundedCornerShape(28.dp),
-                // The glyph itself is tinted with the user's accent so the
-                // first frame after the system splash is already "their"
-                // colour instead of flashing the stock lime logo.
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                ),
-                tonalElevation = 6.dp,
-                shadowElevation = 10.dp,
-                modifier = Modifier.size(88.dp),
-            ) {
-                androidx.compose.foundation.Image(
-                    painter = painterResource(com.lastwave.app.R.drawable.ic_launcher_foreground),
-                    contentDescription = null,
-                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
-                        MaterialTheme.colorScheme.primary,
-                    ),
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            )
             Spacer(Modifier.height(18.dp))
             Text(
                 androidx.compose.ui.res.stringResource(com.lastwave.app.R.string.app_name),

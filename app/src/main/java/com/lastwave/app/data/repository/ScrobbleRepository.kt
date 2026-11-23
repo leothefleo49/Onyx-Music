@@ -2,6 +2,7 @@ package com.lastwave.app.data.repository
 
 import android.content.Context
 import com.lastwave.app.data.scrobble.ActiveNowPlaying
+import com.lastwave.app.data.scrobble.ScrobbleMediaCategory
 import com.lastwave.app.data.scrobble.ScrobbleSyncEngine
 import com.lastwave.app.data.scrobble.SyncFlushReport
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -40,14 +41,24 @@ class ScrobbleRepository @Inject constructor(
         ) : Result
     }
 
-    suspend fun updateNowPlaying(artist: String, track: String, album: String?): Result =
+    suspend fun updateNowPlaying(
+        artist: String,
+        track: String,
+        album: String?,
+        mediaCategory: String = ScrobbleMediaCategory.MUSIC,
+    ): Result =
         syncEngine.updateNowPlaying(
             artist = artist,
             track = track,
             album = album,
             sourcePackage = context.packageName,
             sourceAppName = "Onyx Music",
+            mediaCategory = mediaCategory,
         ).toLegacyResult()
+
+    fun clearNowPlaying() {
+        syncEngine.clearNowPlaying(context.packageName)
+    }
 
     suspend fun scrobble(
         artist: String,
@@ -56,16 +67,20 @@ class ScrobbleRepository @Inject constructor(
         timestampSec: Long,
         durationMs: Long = 0L,
         listenedMs: Long = 0L,
+        genre: String = "",
+        mediaCategory: String = ScrobbleMediaCategory.MUSIC,
     ): Result =
         syncEngine.recordAndSyncScrobble(
             artist = artist,
             track = track,
             album = album,
+            genre = genre,
             durationMs = durationMs,
             listenedMs = listenedMs,
             startedAtSec = timestampSec,
             sourcePackage = context.packageName,
             sourceAppName = "Onyx Music",
+            mediaCategory = mediaCategory,
         ).toLegacyResult()
 
     suspend fun loveTrack(artist: String, track: String, eventId: Long? = null): Result =

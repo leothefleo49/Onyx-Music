@@ -27,7 +27,9 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -42,6 +44,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -73,8 +76,6 @@ import com.lastwave.app.playback.automix.curator.DeepMixProgressState
 import com.lastwave.app.playback.automix.curator.DeepMixRequest
 import com.lastwave.app.playback.automix.curator.GenrePolicy
 import com.lastwave.app.playback.automix.curator.SourcePolicy
-import com.lastwave.app.ui.theme.LiquidGlassPreset
-import com.lastwave.app.ui.theme.liquidGlassChrome
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -269,6 +270,26 @@ fun DeepMixBuilderScreen(
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val progress by viewModel.curationProgress.collectAsStateWithLifecycle()
     var customGenreDraft by remember { mutableStateOf("") }
+    var showHelpDialog by remember { mutableStateOf(false) }
+
+    if (showHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showHelpDialog = false },
+            title = { Text("How Deep Transition Mix works") },
+            text = {
+                Text(
+                    "Onyx analyzes tempo (BPM), musical key (Camelot wheel), loudness, and vocal intros/outros across candidate songs, then sequences them so every song blends smoothly into the next.\n\n" +
+                        "• Source: Choose whether to lean toward your likes, discover fresh tracks, or stick strictly to your library.\n" +
+                        "• Genres: Auto uses your taste, Any mixes freely, or pick specific genres.\n" +
+                        "• Runs safely in the background — you can leave this screen while it builds.\n" +
+                        "• Tip: Turn off Bit-Perfect mode when playing mixes so crossfades and tempo matching can run.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showHelpDialog = false }) { Text("Got it") }
+            },
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -300,6 +321,15 @@ fun DeepMixBuilderScreen(
                         text = stringResource(R.string.deep_mix_subtitle),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                IconButton(
+                    onClick = { showHelpDialog = true },
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.HelpOutline,
+                        contentDescription = "How Deep Transition Mix works",
                     )
                 }
             }
@@ -518,13 +548,10 @@ fun DeepMixBuilderScreen(
                 Button(
                     onClick = viewModel::startBuild,
                     enabled = !progress.isRunning,
+                    shape = RoundedCornerShape(27.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp)
-                        .liquidGlassChrome(
-                            shape = RoundedCornerShape(27.dp),
-                            preset = LiquidGlassPreset.PlayerControls,
-                        ),
+                        .height(54.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.AutoAwesome,

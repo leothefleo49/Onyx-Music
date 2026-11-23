@@ -153,11 +153,11 @@ private fun OverrideCard(
                     Icon(Icons.Filled.Delete, contentDescription = "Remove override", tint = MaterialTheme.colorScheme.error)
                 }
             }
-            OverrideToggle("Video", override.videoDisabled) {
-                onChange(override.copy(videoDisabled = it))
+            OverrideToggle("Video", !override.videoDisabled) {
+                onChange(override.copy(videoDisabled = !it))
             }
-            OverrideToggle("Canvas", override.canvasDisabled) {
-                onChange(override.copy(canvasDisabled = it))
+            OverrideToggle("Canvas", !override.canvasDisabled) {
+                onChange(override.copy(canvasDisabled = !it))
             }
             OverrideToggle("Reduce motion", override.animationsDisabled) {
                 onChange(override.copy(animationsDisabled = it))

@@ -1,5 +1,6 @@
 package com.lastwave.app.ui.stats
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lastwave.app.data.generate.TasteProfileProvider
@@ -11,17 +12,23 @@ import com.lastwave.app.data.local.db.SongPlayStatsEntity
 import com.lastwave.app.data.playlist.PlaylistRepository
 import com.lastwave.app.data.repository.HomeRepository
 import com.lastwave.app.data.repository.LocalStatsRepository
+import com.lastwave.app.data.scrobble.ActiveNowPlaying
 import com.lastwave.app.data.scrobble.ScrobbleEventDao
 import com.lastwave.app.data.scrobble.ScrobbleEventEntity
+import com.lastwave.app.data.scrobble.ScrobbleMediaCategory
 import com.lastwave.app.data.scrobble.ScrobbleRulesEngine
 import com.lastwave.app.data.scrobble.ScrobbleSyncEngine
 import com.lastwave.app.data.scrobble.StreakSummary
+import com.lastwave.app.data.scrobble.UniversalHistorySyncManager
 import com.lastwave.app.data.scrobble.normalizeScrobbleTrackKey
+import com.lastwave.app.playback.MediaType
+import com.lastwave.app.playback.MusicPlayer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -35,6 +42,8 @@ import kotlin.math.roundToInt
 class ListeningStatsViewModel @Inject constructor(
     private val scrobbleEventDao: ScrobbleEventDao,
     private val scrobbleSyncEngine: ScrobbleSyncEngine,
+    private val historySyncManager: UniversalHistorySyncManager,
+    private val musicPlayer: MusicPlayer,
     private val songPlayStatsDao: SongPlayStatsDao,
     private val localStatsRepository: LocalStatsRepository,
     private val playlistRepository: PlaylistRepository,
@@ -52,16 +61,36 @@ class ListeningStatsViewModel @Inject constructor(
     private var localStatsCache: LocalStatsRepository.LocalStats? = null
     private var tasteTags: List<String> = emptyList()
     private var downloadedFallbackList: List<DownloadedTrackEntity> = emptyList()
+    private var autoGenreBackfillTriggered = false
 
     init {
         viewModelScope.launch {
             scrobbleEventDao.observeAll().collect { events ->
                 allEvents = events
                 recalculate()
+                maybeTriggerGenreBackfill(events)
             }
         }
         viewModelScope.launch {
-            scrobbleSyncEngine.nowPlaying.collect { np ->
+            combine(
+                musicPlayer.chromeState,
+                scrobbleSyncEngine.nowPlaying,
+            ) { chrome, externalNp ->
+                val current = chrome.current
+                when {
+                    chrome.isPlaying && current != null && current.mediaType == MediaType.SONG && current.showId.isNullOrBlank() ->
+                        ActiveNowPlaying(
+                            title = current.title,
+                            artist = current.artist,
+                            album = current.album.orEmpty(),
+                            sourcePackage = "onyx.internal",
+                            sourceAppName = "Onyx Music",
+                            mediaCategory = ScrobbleMediaCategory.MUSIC,
+                        )
+                    externalNp != null -> externalNp
+                    else -> null
+                }
+            }.collect { np ->
                 _uiState.update { it.copy(nowPlaying = np) }
             }
         }
@@ -70,7 +99,57 @@ class ListeningStatsViewModel @Inject constructor(
                 _uiState.update { it.copy(pendingSyncCount = pending) }
             }
         }
+        viewModelScope.launch {
+            historySyncManager.progress.collect { progress ->
+                _uiState.update { it.copy(syncProgress = progress) }
+            }
+        }
         loadAuxiliaryData()
+    }
+
+    private fun maybeTriggerGenreBackfill(events: List<ScrobbleEventEntity>) {
+        if (autoGenreBackfillTriggered) return
+        val musicEvents = events.filter { ScrobbleMediaCategory.isMusic(it.mediaCategory) }
+        if (musicEvents.isEmpty()) return
+        val taggedCount = musicEvents.count { it.genre.isNotBlank() }
+        if (taggedCount < (musicEvents.size / 4).coerceAtLeast(3)) {
+            autoGenreBackfillTriggered = true
+            backfillGenresNow(silent = true)
+        }
+    }
+
+    fun setMediaTab(tab: MediaCategoryTab) {
+        _uiState.update { it.copy(selectedMediaTab = tab, selectedSource = null) }
+        recalculate()
+    }
+
+    fun backfillGenresNow(silent: Boolean = false) {
+        if (_uiState.value.isBackfillingGenres) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isBackfillingGenres = true) }
+            val count = runCatching { scrobbleSyncEngine.backfillMissingGenres(maxArtists = 35) }.getOrDefault(0)
+            _uiState.update {
+                it.copy(
+                    isBackfillingGenres = false,
+                    statusBanner = if (!silent && count > 0) "Detected genres for $count artists" else it.statusBanner,
+                )
+            }
+        }
+    }
+
+    fun syncLastFmNow() = historySyncManager.syncLastFmFullHistory()
+    fun syncListenBrainzNow() = historySyncManager.syncListenBrainzFullHistory()
+    fun syncYouTubeMusicNow() = historySyncManager.syncYouTubeMusicHistory()
+    fun importHistoryFromUri(uri: Uri, fileNameHint: String? = null) = historySyncManager.importFromUri(uri, fileNameHint)
+    fun cancelHistorySync() = historySyncManager.cancelActiveSync()
+    fun dismissSyncBanner() = historySyncManager.clearBanner()
+
+    fun changeScrobbleCategory(event: ScrobbleEventEntity, newCategory: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            scrobbleSyncEngine.updateScrobbleCategory(event.id, newCategory)
+            val label = if (ScrobbleMediaCategory.isMusic(newCategory)) "Music" else "Videos & Other"
+            _uiState.update { it.copy(statusBanner = "Moved \"${event.title}\" to $label") }
+        }
     }
 
     fun setTimeRange(range: StatsTimeRange) {
@@ -418,7 +497,14 @@ class ListeningStatsViewModel @Inject constructor(
 
     private fun recalculate() {
         val state = _uiState.value
-        val fullPool = effectiveEvents()
+        val unfilteredPool = effectiveEvents()
+        val musicCount = unfilteredPool.count { ScrobbleMediaCategory.isMusic(it.mediaCategory) }
+        val otherCount = unfilteredPool.size - musicCount
+        val fullPool = when (state.selectedMediaTab) {
+            MediaCategoryTab.MUSIC -> unfilteredPool.filter { ScrobbleMediaCategory.isMusic(it.mediaCategory) }
+            MediaCategoryTab.OTHER -> unfilteredPool.filter { !ScrobbleMediaCategory.isMusic(it.mediaCategory) }
+            MediaCategoryTab.ALL -> unfilteredPool
+        }
         val sourceNames = fullPool
             .map { it.sourceAppName.ifBlank { "Onyx Music" } }
             .distinct()
@@ -546,6 +632,8 @@ class ListeningStatsViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 isLoading = false,
+                musicScrobbleCount = musicCount,
+                otherScrobbleCount = otherCount,
                 heroKpis = heroKpis,
                 totalListeningLabel = totalListeningLabel,
                 totalPlays = totalPlays,
@@ -823,60 +911,39 @@ class ListeningStatsViewModel @Inject constructor(
             CategoryFilter.GENRE -> {
                 val withGenre = events.filter { it.genre.isNotBlank() }
                 if (withGenre.isNotEmpty()) {
-                    val grouped = withGenre.groupBy { it.genre.trim().lowercase() }.values
-                        .sortedByDescending { list -> list.sumOf { effectiveListenMs(it) } }
-                        .take(12)
-                    val maxMs = grouped.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
-                    grouped.mapIndexed { idx, list ->
+                    val buckets = LinkedHashMap<String, MutableList<ScrobbleEventEntity>>()
+                    for (ev in withGenre) {
+                        val tags = ev.genre.split(",", ";", "/")
+                            .map { it.trim().lowercase() }
+                            .filter { it.isNotBlank() && it != "music" && it != "seen live" }
+                            .distinct()
+                            .take(2)
+                        for (tag in tags) {
+                            buckets.getOrPut(tag) { mutableListOf() }.add(ev)
+                        }
+                    }
+                    val sorted = buckets.entries
+                        .sortedByDescending { it.value.size }
+                        .take(15)
+                    val totalTagPlays = sorted.sumOf { it.value.size }.coerceAtLeast(1)
+                    sorted.mapIndexed { idx, (tag, list) ->
                         val ms = list.sumOf { effectiveListenMs(it) }
-                        val display = list.first().genre.trim().replaceFirstChar { it.uppercase() }
+                        val share = list.size.toFloat() / totalTagPlays.toFloat()
+                        val pct = (share * 100f).roundToInt().coerceIn(1, 100)
+                        val display = tag.replaceFirstChar { it.uppercase() }
+                        val src = summarizeSources(list)
                         RankedCategoryItem(
                             rank = idx + 1,
                             title = display,
-                            subtitle = "${list.size} plays \u00b7 ${summarizeSources(list)}",
+                            subtitle = "$pct% of music · ${list.size} plays" +
+                                if (src.isNotBlank()) " · $src" else "",
                             durationLabel = formatHoursMins(ms),
-                            progress = (ms.toFloat() / maxMs).coerceIn(0.05f, 1f),
+                            progress = share.coerceIn(0.05f, 1f),
                             playCount = list.size,
-                        )
-                    }
-                } else if (tasteTags.isNotEmpty()) {
-                    val totalMs = events.sumOf { effectiveListenMs(it) }
-                    tasteTags.take(8).mapIndexed { idx, tag ->
-                        val weight = (tasteTags.size - idx).toFloat() / (tasteTags.size * (tasteTags.size + 1) / 2f)
-                        val ms = (totalMs * weight).toLong()
-                        val plays = (events.size * weight).roundToInt().coerceAtLeast(1)
-                        RankedCategoryItem(
-                            rank = idx + 1,
-                            title = tag.replaceFirstChar { it.uppercase() },
-                            subtitle = "$plays estimated plays",
-                            durationLabel = formatHoursMins(ms),
-                            progress = ((tasteTags.size - idx).toFloat() / tasteTags.size).coerceIn(0.12f, 1f),
-                            playCount = plays,
                         )
                     }
                 } else {
-                    // YouTube Music scrobbles carry no genre tags, and no
-                    // Last.fm taste profile may be connected yet. Keep the
-                    // page useful by ranking artists instead of showing empty.
-                    val grouped = events
-                        .filter { it.artist.isNotBlank() }
-                        .groupBy { it.artist.trim().lowercase() }
-                        .values
-                        .sortedByDescending { list -> list.sumOf { effectiveListenMs(it) } }
-                        .take(12)
-                    val maxMs = grouped.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
-                    grouped.mapIndexed { idx, list ->
-                        val ms = list.sumOf { effectiveListenMs(it) }
-                        val display = list.first().artist.trim().ifBlank { "Unknown Artist" }
-                        RankedCategoryItem(
-                            rank = idx + 1,
-                            title = display,
-                            subtitle = "${list.size} plays \u00b7 genre tags unavailable",
-                            durationLabel = formatHoursMins(ms),
-                            progress = (ms.toFloat() / maxMs).coerceIn(0.05f, 1f),
-                            playCount = list.size,
-                        )
-                    }
+                    emptyList()
                 }
             }
         }

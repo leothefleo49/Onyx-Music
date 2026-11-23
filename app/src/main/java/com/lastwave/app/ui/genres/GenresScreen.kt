@@ -48,6 +48,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.lastwave.app.R
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -127,10 +128,19 @@ fun GenresScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.fillMaxSize().safeHorizontalContentPadding(),
                 ) {
+                    item(key = "genres_caption") {
+                        Text(
+                            text = "Share of your music listening · Tap any genre to explore tracks",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 2.dp),
+                        )
+                    }
                     items(state.stats, key = { it.name }) { stat ->
                         GenreBarRow(
                             name = stat.name,
-                            percent = stat.percentOfTop,
+                            sharePercent = stat.sharePercent,
+                            count = stat.count,
                             onClick = { viewModel.openDetail(stat.name) },
                             modifier = Modifier.animateItem(),
                         )
@@ -181,15 +191,37 @@ private fun PeriodDropdown(period: String, onChange: (String) -> Unit) {
 @Composable
 private fun GenreBarRow(
     name: String,
-    percent: Float,
+    sharePercent: Float,
+    count: Long,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val animated by animateFloatAsState(targetValue = percent.coerceIn(0.03f, 1f), animationSpec = tween(600), label = "genreBar")
+    val pctInt = (sharePercent * 100f).roundToInt().coerceIn(1, 100)
+    val animated by animateFloatAsState(
+        targetValue = sharePercent.coerceIn(0.04f, 1f),
+        animationSpec = tween(600),
+        label = "genreBar",
+    )
     Column(modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(name.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-            Text("${(percent * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                name.replaceFirstChar { it.uppercase() },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = if (count > 0L) "$pctInt% · $count plays" else "$pctInt%",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         Spacer(Modifier.height(6.dp))
         Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {

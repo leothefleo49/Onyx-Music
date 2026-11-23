@@ -10,10 +10,13 @@ import com.lastwave.app.playback.PlayableTrack
 import com.lastwave.app.playback.automix.api.CamelotKey
 import com.lastwave.app.playback.automix.api.DecibelLufs
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.ByteBuffer
@@ -27,7 +30,12 @@ class AcousticSignatureExtractor @Inject constructor(
     private val signatureStore: AcousticSignatureStore,
     private val lyricsRepository: dagger.Lazy<LyricsRepository>,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val exceptionHandler = CoroutineExceptionHandler { _, error ->
+        android.util.Log.w("AcousticExtractor", "Background signature extraction failed", error)
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
+    // Cap concurrent PCM decodes so large Deep Mix pools cannot exhaust heap or MediaExtractor FDs.
+    private val decodeSemaphore = Semaphore(permits = 2)
 
     /**
      * Asynchronously pre-analyzes the upcoming track and generates an AcousticSignature.
@@ -50,8 +58,16 @@ class AcousticSignatureExtractor @Inject constructor(
         }
 
         scope.launch {
-            val signature = withTimeoutOrNull(2500L) {
-                extractAcousticSignature(track, trackId, durationMs, streamUrl, sourceHash)
+            val signature = try {
+                decodeSemaphore.withPermit {
+                    withTimeoutOrNull(2500L) {
+                        extractAcousticSignature(track, trackId, durationMs, streamUrl, sourceHash)
+                    }
+                }
+            } catch (_: OutOfMemoryError) {
+                null
+            } catch (_: Exception) {
+                null
             } ?: fallbackSignature(trackId, durationMs, sourceHash)
 
             signatureStore.putSignature(signature)
@@ -165,25 +181,34 @@ class AcousticSignatureExtractor @Inject constructor(
 
     private fun decodePcmWindow(url: String?, startOffsetUs: Long, durationUs: Long): FloatArray {
         if (url.isNullOrBlank()) return FloatArray(0)
+        // Skip remote HTTP URLs in the lightweight extractor; full decoding is for local files only.
+        if (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)) {
+            return FloatArray(0)
+        }
+        var extractor: MediaExtractor? = null
         return try {
-            val extractor = MediaExtractor()
+            extractor = MediaExtractor()
             if (url.startsWith("content://")) {
                 extractor.setDataSource(context, Uri.parse(url), null)
             } else {
                 extractor.setDataSource(url.removePrefix("file://"))
             }
             var audioTrackIndex = -1
+            var maxInputSize = 65_536
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
                 if (mime.startsWith("audio/")) {
                     audioTrackIndex = i
+                    if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                        maxInputSize = format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+                            .coerceIn(16_384, 262_144)
+                    }
                     break
                 }
             }
 
             if (audioTrackIndex < 0) {
-                extractor.release()
                 return FloatArray(0)
             }
 
@@ -192,14 +217,19 @@ class AcousticSignatureExtractor @Inject constructor(
                 extractor.seekTo(startOffsetUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
             }
 
-            // Approximate reading up to 22.05 kHz float PCM samples
-            val maxSamples = 22050 * 45 // 45s of mono 22.05kHz
+            // Bounded 15s window (~1.3 MB) keeps heap footprint tiny even across large mix pools.
+            val maxSamples = 22050 * 15
             val pcmFloats = FloatArray(maxSamples)
-            val byteBuffer = ByteBuffer.allocateDirect(8192).order(ByteOrder.nativeOrder())
+            val byteBuffer = ByteBuffer.allocateDirect(maxInputSize).order(ByteOrder.nativeOrder())
             var sampleIdx = 0
 
             while (sampleIdx < maxSamples) {
-                val bytesRead = extractor.readSampleData(byteBuffer, 0)
+                byteBuffer.clear()
+                val bytesRead = try {
+                    extractor.readSampleData(byteBuffer, 0)
+                } catch (_: IllegalArgumentException) {
+                    break
+                }
                 if (bytesRead < 0) break
 
                 val shortCount = bytesRead / 2
@@ -208,13 +238,16 @@ class AcousticSignatureExtractor @Inject constructor(
                     val pcm16 = byteBuffer.getShort(s * 2)
                     pcmFloats[sampleIdx++] = pcm16 / 32768.0f
                 }
-                extractor.advance()
+                if (!extractor.advance()) break
             }
 
-            extractor.release()
             if (sampleIdx < maxSamples) pcmFloats.copyOf(sampleIdx) else pcmFloats
-        } catch (e: Exception) {
+        } catch (_: OutOfMemoryError) {
             FloatArray(0)
+        } catch (_: Exception) {
+            FloatArray(0)
+        } finally {
+            runCatching { extractor?.release() }
         }
     }
 

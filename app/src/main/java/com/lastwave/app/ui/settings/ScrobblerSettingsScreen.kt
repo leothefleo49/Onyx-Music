@@ -82,6 +82,7 @@ import com.lastwave.app.R
 import com.lastwave.app.data.local.ScrobblerPreferences
 import com.lastwave.app.data.local.ScrobblerSettings
 import com.lastwave.app.data.local.SessionPreferences
+import com.lastwave.app.data.scrobble.HistorySyncProgress
 import com.lastwave.app.data.scrobble.ListenBrainzApi
 import com.lastwave.app.data.scrobble.OnyxNotificationScrobblerService
 import com.lastwave.app.data.scrobble.ScrobbleAppFilterDao
@@ -90,6 +91,7 @@ import com.lastwave.app.data.scrobble.ScrobbleEditRuleDao
 import com.lastwave.app.data.scrobble.ScrobbleEditRuleEntity
 import com.lastwave.app.data.scrobble.ScrobbleRulesEngine
 import com.lastwave.app.data.scrobble.ScrobbleSyncEngine
+import com.lastwave.app.data.scrobble.UniversalHistorySyncManager
 import com.lastwave.app.ui.common.adaptiveContentWidth
 import com.lastwave.app.ui.shell.FloatingNavDefaults
 import com.lastwave.app.util.FileExportHelper
@@ -126,6 +128,7 @@ data class ScrobblerSettingsUiState(
     val externalApps: List<ExternalAppToggleItem> = emptyList(),
     val isBusy: Boolean = false,
     val statusMessage: String? = null,
+    val syncProgress: HistorySyncProgress = HistorySyncProgress(),
 )
 
 @HiltViewModel
@@ -134,6 +137,7 @@ class ScrobblerSettingsViewModel @Inject constructor(
     private val scrobblerPreferences: ScrobblerPreferences,
     private val sessionPreferences: SessionPreferences,
     private val syncEngine: ScrobbleSyncEngine,
+    private val historySyncManager: UniversalHistorySyncManager,
     private val editRuleDao: ScrobbleEditRuleDao,
     private val appFilterDao: ScrobbleAppFilterDao,
     private val listenBrainzApi: ListenBrainzApi,
@@ -145,6 +149,11 @@ class ScrobblerSettingsViewModel @Inject constructor(
 
     init {
         refreshPermissionStatus()
+        viewModelScope.launch {
+            historySyncManager.progress.collect { progress ->
+                _uiState.update { it.copy(syncProgress = progress) }
+            }
+        }
         viewModelScope.launch {
             combine(
                 scrobblerPreferences.settings,
@@ -406,29 +415,14 @@ class ScrobblerSettingsViewModel @Inject constructor(
     }
 
     fun importFromUri(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isBusy = true) }
-            val raw = fileExportHelper.readTextFromUri(uri)
-            if (raw.isNullOrBlank()) {
-                _uiState.update {
-                    it.copy(isBusy = false, statusMessage = "Could not read selected file")
-                }
-                return@launch
-            }
-            val result = runCatching { syncEngine.importScrobbles(raw) }
-            _uiState.update {
-                it.copy(
-                    isBusy = false,
-                    statusMessage = result.fold(
-                        onSuccess = { res ->
-                            "Imported ${res.events.size} plays (${res.formatDetected}, ${res.skippedCount} skipped)"
-                        },
-                        onFailure = { err -> "Import failed: ${err.message}" },
-                    ),
-                )
-            }
-        }
+        historySyncManager.importFromUri(uri, uri.lastPathSegment)
     }
+
+    fun syncLastFmHistoryNow() = historySyncManager.syncLastFmFullHistory()
+    fun syncYouTubeMusicHistoryNow() = historySyncManager.syncYouTubeMusicHistory()
+    fun syncListenBrainzHistoryNow() = historySyncManager.syncListenBrainzFullHistory()
+    fun cancelHistorySync() = historySyncManager.cancelActiveSync()
+    fun clearHistorySyncBanner() = historySyncManager.clearBanner()
 
     fun clearStatusMessage() {
         _uiState.update { it.copy(statusMessage = null) }
@@ -951,8 +945,9 @@ fun ScrobblerSettingsScreen(
                 }
             }
 
-            // 6. Import & Export History
+            // 6. Universal Multi-Platform History Sync & Import Hub
             item {
+                val sync = uiState.syncProgress
                 Surface(
                     shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -963,15 +958,113 @@ fun ScrobblerSettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
-                            text = "Import & Export History",
+                            text = "Sync & Import Listening History",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            text = "${uiState.totalLocalScrobbles} local scrobbles stored. Supports Onyx JSON, CSV, Last.fm JSON, and Spotify Extended Streaming History JSON.",
+                            text = "${uiState.totalLocalScrobbles} local scrobbles stored. Pull your entire history from Last.fm, YouTube Music, or ListenBrainz — or import .zip / .json / .jsonl / .csv files from Spotify, YouTube Takeout, SoundCloud, stats.fm, Pano Scrobbler, Last.fm, or Apple Music. Videos & podcasts stay automatically separated under Videos & Other in Stats.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+
+                        if (sync.isRunning || !sync.statusText.isNullOrBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = if (sync.lastError != null && !sync.isRunning) {
+                                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                                } else {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    if (sync.isRunning) {
+                                        CircularProgressIndicator(
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                    Text(
+                                        text = sync.statusText.orEmpty(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            if (sync.isRunning) viewModel.cancelHistorySync()
+                                            else viewModel.clearHistorySyncBanner()
+                                        },
+                                    ) {
+                                        Text(if (sync.isRunning) "Stop" else "OK")
+                                    }
+                                }
+                            }
+                        }
+
+                        // Direct cloud account history pulls
+                        Button(
+                            onClick = viewModel::syncLastFmHistoryNow,
+                            enabled = !sync.isRunning && uiState.lastFmUsername.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Filled.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                if (uiState.lastFmUsername.isNotBlank()) {
+                                    "Sync All Past Last.fm History"
+                                } else {
+                                    "Connect Last.fm to Sync Full History"
+                                },
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            FilledTonalButton(
+                                onClick = viewModel::syncYouTubeMusicHistoryNow,
+                                modifier = Modifier.weight(1f),
+                                enabled = !sync.isRunning,
+                            ) {
+                                Text("YT Music Sync", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            FilledTonalButton(
+                                onClick = viewModel::syncListenBrainzHistoryNow,
+                                modifier = Modifier.weight(1f),
+                                enabled = !sync.isRunning && uiState.settings.listenBrainzUsername.isNotBlank(),
+                            ) {
+                                Text("ListenBrainz", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+
+                        // Universal auto-detecting file & ZIP importer
+                        FilledTonalButton(
+                            onClick = {
+                                importLauncher.launch(
+                                    arrayOf(
+                                        "application/zip",
+                                        "application/json",
+                                        "text/csv",
+                                        "text/plain",
+                                        "*/*",
+                                    ),
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !uiState.isBusy && !sync.isRunning,
+                        ) {
+                            Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Import Spotify / YouTube / SoundCloud / stats.fm / Pano (.zip/.json/.csv)")
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -994,19 +1087,6 @@ fun ScrobblerSettingsScreen(
                                 Spacer(Modifier.width(6.dp))
                                 Text(stringResource(R.string.scrobbler_export_csv))
                             }
-                        }
-                        FilledTonalButton(
-                            onClick = {
-                                importLauncher.launch(
-                                    arrayOf("application/json", "text/csv", "text/plain", "*/*"),
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !uiState.isBusy,
-                        ) {
-                            Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource(R.string.scrobbler_import_history))
                         }
                     }
                 }

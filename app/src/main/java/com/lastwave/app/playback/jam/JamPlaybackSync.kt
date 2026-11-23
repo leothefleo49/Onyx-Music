@@ -70,11 +70,35 @@ class JamPlaybackSync @Inject constructor(
                 if (session !is JamSessionState.Active) {
                     lastBroadcastTrackId = null
                     lastBroadcastIsPlaying = null
-                    lastBroadcastPositionMs = 0L
+                    lastBroadcastPositionMs = 0L; lastBroadcastAtElapsed = 0L
                     loadingTrackId = null
                     quietUntilMs = 0L
                 } else {
                     Log.d(TAG, "Jam session active (${session.roomCode}), host=${session.isHost}")
+                    if (session.isHost) {
+                        val current = musicPlayer.state.value.current
+                        if (current != null) {
+                            val trackId = current.videoId?.takeIf { it.isNotBlank() } ?: current.title
+                            val pos = musicPlayer.progressState.value.positionMs
+                            val isPlaying = musicPlayer.state.value.isPlaying
+                            lastBroadcastTrackId = trackId
+                            lastBroadcastIsPlaying = isPlaying
+                            lastBroadcastPositionMs = pos
+                            lastBroadcastAtElapsed = SystemClock.elapsedRealtime()
+                            jamRepository.broadcastChangeTrack(
+                                TrackInfoPayload(
+                                    id = trackId,
+                                    title = current.title,
+                                    artist = current.artist,
+                                    album = current.album,
+                                    artworkUrl = current.artworkUrl,
+                                    durationMs = current.durationMs,
+                                ),
+                                positionMs = pos,
+                                isPlaying = isPlaying,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -222,7 +246,14 @@ class JamPlaybackSync @Inject constructor(
                 val now = SystemClock.elapsedRealtime()
                 if (now < quietUntilMs) return@collect
                 if (!musicPlayer.state.value.isPlaying) {
-                    lastBroadcastPositionMs = progress.positionMs
+                    if (kotlin.math.abs(progress.positionMs - lastBroadcastPositionMs) >= 2_500L) {
+                        lastBroadcastPositionMs = progress.positionMs
+                        lastBroadcastAtElapsed = now
+                        quietUntilMs = now + 400L
+                        jamRepository.broadcastSeek(progress.positionMs)
+                    } else {
+                        lastBroadcastAtElapsed = now
+                    }
                     lastBroadcastAtElapsed = now
                     return@collect
                 }
@@ -380,7 +411,7 @@ class JamPlaybackSync @Inject constructor(
                 startRadio = false,
                 startPositionMs = positionMs,
                 playWhenReady = isPlaying,
-            )
+            ).also { loadingTrackId = null }
         } else {
             loadingTrackId = null
             quietUntilMs = SystemClock.elapsedRealtime() + 800L

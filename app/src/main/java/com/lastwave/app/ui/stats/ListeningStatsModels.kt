@@ -2,7 +2,14 @@ package com.lastwave.app.ui.stats
 
 import androidx.compose.runtime.Immutable
 import com.lastwave.app.data.scrobble.ActiveNowPlaying
+import com.lastwave.app.data.scrobble.HistorySyncProgress
 import com.lastwave.app.data.scrobble.ScrobbleEventEntity
+
+enum class MediaCategoryTab(val label: String) {
+    MUSIC("Music"),
+    OTHER("Videos & Other"),
+    ALL("All"),
+}
 
 enum class StatsTimeRange(val label: String) {
     TODAY("Today"),
@@ -231,6 +238,11 @@ data class ListeningStatsUiState(
     val customRange: CustomDateRange? = null,
     val selectedTimelineMetric: TimelineMetric = TimelineMetric.LISTENING_TIME,
     val selectedCategory: CategoryFilter = CategoryFilter.SONG,
+    val selectedMediaTab: MediaCategoryTab = MediaCategoryTab.MUSIC,
+    val musicScrobbleCount: Int = 0,
+    val otherScrobbleCount: Int = 0,
+    val isBackfillingGenres: Boolean = false,
+    val syncProgress: HistorySyncProgress = HistorySyncProgress(),
     /** null = every source app (the default). */
     val selectedSource: String? = null,
     val availableSources: List<String> = emptyList(),

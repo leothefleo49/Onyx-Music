@@ -397,6 +397,7 @@ fun SettingsScreen(
     onOpenSpotifyLogin: () -> Unit = {},
     onOpenSpotifyTokenImport: () -> Unit = {},
     onOpenJam: () -> Unit = {},
+    onOpenFriends: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
     jamViewModel: LastWaveJamViewModel = hiltViewModel(),
 ) {
@@ -480,7 +481,11 @@ fun SettingsScreen(
     var showCookieLoginDialog by remember { mutableStateOf(false) }
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showJamSheet by remember { mutableStateOf(false) }
+    var showHelpCenter by remember { mutableStateOf(false) }
+    var showTourReplay by remember { mutableStateOf(false) }
+    var showAdvancedOutputSheet by remember { mutableStateOf(false) }
     var activeToggleDetail by remember { mutableStateOf<ToggleDetailInfo?>(null) }
+    val activeOutput by viewModel.activeAudioOutput.collectAsStateWithLifecycle()
     val currentLanguage = remember(misc.appLanguageTag) { AppLanguage.fromTag(misc.appLanguageTag) }
 
     // Sends the user to Android's own Notification Listener access screen
@@ -564,6 +569,11 @@ fun SettingsScreen(
                 }
             },
             actions = {
+                HeaderActionIcon(
+                    icon = Icons.Filled.Info,
+                    contentDescription = "Help & Feature Guide",
+                    onClick = { showHelpCenter = true },
+                )
                 HeaderActionIcon(
                     icon = if (isSearchBarVisible || searchQuery.isNotBlank()) Icons.Filled.Close else Icons.Filled.Search,
                     contentDescription = if (isSearchBarVisible || searchQuery.isNotBlank()) stringResource(R.string.settings_search_clear) else stringResource(R.string.settings_search_title),
@@ -668,20 +678,31 @@ fun SettingsScreen(
                         item {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 SectionLabel("Collaboration & Social")
-                                SettingsGroup(rowCount = 1) { _, position ->
-                                    SettingsActionCard(
-                                        icon = Icons.Filled.Group,
-                                        iconContainer = MaterialTheme.colorScheme.primaryContainer,
-                                        iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        title = stringResource(R.string.settings_jam_title),
-                                        subtitle = if (jamUiState.isConnected) {
-                                            "In Session: #${jamUiState.roomCode} \u2022 ${jamUiState.participants.size} listening together"
-                                        } else {
-                                            stringResource(R.string.settings_jam_sub)
-                                        },
-                                        onClick = onOpenJam,
-                                        position = position,
-                                    )
+                                SettingsGroup(rowCount = 2) { index, position ->
+                                    when (index) {
+                                        0 -> SettingsActionCard(
+                                            icon = Icons.Filled.Group,
+                                            iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            title = stringResource(R.string.settings_jam_title),
+                                            subtitle = if (jamUiState.isConnected) {
+                                                "In Session: #${jamUiState.roomCode} \u2022 ${jamUiState.participants.size} listening together"
+                                            } else {
+                                                stringResource(R.string.settings_jam_sub)
+                                            },
+                                            onClick = onOpenJam,
+                                            position = position,
+                                        )
+                                        else -> SettingsActionCard(
+                                            icon = Icons.Filled.Group,
+                                            iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            title = "Friends",
+                                            subtitle = "View friends' live listening, top tracks, and music compatibility",
+                                            onClick = onOpenFriends,
+                                            position = position,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -830,6 +851,33 @@ fun SettingsScreen(
                     val isIgnored = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
                     val audioRows = buildList<@Composable (GroupPosition) -> Unit> {
                         add { position ->
+                            SettingsToggleCard(
+                                icon = Icons.Filled.AutoAwesome,
+                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                title = "Auto-Best Audio Output",
+                                subtitle = if (misc.autoBestAudioOutput) {
+                                    "Active • ${activeOutput.summaryLine}"
+                                } else {
+                                    "Automatically adapt quality, source priority & clarity for your connected speaker, Bluetooth, or DAC"
+                                },
+                                checked = misc.autoBestAudioOutput,
+                                onCheckedChange = viewModel::setAutoBestAudioOutput,
+                                position = position,
+                            )
+                        }
+                        add { position ->
+                            SettingsActionCard(
+                                icon = Icons.Filled.Tune,
+                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                title = "Smart Output & Advanced Audio",
+                                subtitle = "${misc.autoSourcePriority.title} • SoXR ${when (misc.resamplerQuality) { 0 -> "Fast"; 1 -> "High"; else -> "Ultra" }}",
+                                onClick = { showAdvancedOutputSheet = true },
+                                position = position,
+                            )
+                        }
+                        add { position ->
                             SettingsActionCard(
                                 icon = Icons.Filled.Wifi,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
@@ -954,6 +1002,20 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "audio.music_haptics"),
                             )
+                        }
+                        if (misc.musicHapticsEnabled) {
+                            add { position ->
+                                MusicHapticsControlsCard(
+                                    config = misc.musicHapticsConfig,
+                                    isHardwareAvailable = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q,
+                                    isUsbExclusiveActive = usbExclusiveEnabled,
+                                    onModeChange = viewModel::setMusicHapticsMode,
+                                    onIntensityChange = viewModel::setMusicHapticsIntensity,
+                                    onEngineModeChange = viewModel::setMusicHapticsEngineMode,
+                                    onBatterySaverChange = viewModel::setMusicHapticsPauseOnBatterySaver,
+                                    position = position,
+                                )
+                            }
                         }
                         add { position ->
                             SettingsToggleCard(
@@ -1328,7 +1390,7 @@ fun SettingsScreen(
                         item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SectionLabel(stringResource(R.string.settings_section_appearance))
-                    SettingsGroup(rowCount = 16) { index, position ->
+                    SettingsGroup(rowCount = 17) { index, position ->
                         when (index) {
                             0 -> ThemeModeSelectorCard(
                                 currentThemeMode = theme?.themeMode ?: ThemeMode.SYSTEM,
@@ -1342,7 +1404,17 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.app_icon"),
                             )
-                            2 -> SettingsToggleCard(
+                            2 -> SettingsActionCard(
+                                icon = Icons.Filled.AutoAwesome,
+                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                title = "Visuals, AOD & glass",
+                                subtitle = "Always-on Display (Wave/Glow/Bars/Aurora), edge glow, progress bar colors & Liquid Glass",
+                                onClick = { showAmbienceDialog = true },
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "appearance.ambience_dialog"),
+                            )
+                            3 -> SettingsToggleCard(
                                 icon = Icons.Filled.AutoAwesome,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1353,7 +1425,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.lastwave_theme"),
                             )
-                            3 -> SettingsToggleCard(
+                            4 -> SettingsToggleCard(
                                 icon = Icons.Filled.Contrast,
                                 iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -1365,7 +1437,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.amoled"),
                             )
-                            4 -> SettingsToggleCard(
+                            5 -> SettingsToggleCard(
                                 icon = Icons.Filled.Palette,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -1377,7 +1449,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.legacy_colors"),
                             )
-                            5 -> SettingsToggleCard(
+                            6 -> SettingsToggleCard(
                                 icon = Icons.Filled.Palette,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1393,40 +1465,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.dynamic_color"),
                             )
-                            6 -> SettingsToggleCard(
-                                icon = Icons.Filled.BubbleChart,
-                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
-                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                title = stringResource(R.string.settings_liquid_glass),
-                                subtitle = stringResource(R.string.settings_liquid_glass_sub),
-                                checked = theme?.liquidGlass ?: true,
-                                onCheckedChange = viewModel::setLiquidGlass,
-                                position = position,
-                                isHighlighted = (highlightedSettingId == "appearance.liquid_glass"),
-                            )
                             7 -> SettingsToggleCard(
-                                icon = Icons.Filled.Apps,
-                                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
-                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                title = stringResource(R.string.settings_md3_nav_bar),
-                                subtitle = stringResource(R.string.settings_md3_nav_bar_sub),
-                                checked = theme?.md3NavBar ?: false,
-                                onCheckedChange = viewModel::setMd3NavBar,
-                                position = position,
-                                isHighlighted = (highlightedSettingId == "appearance.md3_nav_bar"),
-                            )
-                            8 -> SettingsToggleCard(
-                                icon = Icons.Filled.VisibilityOff,
-                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
-                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                title = stringResource(R.string.settings_hide_nav_tabs),
-                                subtitle = stringResource(R.string.settings_hide_nav_tabs_sub),
-                                checked = theme?.hideNavTabs ?: false,
-                                onCheckedChange = viewModel::setHideNavTabs,
-                                position = position,
-                                isHighlighted = (highlightedSettingId == "appearance.hide_nav_tabs"),
-                            )
-                            6 -> SettingsToggleCard(
                                 icon = Icons.Filled.ColorLens,
                                 iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -1437,7 +1476,40 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.dynamic_now_playing"),
                             )
-                            7 -> SettingsToggleCard(
+                            8 -> SettingsToggleCard(
+                                icon = Icons.Filled.BubbleChart,
+                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                title = stringResource(R.string.settings_liquid_glass),
+                                subtitle = stringResource(R.string.settings_liquid_glass_sub),
+                                checked = theme?.liquidGlass ?: true,
+                                onCheckedChange = viewModel::setLiquidGlass,
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "appearance.liquid_glass"),
+                            )
+                            9 -> SettingsToggleCard(
+                                icon = Icons.Filled.Apps,
+                                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                title = stringResource(R.string.settings_md3_nav_bar),
+                                subtitle = stringResource(R.string.settings_md3_nav_bar_sub),
+                                checked = theme?.md3NavBar ?: false,
+                                onCheckedChange = viewModel::setMd3NavBar,
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "appearance.md3_nav_bar"),
+                            )
+                            10 -> SettingsToggleCard(
+                                icon = Icons.Filled.VisibilityOff,
+                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                title = stringResource(R.string.settings_hide_nav_tabs),
+                                subtitle = stringResource(R.string.settings_hide_nav_tabs_sub),
+                                checked = theme?.hideNavTabs ?: false,
+                                onCheckedChange = viewModel::setHideNavTabs,
+                                position = position,
+                                isHighlighted = (highlightedSettingId == "appearance.hide_nav_tabs"),
+                            )
+                            11 -> SettingsToggleCard(
                                 icon = Icons.Filled.TextFields,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -1448,7 +1520,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.app_font"),
                             )
-                            8 -> SettingsToggleCard(
+                            12 -> SettingsToggleCard(
                                 icon = Icons.Filled.FormatBold,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1458,7 +1530,7 @@ fun SettingsScreen(
                                 onCheckedChange = viewModel::setUseBoldFont,
                                 position = position,
                             )
-                            9 -> SettingsToggleCard(
+                            13 -> SettingsToggleCard(
                                 icon = Icons.Filled.Vibration,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1469,7 +1541,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.ui_haptics"),
                             )
-                            13 -> SettingsToggleCard(
+                            14 -> SettingsToggleCard(
                                 icon = Icons.Filled.VerticalAlignBottom,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -1480,7 +1552,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.collapsing_nav_bar"),
                             )
-                            14 -> SettingsToggleCard(
+                            15 -> SettingsToggleCard(
                                 icon = Icons.Filled.MoreVert,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -1491,7 +1563,7 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "appearance.legacy_track_menu"),
                             )
-                            15 -> SettingsToggleCard(
+                            else -> SettingsToggleCard(
                                 icon = Icons.Filled.BlurOn,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1806,7 +1878,7 @@ fun SettingsScreen(
                         else ->
                             if (!ytConnected) "Connect an account first"
                             else if (ytSyncEnabled) "Selected playlists mirror to your account, 24/7" + lastSyncSuffix(ytLastSyncAt)
-                            else "Keep your YT Music library in sync with LastWave"
+                            else "Keep your YT Music library in sync with Onyx Music"
                     }
                     // Display name of the active channel: the picked entry when
                     // the channel list was loaded, otherwise the stored name.
@@ -2336,16 +2408,27 @@ fun SettingsScreen(
                         item {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 SectionLabel("Help & navigation")
-                                SettingsGroup(rowCount = 1) { _, position ->
-                                    SettingsActionCard(
-                                        icon = Icons.Filled.Info,
-                                        iconContainer = MaterialTheme.colorScheme.primaryContainer,
-                                        iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        title = "Replay the app tour",
-                                        subtitle = "Tabs, queue, lyrics, mini-player and where everything lives",
-                                        onClick = viewModel::resetTutorial,
-                                        position = position,
-                                    )
+                                SettingsGroup(rowCount = 2) { index, position ->
+                                    when (index) {
+                                        0 -> SettingsActionCard(
+                                            icon = Icons.Filled.Info,
+                                            iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            title = "Help & Feature Guide",
+                                            subtitle = "Searchable plain-English answers for every button, queue tool, sync mode, and audio setting",
+                                            onClick = { showHelpCenter = true },
+                                            position = position,
+                                        )
+                                        else -> SettingsActionCard(
+                                            icon = Icons.Filled.AutoAwesome,
+                                            iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            title = "Replay the interactive app tour",
+                                            subtitle = "Step-by-step visual tour of tabs, mini-player bubble, queue undo, AOD, and history sync",
+                                            onClick = { showTourReplay = true },
+                                            position = position,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2370,52 +2453,39 @@ fun SettingsScreen(
                         item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SectionLabel(stringResource(R.string.settings_section_about))
-                    SettingsGroup(rowCount = 4) { index, position ->
+                    SettingsGroup(rowCount = 3) { index, position ->
                         when (index) {
                             0 -> SettingsActionCard(
                                 icon = Icons.AutoMirrored.Filled.Send,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                title = stringResource(R.string.settings_updates_support),
-                                subtitle = stringResource(R.string.set_tg_sub),
+                                title = "Report a Bug / Request a Feature",
+                                subtitle = "Submit issues & feedback directly on GitHub (leothefleo49/Onyx-Music)",
                                 onClick = {
-                                    if (!openTelegramChannel(context, "clashprojects")) {
-                                        viewModel.showToast(context.getString(R.string.toast_no_browser_tg))
-                                    }
-                                },
-                                position = position,
-                                isHighlighted = (highlightedSettingId == "about.telegram_support"),
-                            )
-                            1 -> SettingsActionCard(
-                                icon = Icons.Filled.Group,
-                                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
-                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                title = stringResource(R.string.set_discord_support),
-                                subtitle = stringResource(R.string.set_discord_support_sub),
-                                onClick = {
-                                    val discordIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://discord.gg/TMCEPSUNk2"))
-                                    if (!startActivitySafely(context, discordIntent)) {
+                                    val issueIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/leothefleo49/Onyx-Music/issues/new"))
+                                    if (!startActivitySafely(context, issueIntent)) {
                                         viewModel.showToast(context.getString(R.string.toast_no_browser))
                                     }
                                 },
                                 position = position,
-                                isHighlighted = (highlightedSettingId == "about.discord_support"),
+                                isHighlighted = (highlightedSettingId == "about.telegram_support" || highlightedSettingId == "about.discord_support"),
                             )
-                            2 -> SettingsActionCard(
-                                icon = Icons.Filled.AutoAwesome,
-                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
-                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                title = stringResource(R.string.settings_more_from_us),
-                                subtitle = stringResource(R.string.set_more_apps_sub),
+                            1 -> SettingsActionCard(
+                                icon = Icons.Filled.CloudDownload,
+                                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                title = "GitHub Releases & Changelogs",
+                                subtitle = "View all releases at github.com/leothefleo49/Onyx-Music/releases",
                                 onClick = {
-                                    if (!openTelegramChannel(context, "MaterialYouApp")) {
-                                        viewModel.showToast(context.getString(R.string.toast_no_browser_tg))
+                                    val releasesIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/leothefleo49/Onyx-Music/releases"))
+                                    if (!startActivitySafely(context, releasesIntent)) {
+                                        viewModel.showToast(context.getString(R.string.toast_no_browser))
                                     }
                                 },
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "about.more_apps"),
                             )
-                            3 -> SettingsActionCard(
+                            else -> SettingsActionCard(
                                 icon = Icons.Filled.Code,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -2506,7 +2576,7 @@ fun SettingsScreen(
                                     updateInfo.isChecking -> "Checking GitHub releases..."
                                     updateInfo.isUpdateAvailable -> {
                                         val fileName = updateInfo.downloadFileName
-                                        if (!fileName.isNullOrBlank()) "Tap to download $fileName" else "Tap to download new version"
+                                        if (!fileName.isNullOrBlank()) "Tap to install $fileName" else "Tap to install new version"
                                     }
                                     !updateInfo.message.isNullOrBlank() -> updateInfo.message.orEmpty()
                                     else -> "Current version: ${appVersionName(context)}"
@@ -2521,7 +2591,21 @@ fun SettingsScreen(
                                 position = position,
                                 isHighlighted = (highlightedSettingId == "about.check_updates"),
                             )
-                            1 -> SettingsActionCard(
+                            1 -> SettingsToggleCard(
+                                icon = Icons.Filled.AutoAwesome,
+                                iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                title = "Auto-install updates automatically",
+                                subtitle = if (updateInfo.autoInstallUpdates) {
+                                    "On • Android 12+ applies updates silently after your first in-app update"
+                                } else {
+                                    "Off • Show the update dialog and wait for manual install"
+                                },
+                                checked = updateInfo.autoInstallUpdates,
+                                onCheckedChange = viewModel::setAutoInstallUpdates,
+                                position = position,
+                            )
+                            else -> SettingsActionCard(
                                 icon = Icons.Filled.Code,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -2534,37 +2618,10 @@ fun SettingsScreen(
                                     }
                                 },
                                 position = position,
-                                isHighlighted = (highlightedSettingId == "about.source_code"),
-                            )
-                            else -> SettingsActionCard(
-                                icon = Icons.Filled.Code,
-                                iconContainer = MaterialTheme.colorScheme.secondaryContainer,
-                                iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                title = "Upstream Attribution (GPL-3.0)",
-                                subtitle = "Based on Clash-Projects/LastWave-Native",
-                                onClick = {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Clash-Projects/LastWave-Native"))
-                                    if (!startActivitySafely(context, intent)) {
-                                        viewModel.showToast(context.getString(R.string.toast_no_browser_plain))
-                                    }
-                                },
-                                position = position,
-                                isHighlighted = (highlightedSettingId == "about.desktop_app"),
+                                isHighlighted = (highlightedSettingId == "about.source_code" || highlightedSettingId == "about.desktop_app"),
                             )
                         }
                     }
-
-                    Spacer(Modifier.height(14.dp))
-                    SectionLabel("More from us")
-                    Spacer(Modifier.height(8.dp))
-                    MoreFromUsCard(
-                        onOpenUrl = { url ->
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            if (!startActivitySafely(context, intent)) {
-                                viewModel.showToast(context.getString(R.string.toast_no_browser_plain))
-                            }
-                        }
-                    )
                 }
             }
                     }
@@ -3320,12 +3377,12 @@ fun SettingsScreen(
     }
 
     if (showQualityDialog) {
-        val tiers = listOfNotNull(
+        val tiers = listOf(
             Triple(
                 CELLULAR_QUALITY_AUTO,
-                "Auto",
-                "Adapts to your connection • Up to your Wi-Fi quality" to "AUTO",
-            ).takeIf { editingCellularQuality },
+                "Auto (Smart Adaptive)",
+                "Adapts to your connected output device (${activeOutput.deviceName}) & link speed" to "AUTO",
+            ),
             Triple(28, "Dolby Atmos", "Spatial Immersive Audio • Master Audio" to "ATMOS"),
             Triple(27, "Hi-Res Lossless", "Up to 24-bit / 192 kHz • Lossless FLAC" to "HI-RES"),
             Triple(6, "CD Lossless", "16-bit / 44.1 kHz • Lossless FLAC" to "CD"),
@@ -3688,6 +3745,221 @@ fun SettingsScreen(
         }
     }
 
+    if (showHelpCenter) {
+        com.lastwave.app.ui.common.OnyxHelpCenterSheet(
+            onDismiss = { showHelpCenter = false },
+            onReplayTour = { showTourReplay = true },
+        )
+    }
+
+    if (showTourReplay) {
+        com.lastwave.app.ui.common.OnyxInteractiveTourDialog(
+            onComplete = { showTourReplay = false },
+        )
+    }
+
+    if (showAdvancedOutputSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showAdvancedOutputSheet = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = "Smart Output & Advanced Audio",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Black,
+                )
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "DETECTED OUTPUT DEVICE",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = activeOutput.summaryLine,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                        Text(
+                            text = "Auto-Best Output automatically matches quality ceiling and clarity curve to this device whenever it connects.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        )
+                    }
+                }
+
+                // 1. Auto Source Priority
+                Text(
+                    text = "Where Auto pulls music from",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                com.lastwave.app.data.local.AutoSourcePriority.entries.forEach { priority ->
+                    val selected = misc.autoSourcePriority == priority
+                    Surface(
+                        onClick = { viewModel.setAutoSourcePriority(priority) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            Text(
+                                text = priority.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = priority.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                // 2. Studio Master Clarity Curve
+                Text(
+                    text = "Studio Master Clarity curve",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                val clarityPresets = listOf(
+                    0 to ("Reference" to "Balanced harmonic air & detail"),
+                    1 to ("Phone Speakers" to "Tightens low-mid mud and boosts vocal presence on small drivers"),
+                    2 to ("Headphones & Bluetooth" to "Natural sub-bass contour and smooth treble extension"),
+                    3 to ("External USB DAC" to "Ultra-subtle mastering contour for high-headroom DACs"),
+                )
+                clarityPresets.forEach { (idx, pair) ->
+                    val selected = misc.clarityPreset == idx
+                    Surface(
+                        onClick = { viewModel.setClarityPreset(idx) },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            Text(
+                                text = pair.first,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = pair.second,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Bypass Clarity on Dolby Atmos / Spatial tracks",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = "Keep multichannel spatial masters untouched by stereo harmonic enhancement",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    androidx.compose.material3.Switch(
+                        checked = misc.clarityAtmosBypass,
+                        onCheckedChange = viewModel::setClarityAtmosBypass,
+                    )
+                }
+
+                // 3. Resampler Precision & Dithering
+                Text(
+                    text = "Resampler precision & quantization",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(0 to "Fast", 1 to "High", 2 to "Ultra SoXR").forEach { (q, label) ->
+                        val selected = misc.resamplerQuality == q
+                        Surface(
+                            onClick = { viewModel.setResamplerQuality(q) },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.padding(vertical = 10.dp),
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "TPDF Dithering",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = "Eliminate quantization distortion when converting 32-bit DSP float to 16/24-bit output",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    androidx.compose.material3.Switch(
+                        checked = misc.ditherEnabled,
+                        onCheckedChange = viewModel::setDitherEnabled,
+                    )
+                }
+            }
+        }
+    }
+
     if (activeToggleDetail != null) {
         val detail = activeToggleDetail!!
         Dialog(
@@ -3738,27 +4010,31 @@ fun SettingsScreen(
                         ) {
                             Surface(
                                 shape = CircleShape,
-                                color = if (detail.checked) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                color = if (detail.checked || detail.isAction) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
                                 modifier = Modifier.size(44.dp),
                             ) {
                                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                     Icon(
                                         imageVector = if (detail.checked) Icons.Filled.Check else Icons.Filled.Info,
                                         contentDescription = null,
-                                        tint = if (detail.checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        tint = if (detail.checked || detail.isAction) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(24.dp),
                                     )
                                 }
                             }
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = if (detail.checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+                                color = if (detail.checked || detail.isAction) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
                             ) {
                                 Text(
-                                    text = if (detail.checked) "Enabled" else "Disabled",
+                                    text = when {
+                                        detail.isAction -> "Tap row to open"
+                                        detail.checked -> "Enabled"
+                                        else -> "Disabled"
+                                    },
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (detail.checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (detail.checked || detail.isAction) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                 )
                             }

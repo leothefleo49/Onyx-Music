@@ -70,6 +70,8 @@ class SettingsClearAllDataTest {
     private val downloadManager = mockk<TrackDownloadManager>(relaxed = true)
     private val fileExportHelper = mockk<com.lastwave.app.util.FileExportHelper>(relaxed = true)
     private val scrobblerPreferences = mockk<com.lastwave.app.data.local.ScrobblerPreferences>(relaxed = true)
+    private val scrobbleSyncEngine = mockk<com.lastwave.app.data.scrobble.ScrobbleSyncEngine>(relaxed = true)
+    private val historySyncManager = mockk<com.lastwave.app.data.scrobble.UniversalHistorySyncManager>(relaxed = true)
     private val discordPresencePreferences = mockk<com.lastwave.app.presence.DiscordPresencePreferences>(relaxed = true)
     private val equalizerPreferences = mockk<com.lastwave.app.data.local.EqualizerPreferences>(relaxed = true)
     private val loudnessPrefs = mockk<com.lastwave.app.playback.LoudnessPrefs>(relaxed = true)
@@ -116,6 +118,8 @@ class SettingsClearAllDataTest {
             MutableStateFlow(emptyList<RecommendationExclusionEntity>())
         every { appUpdateManager.updateInfo } returns MutableStateFlow(UpdateInfo())
         every { musicPlayer.state } returns playerState
+        every { musicPlayer.outputRouteMonitor.activeOutput } returns
+            MutableStateFlow(com.lastwave.app.playback.ActiveAudioOutput())
         every { musicPlayer.stopAndClear(clearSession = true) } answers { order += "player" }
         coEvery { downloadManager.clearAllDownloads() } coAnswers { order += "downloads" }
         coEvery { discoverRepository.clearRecommendationExclusions() } coAnswers { order += "exclusions" }
@@ -138,6 +142,8 @@ class SettingsClearAllDataTest {
             downloadManager = downloadManager,
             fileExportHelper = fileExportHelper,
             scrobblerPreferences = scrobblerPreferences,
+            scrobbleSyncEngine = scrobbleSyncEngine,
+            historySyncManager = historySyncManager,
             discordPresencePreferences = discordPresencePreferences,
             equalizerPreferences = equalizerPreferences,
             loudnessPrefs = loudnessPrefs,

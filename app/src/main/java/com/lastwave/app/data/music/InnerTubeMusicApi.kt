@@ -177,6 +177,19 @@ class InnerTubeMusicApi @Inject constructor(
         streamExtractor.invalidateCache(videoId)
     }
 
+    /**
+     * Called when the active network route changes (e.g. Wi-Fi <-> Cellular handoff).
+     * Signed googlevideo URLs and open sockets from the old IP/interface must be
+     * evicted immediately so playback and preloads mint fresh URLs on the new route.
+     */
+    fun onNetworkRouteChanged() {
+        streamCache.clear()
+        lastResolvedStreams.clear()
+        failedClientsUntil.clear()
+        innerTubeXExtractor.clearFailedProfiles()
+        runCatching { innerTubeClient.connectionPool.evictAll() }
+    }
+
     /** Marks the exact extractor/client that produced a rejected URL, then
      * clears its state so the next attempt cannot pick the same stale result. */
     fun reportPlaybackFailure(videoId: String, rejected: YouTubeAudioStream? = null) {

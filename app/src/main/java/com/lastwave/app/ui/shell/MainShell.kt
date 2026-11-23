@@ -302,17 +302,15 @@ fun MainShell(
     var showAccountMenu by remember { mutableStateOf(false) }
     var showJamSheet by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
-    var showCustomTimerDialog by remember { mutableStateOf(false) }
-    var customDurationText by remember { mutableStateOf("") }
+    var showHelpGuideDialog by remember { mutableStateOf(false) }
+    var showReplayTourDialog by remember { mutableStateOf(false) }
     val ytConnection by mainShellViewModel.ytConnection.collectAsStateWithLifecycle()
     val settings by mainShellViewModel.settings.collectAsStateWithLifecycle(initialValue = null)
     var promptDismissedThisSession by rememberSaveable { mutableStateOf(false) }
     var joinSupportDismissedThisSession by rememberSaveable { mutableStateOf(false) }
 
     val currentSettings = settings
-    val shouldShowJoinSupport = currentSettings != null &&
-        !currentSettings.hasDismissedJoinSupportPrompt &&
-        !joinSupportDismissedThisSession
+    val shouldShowJoinSupport = false
 
     if (shouldShowJoinSupport) {
         JoinSupportDialog(
@@ -328,23 +326,8 @@ fun MainShell(
         !shouldShowJoinSupport
 
     if (shouldShowTutorial) {
-        AlertDialog(
-            onDismissRequest = { mainShellViewModel.markTutorialSeen() },
-            shape = RoundedCornerShape(28.dp),
-            title = { Text("Welcome to Onyx Music") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("A few things that are easy to miss:", style = MaterialTheme.typography.bodyMedium)
-                    TutorialRow("Feed, Stats and Library are tabs — tap the dock to switch. Swiping the page no longer changes tabs.")
-                    TutorialRow("Tap a song to start it. Tap the mini player to open the full player.")
-                    TutorialRow("Inside the player, the Queue tab holds the play order, recent queues, and queue lock/delete.")
-                    TutorialRow("Swipe the mini player down to collapse it to a small button instead of stopping the music.")
-                    TutorialRow("Settings holds Appearance, equalizer, spatial audio, recognition, hearing protection and more.")
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { mainShellViewModel.markTutorialSeen() }) { Text("Got it") }
-            },
+        com.lastwave.app.ui.common.OnyxInteractiveTourDialog(
+            onComplete = { mainShellViewModel.markTutorialSeen() },
         )
     }
 
@@ -461,7 +444,7 @@ fun MainShell(
             // Tabs change only by tapping the dock. A horizontal swipe here
             // used to switch tabs accidentally while scrolling a shelf that
             // scrolls sideways itself.
-            userScrollEnabled = false,
+            userScrollEnabled = com.lastwave.app.ui.theme.LocalHideNavTabs.current,
             beyondViewportPageCount = if (allTabs) tabs.size - 1 else 0,
             modifier = Modifier.fillMaxSize()
                 .then(if (chromeCollapse != null) Modifier.nestedScroll(chromeCollapse.connection) else Modifier)
@@ -837,7 +820,7 @@ fun MainShell(
                         showAccountMenu = false
                         showSleepTimerDialog = true
                     },
-                    shape = com.lastwave.app.ui.common.groupShape(com.lastwave.app.ui.common.GroupPosition.BOTTOM),
+                    shape = com.lastwave.app.ui.common.groupShape(com.lastwave.app.ui.common.GroupPosition.MIDDLE),
                     color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -862,12 +845,97 @@ fun MainShell(
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
                             Text("Sleep timer", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                            Text("Stop playback automatically", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Presets, end of queue & custom times", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                // 6. Friends
+                Surface(
+                    onClick = {
+                        showAccountMenu = false
+                        onOpenFriends()
+                    },
+                    shape = com.lastwave.app.ui.common.groupShape(com.lastwave.app.ui.common.GroupPosition.MIDDLE),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Filled.Group,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Friends", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("See what friends are listening to", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                // 7. Help & Feature Guide
+                Surface(
+                    onClick = {
+                        showAccountMenu = false
+                        showHelpGuideDialog = true
+                    },
+                    shape = com.lastwave.app.ui.common.groupShape(com.lastwave.app.ui.common.GroupPosition.BOTTOM),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.tertiaryContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Filled.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Help & Feature Guide", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("How everything works & interactive app tour", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showHelpGuideDialog) {
+        com.lastwave.app.ui.common.OnyxHelpCenterSheet(
+            onDismiss = { showHelpGuideDialog = false },
+            onReplayTour = { showReplayTourDialog = true },
+        )
+    }
+
+    if (showReplayTourDialog) {
+        com.lastwave.app.ui.common.OnyxInteractiveTourDialog(
+            onComplete = { showReplayTourDialog = false },
+        )
     }
 
     if (showJamSheet) {
@@ -877,97 +945,9 @@ fun MainShell(
     }
 
     if (showSleepTimerDialog) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showSleepTimerDialog = false }) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(20.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "Sleep timer",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f),
-                        )
-                        IconButton(
-                            onClick = {
-                                showSleepTimerDialog = false
-                                showCustomTimerDialog = true
-                            },
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Custom timer")
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    val endOfQueueStats = remember(showSleepTimerDialog) {
-                        val s = musicPlayer.state.value
-                        com.lastwave.app.ui.player.QueueStatsFormatter
-                            .formatQueueStats(s.queue.drop((s.currentIndex + 1).coerceAtLeast(0)))
-                    }
-                    TextButton(
-                        onClick = {
-                            musicPlayer.setSleepTimerEndOfQueue()
-                            showSleepTimerDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            "End of queue \u2014 $endOfQueueStats",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                    }
-                    listOf(0, 15, 30, 45, 60).forEach { minutes ->
-                        TextButton(
-                            onClick = {
-                                musicPlayer.setSleepTimerMinutes(minutes)
-                                showSleepTimerDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                if (minutes == 0) "Turn timer off" else "$minutes minutes",
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showCustomTimerDialog) {
-        AlertDialog(
-            onDismissRequest = { showCustomTimerDialog = false },
-            title = { Text("Set Custom Timer") },
-            text = {
-                OutlinedTextField(
-                    value = customDurationText,
-                    onValueChange = { customDurationText = it.filter(Char::isDigit).take(4) },
-                    label = { Text("Duration (minutes)") },
-                    singleLine = true,
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = customDurationText.toIntOrNull()?.let { it > 0 } == true,
-                    onClick = {
-                        val mins = customDurationText.toIntOrNull() ?: 0
-                        if (mins > 0) musicPlayer.setSleepTimerMinutes(mins)
-                        showCustomTimerDialog = false
-                    },
-                ) { Text("Set timer") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCustomTimerDialog = false }) {
-                    Text("Cancel")
-                }
-            },
+        com.lastwave.app.ui.player.SleepTimerDialog(
+            musicPlayer = musicPlayer,
+            onDismiss = { showSleepTimerDialog = false },
         )
     }
 }
@@ -1107,6 +1087,25 @@ private fun FloatingNavBar(
 
     Box(
         modifier = modifier
+            .fillMaxWidth()
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var dragged = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            if (!dragged) change.consume()
+                            break
+                        }
+                        if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                            dragged = true
+                            break
+                        }
+                    }
+                }
+            }
             .windowInsetsPadding(
                 WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal),
             )
@@ -1318,20 +1317,7 @@ private fun JoinSupportDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Filled.Headphones,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
+                    com.lastwave.app.ui.common.OnyxBrandLogo(size = 36.dp)
                     Column {
                         Text(
                             text = "Join Support",

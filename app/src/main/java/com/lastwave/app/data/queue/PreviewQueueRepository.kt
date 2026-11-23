@@ -28,6 +28,11 @@ data class PreviewQueue(
     val artworkUrl: String? = null,
     /** Queue index the listener was on when this snapshot was taken. */
     val startIndex: Int = 0,
+    /** Playback position inside the track at [startIndex] when saved. */
+    val positionMs: Long = 0L,
+    /** Preserves shuffle mode and exact play order so replaying resumes forward, never scrambled/reversed. */
+    val shuffleEnabled: Boolean = false,
+    val shuffleOrder: List<Int> = emptyList(),
 )
 
 @Singleton
@@ -72,42 +77,73 @@ class PreviewQueueRepository @Inject constructor(
 
     /** Keeps the most recent snapshot's resume position current as playback
      *  moves through it, without creating a second history entry. */
-    fun updateActiveQueuePosition(tracks: List<PlayableTrack>, index: Int) {
+    fun updateActiveQueuePosition(
+        tracks: List<PlayableTrack>,
+        index: Int,
+        positionMs: Long = 0L,
+        shuffleEnabled: Boolean = false,
+        shuffleOrder: List<Int> = emptyList(),
+    ) {
         if (tracks.size < 2) return
+        val snapshotTracks = tracks.take(1500)
         applicationScope.launch(Dispatchers.IO) {
             mutex.withLock {
                 val current = _previewQueues.value.toMutableList()
                 val top = current.firstOrNull() ?: return@withLock
-                val sameQueue = top.tracks.size == tracks.size &&
+                val sameQueue = top.tracks.size == snapshotTracks.size &&
                     top.tracks.firstOrNull()?.let { it.videoId ?: (it.title + it.artist) } ==
-                    tracks.firstOrNull()?.let { it.videoId ?: (it.title + it.artist) }
+                    snapshotTracks.firstOrNull()?.let { it.videoId ?: (it.title + it.artist) }
                 if (!sameQueue) return@withLock
                 val safeIndex = index.coerceIn(0, top.tracks.lastIndex)
-                if (top.startIndex == safeIndex) return@withLock
-                current[0] = top.copy(startIndex = safeIndex)
+                val safePos = positionMs.coerceAtLeast(0L)
+                val safeOrder = if (shuffleEnabled && shuffleOrder.size == top.tracks.size) shuffleOrder else emptyList()
+                if (top.startIndex == safeIndex &&
+                    kotlin.math.abs(top.positionMs - safePos) < 2_000L &&
+                    top.shuffleEnabled == shuffleEnabled &&
+                    top.shuffleOrder == safeOrder
+                ) return@withLock
+                current[0] = top.copy(
+                    startIndex = safeIndex,
+                    positionMs = safePos,
+                    shuffleEnabled = shuffleEnabled,
+                    shuffleOrder = safeOrder,
+                )
                 _previewQueues.value = current
                 runCatching { file.writeText(json.encodeToString(current)) }
             }
         }
     }
 
-    fun recordQueue(tracks: List<PlayableTrack>, sourceLabel: String = "Queue", startIndex: Int = 0) {
-        if (tracks.size < 2) return
+    fun recordQueue(
+        tracks: List<PlayableTrack>,
+        sourceLabel: String = "Queue",
+        startIndex: Int = 0,
+        positionMs: Long = 0L,
+        shuffleEnabled: Boolean = false,
+        shuffleOrder: List<Int> = emptyList(),
+    ) {
+        if (tracks.isEmpty()) return
         val snapshotTracks = tracks.take(1500)
         val firstTrack = snapshotTracks.firstOrNull() ?: return
         val title = if (sourceLabel.isNotBlank() && sourceLabel != "Onyx" && sourceLabel != "Home") {
             sourceLabel
         } else {
-            "${firstTrack.title} & more"
+            val activeTrack = snapshotTracks.getOrNull(startIndex.coerceIn(0, snapshotTracks.lastIndex)) ?: firstTrack
+            if (snapshotTracks.size > 1) "${activeTrack.title} & more" else activeTrack.title
         }
-        val artwork = snapshotTracks.firstNotNullOfOrNull { it.artworkUrl?.takeIf(String::isNotBlank) }
+        val artwork = snapshotTracks.getOrNull(startIndex.coerceIn(0, snapshotTracks.lastIndex))?.artworkUrl?.takeIf(String::isNotBlank)
+            ?: snapshotTracks.firstNotNullOfOrNull { it.artworkUrl?.takeIf(String::isNotBlank) }
+        val safeOrder = if (shuffleEnabled && shuffleOrder.size == snapshotTracks.size) shuffleOrder else emptyList()
         val newEntry = PreviewQueue(
-            id = System.currentTimeMillis().toString(),
+            id = "${System.currentTimeMillis()}_${snapshotTracks.size}",
             title = title,
             timestamp = System.currentTimeMillis(),
             tracks = snapshotTracks,
             artworkUrl = artwork,
             startIndex = startIndex.coerceIn(0, snapshotTracks.lastIndex.coerceAtLeast(0)),
+            positionMs = positionMs.coerceAtLeast(0L),
+            shuffleEnabled = shuffleEnabled,
+            shuffleOrder = safeOrder,
         )
 
         applicationScope.launch(Dispatchers.IO) {
@@ -115,7 +151,7 @@ class PreviewQueueRepository @Inject constructor(
                 val current = _previewQueues.value.toMutableList()
                 val topFirstVideoId = current.firstOrNull()?.tracks?.firstOrNull()?.let { it.videoId ?: (it.title + it.artist) }
                 val newFirstVideoId = firstTrack.videoId ?: (firstTrack.title + firstTrack.artist)
-                if (topFirstVideoId == newFirstVideoId) {
+                if (topFirstVideoId == newFirstVideoId && current.firstOrNull()?.tracks?.size == snapshotTracks.size) {
                     current.removeAt(0)
                 }
                 current.add(0, newEntry)

@@ -398,7 +398,13 @@ internal fun FullPlayer(
     previewQueues: List<com.lastwave.app.data.queue.PreviewQueue> = emptyList(),
     onPlayPreviewQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
     onSaveRecentQueue: (com.lastwave.app.data.queue.PreviewQueue) -> Unit = {},
-    onMixQueue: () -> Unit = {},
+    onSaveCurrentQueue: () -> Unit = {},
+    autoMixEnabled: Boolean = false,
+    onToggleQueueTransitions: () -> Unit = {},
+    onDisableBitPerfectForTransitions: () -> Unit = {},
+    undoQueueSwitch: com.lastwave.app.playback.QueueSwitchUndoSnapshot? = null,
+    onUndoQueueSwitch: () -> Unit = {},
+    onDismissUndoQueueSwitch: () -> Unit = {},
     /** Null follows the artwork palette; otherwise progress bars use these. */
     seekbarColorsOverride: Triple<Color, Color, Color>? = null,
     edgeGlow: EdgeGlowConfig = EdgeGlowConfig(),
@@ -1193,7 +1199,7 @@ internal fun FullPlayer(
                             Column(
                                 Modifier
                                     .align(Alignment.Center)
-                                    .padding(horizontal = 96.dp)
+                                    .padding(horizontal = 108.dp)
                                     .graphicsLayer { alpha = headerLabelAlpha },
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
@@ -1225,27 +1231,6 @@ internal fun FullPlayer(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                if (currentTab == FullPlayerTab.LYRICS && onSetLyricsOffsetMs != null) {
-                                    LiquidGlassSurface(
-                                        onClick = hapticClick { showLyricsOffsetDialog = true },
-                                        shape = CircleShape,
-                                        color = if (lyricsOffsetMs != 0L) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                                        else liquidGlassContainerColor(if (isThemeLight) Color.Black.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.14f)),
-                                        contentColor = if (lyricsOffsetMs != 0L) MaterialTheme.colorScheme.primary else (if (isThemeLight) Color(0xFF222226) else Color.White.copy(alpha = 0.94f)),
-                                        glassModifier = Modifier.liquidGlassChrome(
-                                            CircleShape,
-                                            LocalLiquidGlass.current,
-                                            LiquidGlassPreset.FloatingControls,
-                                        ),
-                                        modifier = Modifier.size(44.dp),
-                                    ) {
-                                        Icon(
-                                            Icons.Filled.Timer,
-                                            contentDescription = stringResource(com.lastwave.app.R.string.player_lyrics_offset_cd),
-                                            modifier = Modifier.size(22.dp),
-                                        )
-                                    }
-                                }
                                 if (onEnterAod != null) {
                                     LiquidGlassSurface(
                                         onClick = hapticClick { onEnterAod() },
@@ -1260,8 +1245,8 @@ internal fun FullPlayer(
                                         modifier = Modifier.size(44.dp),
                                     ) {
                                         Icon(
-                                            Icons.Filled.NightsStay,
-                                            contentDescription = "Always-on player",
+                                            Icons.Filled.AutoAwesome,
+                                            contentDescription = "Always-on display / Vibe mode",
                                             modifier = Modifier.size(21.dp),
                                         )
                                     }
@@ -1444,18 +1429,23 @@ internal fun FullPlayer(
                                 onBack = { onTabChange(FullPlayerTab.NOW_PLAYING) },
                             ) {
                                 QueuePanel(
-                                    state,
-                                    player,
+                                    state = state,
+                                    player = player,
                                     bottomPadding = tabBottomInset,
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .adaptiveContentWidth(maxWidth = if (isTabletLandscape) 960.dp else 720.dp)
                                         .padding(horizontal = 12.dp),
-                                    onBack = { onTabChange(FullPlayerTab.NOW_PLAYING) },
                                     previewQueues = previewQueues,
                                     onPlayPreviewQueue = onPlayPreviewQueue,
                                     onSaveRecentQueue = onSaveRecentQueue,
-                                    onMixQueue = onMixQueue,
+                                    onSaveCurrentQueue = onSaveCurrentQueue,
+                                    autoMixEnabled = autoMixEnabled,
+                                    onToggleQueueTransitions = onToggleQueueTransitions,
+                                    onDisableBitPerfectForTransitions = onDisableBitPerfectForTransitions,
+                                    undoQueueSwitch = undoQueueSwitch,
+                                    onUndoQueueSwitch = onUndoQueueSwitch,
+                                    onDismissUndoQueueSwitch = onDismissUndoQueueSwitch,
                                 )
                             }
                         }
@@ -2113,6 +2103,7 @@ internal fun FullPlayer(
             onPlayInLastWave = { player.play(track, sourceLabel = state.sourceLabel) },
             canWatchVideo = canWatchVideo,
             onWatchVideo = onToggleSyncedVideo,
+            onOpenLyricsOffset = if (onSetLyricsOffsetMs != null) ({ showLyricsOffsetDialog = true }) else null,
         )
     }
 
