@@ -517,6 +517,7 @@ fun MainShell(
                             onOpenGenerator = onOpenGenerator,
                             onOpenSearch = onOpenSearch,
                             onOpenSettings = { showAccountMenu = true },
+                            onOpenFriends = onOpenFriends,
                         )
                     }
                 }

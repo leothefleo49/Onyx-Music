@@ -607,6 +607,10 @@ class SettingsViewModel @Inject constructor(
     }
     fun setQueueHistoryLimit(limit: Int) = launchSettingsAction("update queue history") { settingsPreferences.setQueueHistoryLimit(limit) }
     fun setQueueHistoryDays(days: Int) = launchSettingsAction("update queue history") { settingsPreferences.setQueueHistoryDays(days) }
+    fun resetTutorial() = launchSettingsAction("reset the app tour") {
+        settingsPreferences.setHasSeenTutorial(false)
+        _uiState.update { it.copy(toastMessage = "Close Settings to replay the app tour") }
+    }
     fun setAodVisualizerMode(mode: String) = launchSettingsAction("update AOD visuals") { settingsPreferences.setAodVisualizerMode(mode) }
     fun setAodShowControls(enabled: Boolean) = launchSettingsAction("update AOD visuals") { settingsPreferences.setAodShowControls(enabled) }
     fun setAodShowArtwork(enabled: Boolean) = launchSettingsAction("update AOD visuals") { settingsPreferences.setAodShowArtwork(enabled) }

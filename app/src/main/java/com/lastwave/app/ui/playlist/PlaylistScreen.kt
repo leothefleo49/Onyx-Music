@@ -69,6 +69,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
@@ -115,6 +116,7 @@ import com.lastwave.app.data.playlist.isYouTubeOnly
 import com.lastwave.app.playback.toPlayableTrack
 import com.lastwave.app.ui.common.ArtworkImage
 import com.lastwave.app.ui.common.ExpressiveHeader
+import com.lastwave.app.ui.common.HeaderActionIcon
 import com.lastwave.app.ui.common.PlaylistCover
 import com.lastwave.app.ui.common.TopCurvedSectionClipShape
 import com.lastwave.app.ui.common.TrackContextMenuSheet
@@ -164,6 +166,7 @@ fun PlaylistScreen(
     onOpenGenerator: () -> Unit = {},
     onOpenSearch: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenFriends: () -> Unit = {},
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -232,22 +235,15 @@ fun PlaylistScreen(
                             Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.pl_clear_selection_cd))
                         }
                     } else {
-                        IconButton(onClick = onOpenSearch, modifier = Modifier.size(40.dp)) {
-                            Icon(Icons.Filled.Search, contentDescription = "Search")
-                        }
+                        HeaderActionIcon(Icons.Filled.Search, "Search", onOpenSearch)
                         com.lastwave.app.ui.recognition.MusicRecognitionButton(key = "recognition_library")
-                        IconButton(onClick = onOpenSettings, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                Icons.Filled.Person,
-                                contentDescription = "Profile",
-                            )
-                        }
-                        IconButton(
-                            onClick = viewModel::openCreateDialog,
-                            modifier = Modifier.size(40.dp),
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.pl_create_cd))
-                        }
+                        HeaderActionIcon(Icons.Filled.Person, "Profile", onOpenSettings)
+                        HeaderActionIcon(Icons.Filled.Group, "Friends", onOpenFriends)
+                        HeaderActionIcon(
+                            Icons.Filled.Add,
+                            stringResource(R.string.pl_create_cd),
+                            viewModel::openCreateDialog,
+                        )
                     }
                 },
             )

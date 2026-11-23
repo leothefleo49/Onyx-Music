@@ -2904,7 +2904,7 @@ class MusicPlayer @Inject constructor(
                 // until ExoPlayer parsed the container (TIME_UNSET -> READY),
                 // while the notification extrapolated via speed and looked fine.
                 durationMs = selectedTrack.durationMs ?: findKnownDuration(selectedTrack) ?: 0L,
-                shuffleEnabled = if (playerDelegate.isInitialized()) player.shuffleModeEnabled else startShuffled,
+                shuffleEnabled = startShuffled,
                 repeatMode = live.repeatMode,
             ).withSubsystemStateFrom(live) }
             durationOwnerMediaId = selectedTrack.mediaIdKey()
@@ -2925,7 +2925,7 @@ class MusicPlayer @Inject constructor(
                 if (generation != playRequestGeneration.get()) return@launch
                 withContext(Dispatchers.Main.immediate) {
                     if (generation != playRequestGeneration.get()) return@withContext
-                    val isShuffle = startShuffled || (playerDelegate.isInitialized() && player.shuffleModeEnabled)
+                    val isShuffle = startShuffled
                     resolved?.let {
                         registerPreparedStream(it)
                         stagePendingQuality(selectedTrack.mediaIdKey(), it)
@@ -3014,7 +3014,7 @@ class MusicPlayer @Inject constructor(
                     if (ytFallback != null && generation == playRequestGeneration.get()) {
                         withContext(Dispatchers.Main.immediate) {
                             if (generation != playRequestGeneration.get()) return@withContext
-                            val isShuffle = startShuffled || (playerDelegate.isInitialized() && player.shuffleModeEnabled)
+                            val isShuffle = startShuffled
                             registerPreparedStream(ytFallback)
                             stagePendingQuality(selectedTrack.mediaIdKey(), ytFallback)
                             publishResolvedQuality(ytFallback, expectedMediaId = selectedTrack.mediaIdKey())
@@ -3072,7 +3072,7 @@ class MusicPlayer @Inject constructor(
                             return@withContext
                         }
                         unavailableMediaIds += failedKey
-                        val isShuffle = startShuffled || (playerDelegate.isInitialized() && player.shuffleModeEnabled)
+                        val isShuffle = startShuffled
                         val nextIndex = if (isShuffle) {
                             tracks.indices
                                 .filter { tracks[it].mediaIdKey() !in unavailableMediaIds }

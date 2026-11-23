@@ -418,6 +418,8 @@ internal fun FullPlayer(
     // its lyrics button keeps opening the lyrics tab. Not tied to currentTab:
     // Now Playing keeps showing Player Lyrics while it fades out to the lyrics tab.
     val playerLyricsActive = playerLyrics && !isTabletLandscape
+    // System back exits inline lyrics first instead of collapsing the player.
+    BackHandler(enabled = playerLyricsActive) { onPlayerLyricsChange(false) }
     // Rotating into that layout leaves the mode, so the host's back press and
     // its 60 ms playhead never serve an invisible Player Lyrics.
     LaunchedEffect(isTabletLandscape) { if (isTabletLandscape) onPlayerLyricsChange(false) }
@@ -1148,7 +1150,9 @@ internal fun FullPlayer(
                             // never MaterialTheme onSurface (near-black in light mode).
                             LiquidGlassSurface(
                                 onClick = hapticClick {
-                                    if (currentTab != FullPlayerTab.NOW_PLAYING) {
+                                    if (playerLyricsActive) {
+                                        onPlayerLyricsChange(false)
+                                    } else if (currentTab != FullPlayerTab.NOW_PLAYING) {
                                         onTabChange(FullPlayerTab.NOW_PLAYING)
                                     } else {
                                         onCollapse()
@@ -1167,8 +1171,8 @@ internal fun FullPlayer(
                                     .size(44.dp),
                             ) {
                                 Icon(
-                                    if (currentTab != FullPlayerTab.NOW_PLAYING) Icons.Filled.ArrowBack else Icons.Filled.ExpandMore,
-                                    if (currentTab != FullPlayerTab.NOW_PLAYING) "Back to player" else "Minimize player",
+                                    if (playerLyricsActive || currentTab != FullPlayerTab.NOW_PLAYING) Icons.Filled.ArrowBack else Icons.Filled.ExpandMore,
+                                    if (playerLyricsActive) "Close lyrics" else if (currentTab != FullPlayerTab.NOW_PLAYING) "Back to player" else "Minimize player",
                                     modifier = Modifier.size(26.dp),
                                 )
                             }

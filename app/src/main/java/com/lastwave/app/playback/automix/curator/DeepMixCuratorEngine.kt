@@ -459,7 +459,9 @@ class DeepMixCuratorEngine @Inject constructor(
         val sourceHash = (track.url.hashCode()).toString()
         val trackId = track.youtubeVideoIdOrNull() ?: trackKey
 
-        signatureStore.getSignature(trackId, durationMs, sourceHash)?.let { return it }
+        runCatching { signatureStore.getSignature(trackId, durationMs, sourceHash) }
+            .getOrNull()
+            ?.let { return it }
 
         // For local files, run real PCM signature extraction with a tight timeout.
         if (track.isLocalFile()) {
@@ -472,12 +474,22 @@ class DeepMixCuratorEngine @Inject constructor(
                 playbackUrl = track.url,
                 durationMs = durationMs,
             )
-            val extracted = withTimeoutOrNull(2_000L) {
-                suspendCancellableCoroutine<AcousticSignature> { cont ->
-                    signatureExtractor.preAnalyzeTrack(playable, track.url) { sig ->
-                        if (cont.isActive) cont.resume(sig)
+            val extracted = try {
+                withTimeoutOrNull(2_000L) {
+                    suspendCancellableCoroutine<AcousticSignature> { cont ->
+                        signatureExtractor.preAnalyzeTrack(playable, track.url) { sig ->
+                            if (cont.isActive) cont.resume(sig)
+                        }
                     }
                 }
+            } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                android.util.Log.w("DeepMixCurator", "Local signature extraction failed for ${track.name}", error)
+                null
+            } catch (error: LinkageError) {
+                android.util.Log.w("DeepMixCurator", "Native signature extractor unavailable", error)
+                null
             }
             if (extracted != null) return extracted
         }
@@ -485,7 +497,7 @@ class DeepMixCuratorEngine @Inject constructor(
         // Deterministic acoustic prior for un-decoded remote candidates so curation remains fast
         // and produces consistent BPM/Camelot clusters rather than collapsing every song to 120 BPM / 8B.
         val estimated = buildDeterministicAcousticPrior(trackId, track, durationMs, sourceHash)
-        signatureStore.putSignature(estimated)
+        runCatching { signatureStore.putSignature(estimated) }
         return estimated
     }
 

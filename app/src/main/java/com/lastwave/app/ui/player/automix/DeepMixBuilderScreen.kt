@@ -207,6 +207,7 @@ class DeepMixBuilderViewModel @Inject constructor(
     }
 
     fun startBuild() {
+        if (curationProgress.value.isRunning) return
         val s = _uiState.value
         val genrePolicy = when (s.genreMode) {
             GenrePolicyMode.AUTO_FROM_TASTE -> GenrePolicy.AutoFromTaste

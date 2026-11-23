@@ -212,3 +212,23 @@ Reported the Last.fm callback being rejected as invalid, custom colours shifting
 
 ### Change
 - GitHub Pages is unavailable on the private main repo, so the Last.fm HTTPS redirect is hosted in the public `leothefleo49/Onyx-Music-Callback` repo. Version 1.2.3 points Last.fm setup at `https://leothefleo49.github.io/Onyx-Music-Callback/auth-callback.html`.
+
+---
+
+## Session 7 — 2026-11-22 (1.2.4 bug pass + Android build matrix)
+
+### Reported
+Lyrics could not be closed; lock queue/tutorial/help still not visible enough; Jam sync lag; friend feature unclear; playlist Play inherited shuffle and album shuffle state didn't update; recognition modes should be tabs with live/auto sensitivity; Library header icons too faint/inconsistent; deep transition mix crashed; asked again for iOS/desktop/Wear/PWA releases and prompt-free updates.
+
+### Delivered in 1.2.4
+- Lyrics close via the top-left back button and system Back.
+- Explicit play clears shuffle; album shuffle button reflects/toggles the album queue.
+- Jam host seeks broadcast immediately; position baseline kept current.
+- Deep Mix per-candidate analysis/cache failures fall back instead of crashing; repeat Build taps ignored.
+- Recognition Music/Humming tabs with sensitivity and one automatic longer, more lenient retry.
+- Library header uses shared glass HeaderActionIcons for Search, Recognition, Profile, Friends, Create; Sort beside filters.
+- Settings → Help & navigation → Replay the app tour.
+- Builds: universal, arm64, armeabi-v7a, x86, x86_64, Android 7 (minSdk 24) universal, Quest 3.
+
+### Not built
+iOS, macOS, Windows, Linux, Wear OS and a full PWA. KMP is the correct future path, but this repo's Android-only Media3/Oboe/Cast/Hilt/Room/services and the lack of macOS/Xcode + Apple signing prevent producing those from this machine/session.

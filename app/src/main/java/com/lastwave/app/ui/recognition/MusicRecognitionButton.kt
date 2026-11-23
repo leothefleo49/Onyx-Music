@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +53,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -147,17 +149,31 @@ private fun RecognitionStartSheet(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Humming / instrument mode", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "Listens longer and accepts quieter input",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = hum, onCheckedChange = { hum = it })
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                RecognitionModeTab(
+                    label = "Music",
+                    subtitle = "Speaker / room",
+                    selected = !hum,
+                    onClick = { hum = false },
+                    modifier = Modifier.weight(1f),
+                )
+                RecognitionModeTab(
+                    label = "Humming",
+                    subtitle = "Voice / instrument",
+                    selected = hum,
+                    onClick = { hum = true },
+                    modifier = Modifier.weight(1f),
+                )
             }
+            Text(
+                if (hum) {
+                    "Listens longer and accepts quieter input. Best-effort for humming; a clear melody helps."
+                } else {
+                    "Best for music playing from a speaker, TV or another phone."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Sensitivity", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
@@ -177,6 +193,37 @@ private fun RecognitionStartSheet(
                 Text("Cancel")
             }
             Spacer(Modifier.height(4.dp))
+        }
+    }
+}
+
+@Composable
+private fun RecognitionModeTab(
+    label: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f)
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

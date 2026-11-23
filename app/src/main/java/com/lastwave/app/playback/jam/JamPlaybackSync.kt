@@ -49,6 +49,7 @@ class JamPlaybackSync @Inject constructor(
     private var lastBroadcastTrackId: String? = null
     private var lastBroadcastIsPlaying: Boolean? = null
     private var lastBroadcastPositionMs = 0L
+    private var lastBroadcastAtElapsed = 0L
     private var loadingTrackId: String? = null
 
     // Live position of a 24/7 station, used to snap listeners back.
@@ -164,6 +165,7 @@ class JamPlaybackSync @Inject constructor(
                             lastBroadcastTrackId = trackId
                             lastBroadcastIsPlaying = isPlaying
                             lastBroadcastPositionMs = pos
+                            lastBroadcastAtElapsed = SystemClock.elapsedRealtime()
                             quietUntilMs = SystemClock.elapsedRealtime() + 1000L
 
                             val payload = TrackInfoPayload(
@@ -182,6 +184,7 @@ class JamPlaybackSync @Inject constructor(
                             }
                             lastBroadcastIsPlaying = isPlaying
                             lastBroadcastPositionMs = pos
+                            lastBroadcastAtElapsed = SystemClock.elapsedRealtime()
                             quietUntilMs = SystemClock.elapsedRealtime() + 800L
 
                             if (isPlaying) {
@@ -197,6 +200,7 @@ class JamPlaybackSync @Inject constructor(
                         lastBroadcastIsPlaying = isPlaying
                         val currentPos = musicPlayer.progressState.value.positionMs
                         lastBroadcastPositionMs = currentPos
+                        lastBroadcastAtElapsed = SystemClock.elapsedRealtime()
                         quietUntilMs = SystemClock.elapsedRealtime() + 800L
 
                         if (isPlaying) {
@@ -206,6 +210,29 @@ class JamPlaybackSync @Inject constructor(
                         }
                     }
                 }
+        }
+
+        // 3b. Outbound seeks: a host scrubbing the player must move the room
+        // immediately, not only on the next play/pause/track change.
+        scope.launch {
+            musicPlayer.progressState.collect { progress ->
+                val session = jamRepository.sessionState.value as? JamSessionState.Active ?: return@collect
+                val canControl = session.isHost || session.roomMode == JamProtocolConstants.MODE_COLLABORATIVE
+                if (!canControl) return@collect
+                val now = SystemClock.elapsedRealtime()
+                if (now < quietUntilMs) return@collect
+                if (!musicPlayer.state.value.isPlaying) {
+                    lastBroadcastPositionMs = progress.positionMs
+                    lastBroadcastAtElapsed = now
+                    return@collect
+                }
+                val expected = lastBroadcastPositionMs + (now - lastBroadcastAtElapsed)
+                if (kotlin.math.abs(progress.positionMs - expected) < 2_500L) return@collect
+                lastBroadcastPositionMs = progress.positionMs
+                lastBroadcastAtElapsed = now
+                quietUntilMs = now + 400L
+                jamRepository.broadcastSeek(progress.positionMs)
+            }
         }
     }
 
@@ -333,6 +360,7 @@ class JamPlaybackSync @Inject constructor(
             lastBroadcastTrackId = remoteTrack.id
             lastBroadcastIsPlaying = isPlaying
             lastBroadcastPositionMs = positionMs
+            lastBroadcastAtElapsed = SystemClock.elapsedRealtime()
 
             // If the ID matches a YouTube 11-char ID format, pass as direct videoId.
             // Otherwise pass null so that MusicPlayer automatically finds the best match via search.

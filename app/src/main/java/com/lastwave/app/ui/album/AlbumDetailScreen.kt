@@ -216,6 +216,8 @@ fun AlbumDetailScreen(
                 val saveState by viewModel.saveUiState.collectAsStateWithLifecycle()
                 val isAlbumPlaying = playbackState.isPlaying &&
                     (playbackState.sourceLabel.contains(data.title, ignoreCase = true) || playbackState.current?.album.equals(data.title, ignoreCase = true))
+                val isAlbumQueue = playbackState.sourceLabel.contains(data.title, ignoreCase = true) ||
+                    playbackState.current?.album.equals(data.title, ignoreCase = true)
 
                 LazyColumn(
                     state = listState,
@@ -331,12 +333,21 @@ fun AlbumDetailScreen(
                                     FilledTonalIconButton(
                                         onClick = {
                                             haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
-                                            viewModel.playShuffle()
+                                            if (isAlbumQueue) musicPlayer.toggleShuffle() else viewModel.playShuffle()
                                         },
                                         enabled = data.tracks.isNotEmpty(),
                                         shape = CircleShape,
                                         colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                            containerColor = if (isAlbumQueue && playbackState.shuffleEnabled) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.secondaryContainer
+                                            },
+                                            contentColor = if (isAlbumQueue && playbackState.shuffleEnabled) {
+                                                MaterialTheme.colorScheme.onPrimary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
+                                            },
                                         ),
                                         modifier = Modifier.size(50.dp),
                                     ) {
@@ -344,7 +355,11 @@ fun AlbumDetailScreen(
                                             Icons.Filled.Shuffle,
                                             contentDescription = stringResource(R.string.alb_shuffle_cd),
                                             modifier = Modifier.size(22.dp),
-                                            tint = MaterialTheme.colorScheme.primary,
+                                            tint = if (isAlbumQueue && playbackState.shuffleEnabled) {
+                                                MaterialTheme.colorScheme.onPrimary
+                                            } else {
+                                                MaterialTheme.colorScheme.primary
+                                            },
                                         )
                                     }
 

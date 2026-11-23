@@ -2334,6 +2334,22 @@ fun SettingsScreen(
 
                     SettingsTab.ABOUT -> {
                         item {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                SectionLabel("Help & navigation")
+                                SettingsGroup(rowCount = 1) { _, position ->
+                                    SettingsActionCard(
+                                        icon = Icons.Filled.Info,
+                                        iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                        iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        title = "Replay the app tour",
+                                        subtitle = "Tabs, queue, lyrics, mini-player and where everything lives",
+                                        onClick = viewModel::resetTutorial,
+                                        position = position,
+                                    )
+                                }
+                            }
+                        }
+                        item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SectionLabel(stringResource(R.string.settings_section_language))
                     SettingsGroup(rowCount = 1) { _, position ->

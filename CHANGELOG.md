@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.4] - 2026-11-22
+
+### 🛠️ Fixed
+* **Lyrics can be closed:** the player’s top-left button and system Back now exit inline lyrics instead of minimising the whole player.
+* **Play no longer inherits shuffle:** starting a playlist or album explicitly clears shuffle unless you used the shuffle button; the album shuffle button now lights up and toggles while that album is playing.
+* **Jam sync:** host seeks now broadcast immediately to the room, and the outbound position baseline stays accurate across play/pause/track changes.
+* **Deep Transition Mix crashes:** local audio analysis failures, native extractor errors and signature-cache errors now fall back to the deterministic acoustic prior instead of killing the app; repeated Build taps are ignored while a build is running.
+* **Library header:** Search, Recognition, Profile, Friends and Create use the same glass header buttons as the other tabs, and Sort sits beside the source filters at the same height.
+
+### ✨ What's New
+* **Recognition tabs:** the Listen sheet now has Music vs Humming tabs with sensitivity, and auto-adapts (one longer, more lenient pass) when the first match fails.
+* **Replay the app tour:** Settings → Help & navigation → Replay the app tour.
+* **Friends in Library:** the Friends screen is one tap from the Library header.
+
 ## [1.2.3] - 2026-11-21
 
 ### 🛠️ Fixed

@@ -65,6 +65,18 @@ class MusicRecognitionViewModel @Inject constructor(
                 val sensitivity = (sensitivityOverride ?: settings.recognitionSensitivity).coerceIn(0, 100)
                 if (humMode != null) settingsPreferences.setRecognitionHumMode(hum)
                 if (sensitivityOverride != null) settingsPreferences.setRecognitionSensitivity(sensitivity)
+
+                suspend fun captureOnce(listenMs: Long, threshold: Int): RecognizedSong? {
+                    val clip = MicCapture.record(listenMs)
+                    if (MicCapture.isSilent(clip.samples, threshold)) return null
+                    _state.value = RecognitionState.Identifying
+                    val (signature, sampleMs) = withContext(Dispatchers.Default) {
+                        val pcm = PcmResampler.resample(clip.samples, clip.sampleRate, AudioSignature.SAMPLE_RATE)
+                        AudioSignature.toDataUri(pcm) to pcm.size * 1000L / AudioSignature.SAMPLE_RATE
+                    }
+                    return client.recognize(signature, sampleMs)
+                }
+
                 // 700 at "strict" down to 100 at "very lenient". Humming and
                 // solo instruments are quiet, so the hum mode floor is lower.
                 val silenceThreshold = if (hum) {
@@ -73,16 +85,20 @@ class MusicRecognitionViewModel @Inject constructor(
                     (700 - sensitivity * 6).coerceIn(100, 700)
                 }
                 val listenMs = if (hum) HUM_LISTEN_MS else LISTEN_MS
-                val clip = MicCapture.record(listenMs)
-                if (MicCapture.isSilent(clip.samples, silenceThreshold)) {
+                val first = try {
+                    captureOnce(listenMs, silenceThreshold)
+                } catch (noMatch: RecognitionFailure.NoMatch) {
+                    // Auto-adapt: one more, longer and more lenient pass.
+                    _state.value = RecognitionState.Listening
+                    captureOnce(
+                        if (hum) HUM_LISTEN_MS else RETRY_LISTEN_MS,
+                        (silenceThreshold - 120).coerceAtLeast(80),
+                    )
+                }
+                if (first == null) {
                     RecognitionState.Failed(RecognitionError.SILENCE)
                 } else {
-                    _state.value = RecognitionState.Identifying
-                    val (signature, sampleMs) = withContext(Dispatchers.Default) {
-                        val pcm = PcmResampler.resample(clip.samples, clip.sampleRate, AudioSignature.SAMPLE_RATE)
-                        AudioSignature.toDataUri(pcm) to pcm.size * 1000L / AudioSignature.SAMPLE_RATE
-                    }
-                    RecognitionState.Found(client.recognize(signature, sampleMs))
+                    RecognitionState.Found(first)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -115,6 +131,7 @@ class MusicRecognitionViewModel @Inject constructor(
 
     private companion object {
         const val LISTEN_MS = 10_000L
+        const val RETRY_LISTEN_MS = 14_000L
         const val HUM_LISTEN_MS = 15_000L
     }
 }
