@@ -154,4 +154,46 @@ class AppUpdateManagerTest {
             AppUpdateManager.selectBestAsset(assets = assetsWithVivo, isUncompressed = false, sdkInt = 34)?.name,
         ).isEqualTo("LastWave-v4.2.4-universal.apk")
     }
+
+    @Test
+    fun isValidApkMagic_acceptsZipApkHeaderAndRejectsCorruptPayloads() {
+        assertThat(AppUpdateManager.isValidApkMagic(byteArrayOf(0x50, 0x4B, 0x03, 0x04))).isTrue()
+        assertThat(AppUpdateManager.isValidApkMagic(byteArrayOf(0x3C, 0x21, 0x44, 0x4F))).isFalse() // <!DO (HTML error)
+        assertThat(AppUpdateManager.isValidApkMagic(byteArrayOf(0x50, 0x4B))).isFalse()
+    }
+
+    @Test
+    fun normalizeReleaseApiUrl_handlesShorthandGithubWebAndFullApiUrls() {
+        assertThat(AppUpdateManager.normalizeReleaseApiUrl("")).isEmpty()
+        assertThat(AppUpdateManager.normalizeReleaseApiUrl("leothefleo49/MyOtherApp"))
+            .isEqualTo("https://api.github.com/repos/leothefleo49/MyOtherApp/releases/latest")
+        assertThat(AppUpdateManager.normalizeReleaseApiUrl("https://github.com/leothefleo49/MyOtherApp/releases"))
+            .isEqualTo("https://api.github.com/repos/leothefleo49/MyOtherApp/releases/latest")
+        assertThat(AppUpdateManager.normalizeReleaseApiUrl("https://api.github.com/repos/a/b/releases/latest"))
+            .isEqualTo("https://api.github.com/repos/a/b/releases/latest")
+        assertThat(AppUpdateManager.normalizeReleaseApiUrl("http://insecure.example/feed")).isEmpty()
+    }
+
+    @Test
+    fun shouldAutoCommitNow_defersSilentCommitWhilePlayingOrBuffering() {
+        assertThat(AppUpdateManager.shouldAutoCommitNow(silentBackground = true, isPlaying = true, isBuffering = false)).isFalse()
+        assertThat(AppUpdateManager.shouldAutoCommitNow(silentBackground = true, isPlaying = false, isBuffering = true)).isFalse()
+        assertThat(AppUpdateManager.shouldAutoCommitNow(silentBackground = true, isPlaying = false, isBuffering = false)).isTrue()
+        assertThat(AppUpdateManager.shouldAutoCommitNow(silentBackground = false, isPlaying = true, isBuffering = true)).isTrue()
+    }
+
+    @Test
+    fun isSelfOwnedInstallerResult_enforcesAndroid12AndAndroid14UpdateOwnershipRules() {
+        val pkg = "com.leothefleo49.onyxmusic"
+        // Pre-Android 12 never supports silent USER_ACTION_NOT_REQUIRED
+        assertThat(AppUpdateManager.isSelfOwnedInstallerResult(30, pkg, pkg, null)).isFalse()
+        // Android 12/13: installer of record == packageName
+        assertThat(AppUpdateManager.isSelfOwnedInstallerResult(31, pkg, pkg, null)).isTrue()
+        assertThat(AppUpdateManager.isSelfOwnedInstallerResult(33, pkg, "com.android.chrome", null)).isFalse()
+        // Android 14+: installer of record == packageName AND updateOwner is null or packageName
+        assertThat(AppUpdateManager.isSelfOwnedInstallerResult(34, pkg, pkg, pkg)).isTrue()
+        assertThat(AppUpdateManager.isSelfOwnedInstallerResult(34, pkg, pkg, null)).isTrue()
+        assertThat(AppUpdateManager.isSelfOwnedInstallerResult(35, pkg, pkg, "com.android.vending")).isFalse()
+        assertThat(AppUpdateManager.isSelfOwnedInstallerResult(35, pkg, "com.sec.android.app.myfiles", null)).isFalse()
+    }
 }

@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.2.8] - 2026-11-24
+
+### 🛠️ Fixed
+* **Fixed Headphone Playback Freeze at 0:00 (Bluetooth & Wired):**
+  * Removed off-looper `AudioSink.flush()` calls fired from `internalDirectOutput.availability` on route transitions (and 6 additional Main-thread `playerToSink[player]?.flush()` calls) that destroyed Media3's `DefaultAudioSink` `AudioTrack` behind `MediaCodecAudioRenderer`'s back and left playback stuck in Play mode at `0:00` with working headphone controls but zero audio or playhead movement.
+  * Replaced off-thread `sink.setPreferredDevice(...)` calls in `applyDacRoutingFor` with ExoPlayer's thread-safe `player.setPreferredAudioDevice(...)`, dispatched only when a USB DAC device ID actually changes so Bluetooth/wired headphone connections never churn audio routing.
+  * Fixed the render-stall watchdog blind spot where a frozen `0:00` playhead with `player.isPlaying == true` (or while `player.isLoading == true` pre-buffering ahead) was never rescued: added a 2.5s `FROZEN_PLAYHEAD_TIMEOUT_MS` guard with tiered recovery (clean ExoPlayer-owned seek reset, followed by automatic PCM16 compatibility sink & platform-decoder rebuild if a Bluetooth HAL silently stalls Float32 `AudioTrack`).
+
+### ✨ What's New
+* **True Zero-Tap Silent Full-APK Self-Updater (Android 12+):**
+  * Rebuilt `AppUpdateManager` with ETag (`If-None-Match`) zero-quota release checks on `MainShellActivity.onResume()` (15-min cooldown) and a 2-hour background check loop, verified staging downloads (Content-Length + ZIP/APK header check + stale session abandonment), and non-interrupting playback-aware installation (commits silently immediately when paused/idle, or automatically 2s after playback pauses).
+  * Fixed Android 10+ / Samsung One UI blocked confirmation dialogs by replacing background BroadcastReceiver `startActivity` with 3-layer delivery (direct foreground `Activity` launch via `AppVisibility.resumedActivity`, in-app dialog `"Confirm"` button, and high-priority notification fallback when backgrounded).
+  * Added **One-Tap Offline Silent Update Ownership Claim** (`Settings → About → Claim Silent Update Ownership`): streams Onyx's own already-installed APK (`applicationInfo.sourceDir`, 0 MB download) with `setRequestUpdateOwnership(true)` + `PACKAGE_SOURCE_STORE` + `USER_ACTION_NOT_REQUIRED` so confirming **one** prompt permanently transfers installer ownership from Chrome/Files to Onyx Music — every future GitHub release then installs 100% silently with zero taps.
+  * Added `PackageReplacedReceiver` (`ACTION_MY_PACKAGE_REPLACED`) for post-update cache cleanup, clean confirmation notification/toast, and foreground relaunch, plus an optional **Custom GitHub Release Feed** setting so Onyx can seamlessly auto-update into any signed APK published on your chosen repository.
+
 ## [1.2.7] - 2026-11-24
 
 ### 🛠️ Fixed

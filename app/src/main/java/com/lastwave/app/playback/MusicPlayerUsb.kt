@@ -379,9 +379,23 @@ internal fun MusicPlayer.applyDacRoutingFor(sourceRateHz: Int?, streamCodec: Str
         } else {
             null
         }
-        routedDacDeviceId = device?.id
+        val targetDevice = if (exclusive) null else device
+        val previousRoutedId = routedDacDeviceId
+        val nextRoutedId = targetDevice?.id
+        routedDacDeviceId = nextRoutedId
+        // Only dispatch preferred-device routing through ExoPlayer's thread-safe Main->playback
+        // message queue, and only when the USB DAC routing actually changed. Calling
+        // DefaultAudioSink.setPreferredDevice(null) directly from Main on every Bluetooth/wired
+        // route event races ExoPlayer's playback looper and can wedge AudioTrack at 0:00.
+        if (nextRoutedId != previousRoutedId && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (playerDelegate.isInitialized()) {
+                runCatching { player.setPreferredAudioDevice(targetDevice) }
+            }
+            secondaryPlayer?.let { standby ->
+                runCatching { standby.setPreferredAudioDevice(targetDevice) }
+            }
+        }
         audioSinks.forEach { sink ->
-            runCatching { sink.setPreferredDevice(if (exclusive) null else device) }
             runCatching { sink.setOutputSampleRateOverride(if (isSpatial) null else effectiveRateHz) }
             runCatching { sink.setExclusiveFallbackRateHz(fallbackHz, effectiveRateHz) }
         }

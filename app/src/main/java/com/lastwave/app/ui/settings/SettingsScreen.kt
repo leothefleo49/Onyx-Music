@@ -2739,15 +2739,33 @@ fun SettingsScreen(
                         appIcon = theme?.appIcon ?: AppIcon.DEFAULT,
                     )
 
-                    SettingsGroup(rowCount = 3) { index, position ->
+                    var showCustomFeedDialog by rememberSaveable { mutableStateOf(false) }
+                    var customFeedDraft by rememberSaveable(updateInfo.customReleaseApiUrl) {
+                        mutableStateOf(updateInfo.customReleaseApiUrl)
+                    }
+
+                    SettingsGroup(rowCount = 4) { index, position ->
                         when (index) {
                             0 -> SettingsActionCard(
                                 icon = Icons.Filled.CloudDownload,
-                                iconContainer = if (updateInfo.isUpdateAvailable) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                                iconTint = if (updateInfo.isUpdateAvailable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer,
-                                title = if (updateInfo.isUpdateAvailable) "Update Ready (${updateInfo.latestVersion})" else "Check for Updates",
+                                iconContainer = if (updateInfo.isUpdateAvailable || updateInfo.isStagedReady) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                },
+                                iconTint = if (updateInfo.isUpdateAvailable || updateInfo.isStagedReady) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                },
+                                title = when {
+                                    updateInfo.isStagedReady -> "Update Ready to Apply (${updateInfo.latestVersion})"
+                                    updateInfo.isUpdateAvailable -> "Update Ready (${updateInfo.latestVersion})"
+                                    else -> "Check for Updates"
+                                },
                                 subtitle = when {
                                     updateInfo.isChecking -> "Checking GitHub releases..."
+                                    updateInfo.isStagedReady -> "Downloaded & verified • installs automatically when paused, or tap to apply now"
                                     updateInfo.isUpdateAvailable -> {
                                         val fileName = updateInfo.downloadFileName
                                         if (!fileName.isNullOrBlank()) "Tap to install $fileName" else "Tap to install new version"
@@ -2756,10 +2774,10 @@ fun SettingsScreen(
                                     else -> "Current version: ${appVersionName(context)}"
                                 },
                                 onClick = {
-                                    if (updateInfo.isUpdateAvailable) {
-                                        viewModel.openUpdate(context)
-                                    } else {
-                                        viewModel.checkForUpdates()
+                                    when {
+                                        updateInfo.isStagedReady -> viewModel.applyStagedUpdate(context)
+                                        updateInfo.isUpdateAvailable -> viewModel.openUpdate(context)
+                                        else -> viewModel.checkForUpdates()
                                     }
                                 },
                                 position = position,
@@ -2769,9 +2787,9 @@ fun SettingsScreen(
                                 icon = Icons.Filled.AutoAwesome,
                                 iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                 iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                title = "Auto-install updates automatically",
+                                title = "Zero-tap silent auto-updates",
                                 subtitle = if (updateInfo.autoInstallUpdates) {
-                                    "On • Android 12+ applies updates silently after your first in-app update"
+                                    "On • Checks automatically & applies updates silently in the background"
                                 } else {
                                     "Off • Show the update dialog and wait for manual install"
                                 },
@@ -2779,6 +2797,58 @@ fun SettingsScreen(
                                 onCheckedChange = viewModel::setAutoInstallUpdates,
                                 position = position,
                             )
+                            2 -> {
+                                val zeroTapActive = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+                                    updateInfo.canInstallUnknownApps && updateInfo.isSelfOwnedInstaller
+                                val setupTitle = when {
+                                    zeroTapActive -> "Zero-Tap Auto-Updates Active"
+                                    android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S ->
+                                        "Custom Update Feed"
+                                    !updateInfo.canInstallUnknownApps ->
+                                        "Activate Zero-Tap Updates (Step 1 of 2)"
+                                    else ->
+                                        "Claim Silent Update Ownership (Step 2 of 2)"
+                                }
+                                val setupSubtitle = when {
+                                    zeroTapActive -> {
+                                        val feedNote = updateInfo.customReleaseApiUrl
+                                            .takeIf { it.isNotBlank() }
+                                            ?.let { " • Custom feed active" }
+                                            .orEmpty()
+                                        "Onyx owns its own updates — future releases install silently with zero taps$feedNote. Tap to edit feed."
+                                    }
+                                    android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S ->
+                                        "Android 12+ required for silent installs • Tap to configure custom GitHub release feed"
+                                    !updateInfo.canInstallUnknownApps ->
+                                        "Tap to allow Onyx Music to install unknown apps, then press Back"
+                                    else ->
+                                        "Instant 1-tap offline confirmation transfers update ownership from Chrome/Files to Onyx forever"
+                                }
+                                SettingsActionCard(
+                                    icon = if (zeroTapActive) Icons.Filled.Check else Icons.Filled.Bolt,
+                                    iconContainer = if (zeroTapActive) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.tertiaryContainer
+                                    },
+                                    iconTint = if (zeroTapActive) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onTertiaryContainer
+                                    },
+                                    title = setupTitle,
+                                    subtitle = setupSubtitle,
+                                    onClick = {
+                                        if (zeroTapActive || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) {
+                                            customFeedDraft = updateInfo.customReleaseApiUrl
+                                            showCustomFeedDialog = true
+                                        } else {
+                                            viewModel.claimSilentUpdateOwnership(context)
+                                        }
+                                    },
+                                    position = position,
+                                )
+                            }
                             else -> SettingsActionCard(
                                 icon = Icons.Filled.Code,
                                 iconContainer = MaterialTheme.colorScheme.secondaryContainer,
@@ -2795,6 +2865,47 @@ fun SettingsScreen(
                                 isHighlighted = (highlightedSettingId == "about.source_code" || highlightedSettingId == "about.desktop_app"),
                             )
                         }
+                    }
+
+                    if (showCustomFeedDialog) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { showCustomFeedDialog = false },
+                            title = { Text("Update Release Feed") },
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text(
+                                        "By default Onyx Music auto-updates from leothefleo49/Onyx-Music. Enter any GitHub repo (owner/repo or URL) signed with the same key to switch feeds, or leave blank to reset.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    OutlinedTextField(
+                                        value = customFeedDraft,
+                                        onValueChange = { customFeedDraft = it },
+                                        singleLine = true,
+                                        label = { Text("owner/repo or GitHub Releases API URL") },
+                                        placeholder = { Text("leothefleo49/Onyx-Music") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                            },
+                            confirmButton = {
+                                androidx.compose.material3.TextButton(
+                                    onClick = {
+                                        val saved = viewModel.setCustomReleaseFeed(customFeedDraft)
+                                        showCustomFeedDialog = false
+                                        viewModel.showToast(
+                                            if (saved.isBlank()) "Using default Onyx Music feed"
+                                            else "Feed saved & checking for updates…",
+                                        )
+                                    },
+                                ) { Text("Save") }
+                            },
+                            dismissButton = {
+                                androidx.compose.material3.TextButton(
+                                    onClick = { showCustomFeedDialog = false },
+                                ) { Text("Cancel") }
+                            },
+                        )
                     }
                 }
             }

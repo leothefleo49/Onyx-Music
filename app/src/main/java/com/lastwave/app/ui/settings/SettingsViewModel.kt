@@ -131,6 +131,9 @@ class SettingsViewModel @Inject constructor(
     fun checkForUpdates() = appUpdateManager.checkForUpdate(isSilent = false)
     fun openUpdate(context: android.content.Context) = appUpdateManager.openUpdate(context)
     fun setAutoInstallUpdates(enabled: Boolean) = appUpdateManager.setAutoInstallUpdates(enabled)
+    fun claimSilentUpdateOwnership(context: android.content.Context) = appUpdateManager.claimSilentUpdateOwnership(context)
+    fun applyStagedUpdate(context: android.content.Context) = appUpdateManager.applyStagedUpdateNow(context)
+    fun setCustomReleaseFeed(rawUrl: String): String = appUpdateManager.setCustomReleaseApiUrl(rawUrl)
     fun setAutoBestAudioOutput(enabled: Boolean) = launchSettingsAction("update auto-best output") {
         settingsPreferences.setAutoBestAudioOutput(enabled)
     }

@@ -1,5 +1,6 @@
 package com.lastwave.app.ui.update
 
+import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,11 +13,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -39,6 +38,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.lastwave.app.data.update.AppUpdateManager
 import com.lastwave.app.data.update.UpdateInfo
+import com.lastwave.app.ui.common.OnyxBrandLogo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.Instant
 import java.time.ZoneId
@@ -54,27 +54,33 @@ class AppUpdateDialogViewModel @Inject constructor(
 }
 
 /**
- * The in-app update dialog, as on desktop: opens by itself when a new release
- * is found on launch, and from Settings' "Update Ready". Update now opens
- * the APK download in the browser, as before. Hosted once at the app root.
+ * In-app update dialog hosted once at the app root. Handles one-tap download,
+ * staged silent updates, and foreground OS confirmation prompts.
  */
 @Composable
 fun AppUpdateDialogHost(viewModel: AppUpdateDialogViewModel = hiltViewModel()) {
     val info by viewModel.info.collectAsStateWithLifecycle()
-    if (!info.showDialog || !info.isUpdateAvailable) return
+    val shouldShow = info.showDialog && (info.isUpdateAvailable || info.hasPendingConfirmation || info.isStagedReady)
+    if (!shouldShow) return
     val context = LocalContext.current
     val manager = viewModel.manager
     AppUpdateDialog(
         info = info,
-        onUpdate = {
-            manager.downloadAndInstall(context)
+        onPrimaryAction = {
+            when {
+                info.hasPendingConfirmation -> manager.launchPendingConfirmation(context)
+                info.isStagedReady -> manager.applyStagedUpdateNow(context)
+                else -> manager.downloadAndInstall(context, silentBackground = false)
+            }
         },
         onToggleAutoInstall = { enabled ->
             manager.setAutoInstallUpdates(enabled)
         },
         onOpenGitHub = { manager.openReleasePage(context) },
         onClose = { skipThisVersion ->
-            if (skipThisVersion) manager.dismissUpdate(info.latestVersion)
+            if (skipThisVersion && info.latestVersion.isNotBlank()) {
+                manager.dismissUpdate(info.latestVersion)
+            }
             manager.hideDialog()
         },
     )
@@ -83,7 +89,7 @@ fun AppUpdateDialogHost(viewModel: AppUpdateDialogViewModel = hiltViewModel()) {
 @Composable
 private fun AppUpdateDialog(
     info: UpdateInfo,
-    onUpdate: () -> Unit,
+    onPrimaryAction: () -> Unit,
     onToggleAutoInstall: (Boolean) -> Unit,
     onOpenGitHub: () -> Unit,
     onClose: (skipThisVersion: Boolean) -> Unit,
@@ -99,19 +105,29 @@ private fun AppUpdateDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
-                // Phone width, or a comfortable dialog width on tablets.
                 .widthIn(max = 560.dp),
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    com.lastwave.app.ui.common.OnyxBrandLogo(size = 42.dp, shape = RoundedCornerShape(12.dp))
+                    OnyxBrandLogo(size = 42.dp, shape = RoundedCornerShape(12.dp))
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Update arrived", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = when {
+                                info.hasPendingConfirmation -> "Confirm one-time update"
+                                info.isStagedReady -> "Update ready to apply"
+                                else -> "Update arrived"
+                            },
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
                         Text(
                             buildString {
-                                append("v${info.latestVersion}")
-                                if (info.currentVersion.isNotBlank()) append("  •  you have v${info.currentVersion}")
+                                if (info.latestVersion.isNotBlank()) append("v${info.latestVersion}")
+                                if (info.currentVersion.isNotBlank()) {
+                                    if (isNotEmpty()) append("  •  ")
+                                    append("you have v${info.currentVersion}")
+                                }
                                 formatReleaseDate(info.publishedAt)?.let { append("  •  $it") }
                             },
                             style = MaterialTheme.typography.bodySmall,
@@ -119,27 +135,64 @@ private fun AppUpdateDialog(
                         )
                     }
                 }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val statusText = when {
+                        info.isSelfOwnedInstaller && info.canInstallUnknownApps ->
+                            "Zero-tap silent auto-updates active"
+                        !info.canInstallUnknownApps ->
+                            "Allow 'Install unknown apps' once to enable silent auto-updates"
+                        else ->
+                            "Confirm this update once so all future updates install silently"
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (info.isSelfOwnedInstaller && info.canInstallUnknownApps) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                        } else {
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (info.isSelfOwnedInstaller && info.canInstallUnknownApps) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+
                 if (info.releaseTitle.isNotBlank() && !info.releaseTitle.contains(info.latestVersion)) {
                     Text(info.releaseTitle, style = MaterialTheme.typography.titleSmall)
                 }
 
-                val linkColor = MaterialTheme.colorScheme.primary
-                val notes = remember(info.releaseNotes, linkColor) {
-                    releaseNotesText(info.releaseNotes.ifBlank { "No release notes were published for this version." }, linkColor)
-                }
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        notes,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .heightIn(max = 340.dp)
-                            .verticalScroll(rememberScrollState())
-                            .padding(16.dp),
-                    )
+                if (info.isUpdateAvailable) {
+                    val linkColor = MaterialTheme.colorScheme.primary
+                    val notes = remember(info.releaseNotes, linkColor) {
+                        releaseNotesText(
+                            info.releaseNotes.ifBlank { "No release notes were published for this version." },
+                            linkColor,
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            notes,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .heightIn(max = 300.dp)
+                                .verticalScroll(rememberScrollState())
+                                .padding(16.dp),
+                        )
+                    }
                 }
 
                 info.downloadFileName?.let { name ->
@@ -156,18 +209,20 @@ private fun AppUpdateDialog(
                         onCheckedChange = onToggleAutoInstall,
                     )
                     Text(
-                        "Auto-install updates silently in background (Android 12+)",
+                        "Auto-install future updates silently in background (Android 12+)",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = skipThisVersion, onCheckedChange = { skipThisVersion = it })
-                    Text("Don't show again for this version", style = MaterialTheme.typography.bodyMedium)
+                if (info.isUpdateAvailable && !info.hasPendingConfirmation) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = skipThisVersion, onCheckedChange = { skipThisVersion = it })
+                        Text("Don't show again for this version", style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
 
                 if (info.isInstalling) {
-                    androidx.compose.material3.LinearProgressIndicator(
+                    LinearProgressIndicator(
                         progress = { info.installProgress.coerceIn(0f, 1f) },
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -191,10 +246,18 @@ private fun AppUpdateDialog(
                     horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onOpenGitHub) { Text("GitHub") }
-                    TextButton(onClick = { onClose(skipThisVersion) }) { Text("Remind me later") }
-                    Button(onClick = onUpdate, enabled = !info.isInstalling) {
-                        Text(if (info.isInstalling) "Updating…" else "Update now")
+                    if (info.isUpdateAvailable) {
+                        TextButton(onClick = onOpenGitHub) { Text("GitHub") }
+                    }
+                    TextButton(onClick = { onClose(skipThisVersion) }) { Text("Later") }
+                    val primaryLabel = when {
+                        info.isInstalling -> "Updating…"
+                        info.hasPendingConfirmation -> "Confirm"
+                        info.isStagedReady -> "Apply now"
+                        else -> "Update now"
+                    }
+                    Button(onClick = onPrimaryAction, enabled = !info.isInstalling) {
+                        Text(primaryLabel)
                     }
                 }
             }

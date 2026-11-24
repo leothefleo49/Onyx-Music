@@ -73,8 +73,8 @@ class NativeProcessingAudioSink(
     // Read on the main thread for the signal-path verdict, written on the
     // renderer thread — volatile so bypass/stale reads never go stale.
     @Volatile private var processingActive = false
-    private var floatOutputDisabled = false
-    private var nativePathDisabled = false
+    @Volatile private var floatOutputDisabled = false
+    @Volatile private var nativePathDisabled = false
     private var playing = false
     @Volatile private var bitPerfectRequested = false
     // Generation tracking so the verdict can separate bitPerfectRequested
@@ -1235,6 +1235,18 @@ class NativeProcessingAudioSink(
      */
     fun retryInternalDirect() {
         internalStartFailed = false
+    }
+
+    /**
+     * Thread-safe fallback trigger invoked by the render watchdog when a route
+     * (e.g. Bluetooth A2DP HAL) silently stalls a Float32 AudioTrack at 0:00.
+     * Takes effect on the next ExoPlayer-owned configure/rebuild.
+     */
+    fun forcePcm16CompatibilityOutput(reason: String) {
+        if (!floatOutputDisabled) {
+            floatOutputDisabled = true
+            Log.w(TAG, "$reason; forcing PCM16 compatibility AudioTrack output")
+        }
     }
 
     /** MusicPlayer pushes "toggle on + route eligible + Bit-Perfect on" here. */

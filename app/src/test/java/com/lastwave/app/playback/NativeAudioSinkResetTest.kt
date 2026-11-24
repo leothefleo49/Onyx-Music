@@ -146,4 +146,32 @@ class NativeAudioSinkResetTest {
         assertEquals(1.0f, AudioFocusPolicy.sanitizedVolume(Float.POSITIVE_INFINITY, fallback = Float.NaN), 1e-6f)
         assertTrue(AudioFocusPolicy.duckedVolumeFor(Float.NaN) in 0.1f..0.5f)
     }
+
+    @Test
+    fun forcePcm16CompatibilityOutputRoutesSubsequentConfigureThroughFallbackSink() {
+        val enhanced = mockk<DefaultAudioSink>(relaxed = true)
+        val fallback = mockk<DefaultAudioSink>(relaxed = true)
+        val processor = mockk<NativePcmAudioProcessor>(relaxed = true)
+        every { processor.isAvailable } returns true
+        every { processor.outputSampleRateFor(any()) } returns 48_000
+        every { processor.configure(any()) } returns androidx.media3.common.audio.AudioProcessor.AudioFormat(
+            48_000,
+            2,
+            C.ENCODING_PCM_FLOAT,
+        )
+        every { enhanced.getFormatSupport(any()) } returns AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY
+        every { fallback.getFormatSupport(any()) } returns AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY
+
+        val sink = NativeProcessingAudioSink(
+            enhancedDelegate = enhanced,
+            fallbackDelegate = fallback,
+            processor = processor,
+            outputBufferSizing = OutputBufferSizing(),
+        )
+        sink.forcePcm16CompatibilityOutput("Frozen playhead on Bluetooth route")
+        sink.configure(pcmFormat(48_000, 2, C.ENCODING_PCM_16BIT), 0, null)
+
+        verify(exactly = 0) { enhanced.configure(any(), any(), any()) }
+        verify(exactly = 1) { fallback.configure(any(), any(), any()) }
+    }
 }

@@ -435,6 +435,9 @@ class MusicPlayer @Inject constructor(
     private var lastRenderPositionMs = -1L
     private var lastRenderBufferedMs = -1L
     private var renderStallSinceMs = 0L
+    /** Timestamp when an actively-playing (STATE_READY + isPlaying) playhead stopped advancing. */
+    private var frozenPlayheadSinceMs = 0L
+    private var lastFrozenPositionMs = -1L
     /** Same, for the inaudible-but-rendering branch + its position cursor. */
     private var inaudibleSinceMs = 0L
     private var lastAdvancingPositionMs = -1L
@@ -1497,7 +1500,9 @@ class MusicPlayer @Inject constructor(
             if (error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
                 error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
             ) {
-                runCatching { playerToSink[player]?.flush() }
+                // Never call AudioSink.flush() off ExoPlayer's playback looper — ExoPlayer
+                // flushes/rebuilds the sink safely during seekTo()/prepare()/release().
+                android.util.Log.w("MusicPlayer", "AudioTrack error ${error.errorCodeName}; deferring sink reset to ExoPlayer")
             }
 
             val isTransientIo = error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
@@ -1512,7 +1517,6 @@ class MusicPlayer @Inject constructor(
             ) {
                 errorRetryCount = 1
                 android.util.Log.i("MusicPlayer", "Transient network glitch for '${currentTrack?.title}', retrying same stream at ${currentPos}ms")
-                runCatching { playerToSink[player]?.flush() }
                 player.prepare()
                 player.seekTo(failedIndex, currentPos)
                 player.play()
@@ -1615,7 +1619,6 @@ class MusicPlayer @Inject constructor(
                                 logStreamEvent("player-retry", stream, retry = retry)
                                 cacheCurrentTrackStream(stream)
                                 learnQueueVideoId(failedIndex, updated, stream.youtubeCandidate?.videoId, stream.rematchedFromVideoId)
-                                runCatching { playerToSink[player]?.flush() }
                                 replaceMediaItemPreservingShuffle(failedIndex, updated.toMediaItem(stream))
                                 lastSeekTargetMs = currentPos
                                 lastSeekAtElapsedMs = SystemClock.elapsedRealtime()
@@ -1944,7 +1947,7 @@ class MusicPlayer @Inject constructor(
                 val fallbackSink = pcmSink(floatOutput = false)
                 val engine = runCatching(engineProvider).getOrNull()
                 val enhancedSink = try {
-                    pcmSink(floatOutput = true)
+                    pcmSink(floatOutput = !forcePlatformDecoderFallback)
                 } catch (error: Exception) {
                     android.util.Log.w("MusicPlayer", "Enhanced audio sink unavailable; using PCM16", error)
                     effects.setFallbackRequired(true)
@@ -2018,6 +2021,9 @@ class MusicPlayer @Inject constructor(
                     createdSink.setBitPerfectRequested(!isSpatial && bitPerfectEnabled)
                     createdSink.syncExclusiveUsb(handleAudioFocus && !isSpatial && exclusiveUsbWanted())
                     createdSink.syncInternalDirect(handleAudioFocus && !isSpatial && internalDirectWanted())
+                    if (forcePlatformDecoderFallback) {
+                        createdSink.forcePcm16CompatibilityOutput("Platform decoder fallback active")
+                    }
                     audioSinks.add(createdSink)
                     runCatching {
                         routedDacDeviceId?.let { id -> findOutputDevice(id)?.let(createdSink::setPreferredDevice) }
@@ -2912,26 +2918,37 @@ class MusicPlayer @Inject constructor(
         }
 
         applicationScope.launch {
-            // Route changes (jack, Bluetooth, USB): re-decide which path is wanted
-            // and flush audio sinks cleanly so no stale buffer plays into the new route.
+            // Route changes (jack, Bluetooth, USB): never call AudioSink.flush() off
+            // ExoPlayer's playback looper — doing so destroys DefaultAudioSink's AudioTrack
+            // behind MediaCodecAudioRenderer's back and freezes playback at 0:00 on
+            // headphone connect. Android natively reroutes mixed AudioTrack seamlessly;
+            // only active direct/exclusive bypass streams need an ExoPlayer-owned seek.
             var lastRoute: InternalRoute? = null
             internalDirectOutput.availability.collect { availability ->
-                if (availability.route == lastRoute) return@collect
+                val previousRoute = lastRoute
+                if (availability.route == previousRoute) return@collect
                 lastRoute = availability.route
-                val routeAction = AudioFocusPolicy.routeActionFor(AudioRouteEvent.DeviceConnected)
+                if (previousRoute == null) return@collect
                 audioSinks.forEach { sink ->
-                    runCatching {
-                        if (routeAction == AudioRouteAction.FlushAndReconfigureSink) sink.flush()
-                        sink.retryInternalDirect()
-                    }
+                    runCatching { sink.retryInternalDirect() }
                 }
                 onMain {
                     if (playerDelegate.isInitialized() && unduckedVolume == null) {
                         val safeVol = AudioFocusPolicy.sanitizedVolume(appVolume)
                         runCatching { player.volume = safeVol }
                     }
+                    val hadBypass = internalDirectOutput.isActive() || exclusiveUsbOutput.isActive()
                     applyDacRoutingFor(currentSourceRateHz())
                     updateSignalPath()
+                    if (hadBypass && playerDelegate.isInitialized() && player.playWhenReady &&
+                        player.currentMediaItemIndex in 0 until player.mediaItemCount
+                    ) {
+                        val posMs = runCatching { player.currentPosition.coerceAtLeast(0L) }.getOrDefault(0L)
+                        runCatching {
+                            player.seekTo(player.currentMediaItemIndex, posMs)
+                            player.play()
+                        }
+                    }
                 }
             }
         }
@@ -5890,6 +5907,8 @@ class MusicPlayer @Inject constructor(
     @MainThread
     internal fun resetRenderWatchdog() {
         renderStallSinceMs = 0L
+        frozenPlayheadSinceMs = 0L
+        lastFrozenPositionMs = -1L
         inaudibleSinceMs = 0L
         lastRenderPositionMs = -1L
         lastRenderBufferedMs = -1L
@@ -5950,6 +5969,8 @@ class MusicPlayer @Inject constructor(
         // here so the recovery call below type-checks.
         if (!windowOk || mediaId == null) {
             renderStallSinceMs = 0L
+            frozenPlayheadSinceMs = 0L
+            lastFrozenPositionMs = -1L
             inaudibleSinceMs = 0L
             return
         }
@@ -5960,6 +5981,8 @@ class MusicPlayer @Inject constructor(
         lastRenderBufferedMs = bufNow
         if (!player.isPlaying) {
             // Parked branch: only a fully frozen loader counts as stalled.
+            frozenPlayheadSinceMs = 0L
+            lastFrozenPositionMs = -1L
             inaudibleSinceMs = 0L
             if (progressed || player.isLoading) {
                 renderStallSinceMs = 0L
@@ -5971,21 +5994,37 @@ class MusicPlayer @Inject constructor(
             }
             if (nowMs - renderStallSinceMs < RENDER_STALL_TIMEOUT_MS) return
             renderStallSinceMs = 0L
-            recoverSilentAdvance(stalledWindow, mediaId)
+            recoverSilentAdvance(stalledWindow, mediaId, frozenPlayhead = false)
             return
         }
-        // Rendering branch: position must be advancing (else the parked
-        // branch above owns it) with no active music stream behind it.
+        // Rendering branch: player reports STATE_READY + playWhenReady + isPlaying=true.
         renderStallSinceMs = 0L
+        // Guard against a wedged AudioTrack / Bluetooth route where isPlaying is true
+        // but the audio clock never advances (e.g. stuck at 0:00 while buffered).
+        if (posNow == lastFrozenPositionMs) {
+            if (frozenPlayheadSinceMs == 0L) {
+                frozenPlayheadSinceMs = nowMs
+            } else if (nowMs - frozenPlayheadSinceMs >= FROZEN_PLAYHEAD_TIMEOUT_MS) {
+                frozenPlayheadSinceMs = 0L
+                recoverSilentAdvance(stalledWindow, mediaId, frozenPlayhead = true)
+                return
+            }
+        } else {
+            lastFrozenPositionMs = posNow
+            frozenPlayheadSinceMs = 0L
+        }
         // isMusicActive is a binder call; at the 60 ms full-player cadence it
         // was most of the main thread's playback work. 1 s is plenty for a 10 s timeout.
         if (nowMs - lastMusicActiveCheckMs < MUSIC_ACTIVE_CHECK_INTERVAL_MS) return
         lastMusicActiveCheckMs = nowMs
-        val directOutputBypass =exclusiveUsbOutput.isActive() || internalDirectOutput.isActive()
+        val directOutputBypass = exclusiveUsbOutput.isActive() || internalDirectOutput.isActive()
         val musicActive = directOutputBypass || runCatching { audioManager?.isMusicActive == true }.getOrDefault(true)
         if (posNow == lastAdvancingPositionMs || musicActive) {
             lastAdvancingPositionMs = posNow
-            if (musicActive) {
+            if (musicActive && posNow != lastFrozenPositionMs) {
+                silentRecoveries.remove(mediaId)
+                inaudibleSinceMs = 0L
+            } else if (musicActive && frozenPlayheadSinceMs == 0L) {
                 silentRecoveries.remove(mediaId)
                 inaudibleSinceMs = 0L
             }
@@ -5998,7 +6037,7 @@ class MusicPlayer @Inject constructor(
         }
         if (nowMs - inaudibleSinceMs < INAUDIBLE_TIMEOUT_MS) return
         inaudibleSinceMs = 0L
-        recoverSilentAdvance(stalledWindow, mediaId)
+        recoverSilentAdvance(stalledWindow, mediaId, frozenPlayhead = false)
     }
 
     /**
@@ -6011,11 +6050,14 @@ class MusicPlayer @Inject constructor(
      * silent is handed to the normal unavailable/skip path.
      */
     @MainThread
-    private fun recoverSilentAdvance(index: Int, mediaId: String) {
+    private fun recoverSilentAdvance(index: Int, mediaId: String, frozenPlayhead: Boolean = false) {
         if (isCasting) return
         if (!playerDelegate.isInitialized() || index !in 0 until player.mediaItemCount) return
         if (!isCurrentMediaMatch(player, _state.value.current) || !_state.value.isPlaying || _state.value.error != null) return
-        if (player.isLoading) {
+        // While ExoPlayer is already STATE_READY and pre-buffering up to minBufferMs,
+        // player.isLoading stays true; never let background pre-buffering block recovery
+        // of a playhead that is frozen while isPlaying == true.
+        if (player.isLoading && !frozenPlayhead) {
             renderStallSinceMs = 0L
             return
         }
@@ -6042,17 +6084,31 @@ class MusicPlayer @Inject constructor(
         val positionMs = player.currentPosition.coerceAtLeast(0L)
         android.util.Log.w(
             "MusicPlayer",
-            "Silent window '${_state.value.current?.title}' (attempt $attempt): " +
+            "Silent window '${_state.value.current?.title}' (attempt $attempt, frozenPlayhead=$frozenPlayhead): " +
                 "state=${player.playbackState} playWhenReady=${player.playWhenReady} " +
                 "pos=${positionMs}ms buf=${player.bufferedPosition}ms " +
                 "codec=${prepared?.audioCodec ?: "unknown"} " +
-                "resolved=$windowResolved -> ${if (windowResolved && attempt == 1) "renderer reset" else "provider fallback"}",
+                "resolved=$windowResolved -> ${if (windowResolved && attempt == 1) "renderer reset" else if (frozenPlayhead && windowResolved && attempt == 2) "pcm16 sink rebuild" else "provider fallback"}",
         )
         if (windowResolved && attempt == 1) {
             resetRenderWatchdog()
-            runCatching { player.seekTo(positionMs) }
+            runCatching { player.seekTo(index, positionMs) }
             if (player.playbackState == Player.STATE_IDLE) runCatching { player.prepare() }
             runCatching { player.play() }
+            return
+        }
+        if (frozenPlayhead && windowResolved && attempt == 2) {
+            // AudioTrack stayed wedged after a clean seek (e.g. Bluetooth A2DP HAL
+            // rejecting Float32 AudioTrack silently). Rebuild on conservative PCM16.
+            resetRenderWatchdog()
+            audioSinks.forEach { sink ->
+                runCatching { sink.forcePcm16CompatibilityOutput("Frozen playhead at ${positionMs}ms") }
+            }
+            rebuildPlayerWithPlatformDecoderFallback(
+                failedIndex = index,
+                resumePosMs = positionMs,
+                shouldPlay = true,
+            )
             return
         }
         resetRenderWatchdog()
@@ -6184,7 +6240,6 @@ class MusicPlayer @Inject constructor(
                         applyDacRoutingFor(dacRateFor(stream))
                         cacheCurrentTrackStream(stream)
                         logStreamEvent("playback-recovery", stream, retry = attempt)
-                        runCatching { playerToSink[player]?.flush() }
                         replaceMediaItemPreservingShuffle(failedIndex, updated.toMediaItem(stream))
                         lastSeekTargetMs = resumePositionMs
                         lastSeekAtElapsedMs = SystemClock.elapsedRealtime()
@@ -8498,7 +8553,6 @@ class MusicPlayer @Inject constructor(
                         switchOutcome = "aborted"
                         return@withContext
                     }
-                    runCatching { playerToSink[player]?.flush() }
                     replaceMediaItemPreservingShuffle(currentIndex, updatedMediaItem)
                     lastSeekTargetMs = swapTargetMs
                     lastSeekAtElapsedMs = SystemClock.elapsedRealtime()
@@ -9513,7 +9567,6 @@ class MusicPlayer @Inject constructor(
         val params = oldPlayer.playbackParameters
         val shuffleOrder = currentPlayOrder(oldPlayer)
 
-        runCatching { playerToSink[oldPlayer]?.flush() }
         forcePlatformDecoderFallback = true
 
         cancelCrossfade()
@@ -9936,15 +9989,18 @@ class MusicPlayer @Inject constructor(
          *  buffer and reset the clock. Well above normal hitches, far below
          *  a full silent track. */
         const val RENDER_STALL_TIMEOUT_MS = 8_000L
+        /** Playhead frozen while STATE_READY + isPlaying=true (e.g. wedged AudioTrack
+         *  after a Bluetooth/headphone route transition) triggers fast self-recovery. */
+        const val FROZEN_PLAYHEAD_TIMEOUT_MS = 2_500L
         /** Rendering with an advancing position yet no active music stream
          *  this long means gated output, not a startup gap (those last a
          *  second or two). User-muted-to-zero still counts as active, so
          *  this never fires on a deliberately silent phone. */
         const val INAUDIBLE_TIMEOUT_MS = 10_000L
         const val MUSIC_ACTIVE_CHECK_INTERVAL_MS = 1_000L
-        /** Renderer-reset, then re-resolve. Beyond that the error/unavailable
-         *  machinery owns the window â€” never loop recovery forever. */
-        const val MAX_SILENT_RECOVERIES = 2
+        /** Renderer-reset, then PCM16 sink rebuild (if playhead frozen), then re-resolve.
+         *  Beyond that the error/unavailable machinery owns the window — never loop forever. */
+        const val MAX_SILENT_RECOVERIES = 3
         const val PLAYBACK_RETRY_BASE_DELAY_MS = 350L
         const val PLAYBACK_RETRY_JITTER_MS = 250L
         const val NEXT_TRACK_PREFETCH_BYTES = 128L * 1024

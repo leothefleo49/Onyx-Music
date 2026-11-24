@@ -64,6 +64,9 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
     @Inject
     lateinit var musicPlayer: dagger.Lazy<com.lastwave.app.playback.MusicPlayer>
 
+    @Inject
+    lateinit var appUpdateManager: dagger.Lazy<com.lastwave.app.data.update.AppUpdateManager>
+
     private val audioPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
         if (isGranted) {
             lifecycleScope.launch(Dispatchers.IO) {
@@ -297,6 +300,7 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
     override fun onResume() {
         super.onResume()
         requestHighestSupportedRefreshRate()
+        runCatching { appUpdateManager.get().onAppForegrounded(this) }
     }
 
     /**

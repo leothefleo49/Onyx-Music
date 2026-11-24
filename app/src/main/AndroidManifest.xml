@@ -384,6 +384,14 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".data.update.PackageReplacedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Four widget designs; strip and library resize horizontally. -->
         <receiver
             android:name=".widget.wave.WaveStripWidgetProvider"
