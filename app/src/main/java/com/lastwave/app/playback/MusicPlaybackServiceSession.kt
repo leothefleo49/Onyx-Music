@@ -380,7 +380,7 @@ internal fun MusicPlaybackService.startDetector() {
         }
     }
 
-internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState) {
+internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState, force: Boolean = false) {
         val track = state.current
         // Transport-control target is cheap and must stay fresh every emission.
         val active = ActiveMediaSessionHolder.controller
@@ -390,14 +390,6 @@ internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState) {
             ActiveMediaSessionHolder.controller = ownController
         }
 
-        // setMetadata/setPlaybackState are binder IPC into system_server. The
-        // player state emits ~4x/second while playing; republishing on every
-        // emission meant ~240 binder transactions/minute for identical data —
-        // a constant main-thread tax that compounds into visible jank and
-        // "app stopped responding" spells. PlaybackState carries position +
-        // speed, so the system extrapolates between publishes; only actual
-        // changes (track, duration, play/buffer state, artwork, or a seek
-        // while paused) need to cross the binder.
         val playbackState = when {
             state.isBuffering -> PlaybackStateCompat.STATE_BUFFERING
             state.isPlaying -> PlaybackStateCompat.STATE_PLAYING
@@ -409,9 +401,14 @@ internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState) {
         // (session == null) so the fallback path keeps working.
         broadcastLegacyState(state)
         val session = mediaSession ?: return
+        if ((state.isPlaying || state.isBuffering) && !session.isActive) {
+            runCatching { session.isActive = true }
+        }
         updateMediaSessionVolumeRouting(state.isCasting, state.appVolume)
         publishSessionQueue(session, state)
         val isLiked = track != null && trackLikeController.isLiked(track)
+        val rawArt = artworkBitmap?.takeIf { !it.isRecycled }
+        val artContentUriStr = artworkContentUri?.toString().orEmpty()
         val signature = buildString {
             append(track?.title).append('|')
             append(track?.artist).append('|')
@@ -423,15 +420,35 @@ internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState) {
             append(state.isCasting).append('|')
             append(state.appVolume).append('|')
             append(artworkUrl).append('|')
-            append(artworkBitmap != null).append('|')
+            append(System.identityHashCode(rawArt)).append('|')
+            append(artContentUriStr).append('|')
             append(isLiked)
             if (!state.isPlaying) append("|pos=").append(state.positionMs)
         }
-        if (signature == systemStateSignature) return
-        systemStateSignature = signature
+        if (!force && signature == systemStateSignature) return
 
-        val artUri = artworkUrl ?: track?.artworkUrl.orEmpty()
-        runCatching {
+        // Build a compact, immutable 320px bitmap for MediaSession metadata so
+        // Bluetooth AVRCP (Tesla / car head units) receives cover art reliably
+        // without risking TransactionTooLargeException across Binder IPC.
+        val sessionArt: Bitmap? = rawArt?.let { src ->
+            val limit = sessionArtworkLimitPx.coerceAtMost(320)
+            val scaled = if (src.width > limit || src.height > limit) {
+                val scale = limit.toFloat() / maxOf(src.width, src.height)
+                Bitmap.createScaledBitmap(
+                    src,
+                    (src.width * scale).toInt().coerceAtLeast(1),
+                    (src.height * scale).toInt().coerceAtLeast(1),
+                    true,
+                )
+            } else src
+            if (scaled.isMutable) {
+                runCatching { scaled.copy(scaled.config ?: Bitmap.Config.ARGB_8888, false) }.getOrDefault(scaled)
+            } else scaled
+        }
+
+        // Isolate setMetadata and setPlaybackState into separate runCatching blocks
+        // so an OEM artwork IPC hiccup NEVER drops playback state / control sync.
+        val metadataOk = runCatching {
             session.setMetadata(
                 MediaMetadataCompat.Builder()
                     // Unique per track: the OriginOS music card ignores a new
@@ -442,14 +459,17 @@ internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState) {
                     )
                     .putString(MediaMetadataCompat.METADATA_KEY_TITLE, track?.title.orEmpty())
                     .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track?.artist.orEmpty())
+                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, track?.artist.orEmpty())
                     .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track?.album.orEmpty())
                     .apply {
-                        // Same artwork keys Media3 (and SimpMusic) publish: the
-                        // cover URL in the three URI keys, only when there is one.
-                        if (artUri.isNotBlank()) {
-                            putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, artUri)
-                            putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, artUri)
-                            putString(MediaMetadataCompat.METADATA_KEY_ART_URI, artUri)
+                        // Publish ONLY a real FileProvider content:// URI (granted to
+                        // Bluetooth / SystemUI / Android Auto) in *_URI keys so AVRCP
+                        // BIP (Tesla) can fetch it directly; never emit raw https://
+                        // URLs that Bluetooth rejects and uses to hide the embedded art.
+                        if (artContentUriStr.isNotBlank()) {
+                            putString(MediaMetadataCompat.METADATA_KEY_ART_URI, artContentUriStr)
+                            putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, artContentUriStr)
+                            putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, artContentUriStr)
                         }
                     }
                     .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, state.durationMs)
@@ -460,33 +480,30 @@ internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState) {
                         OriginOsMusicCard.loopModeOf(state.shuffleEnabled, state.repeatMode).toLong(),
                     )
                     .apply {
-                        // Media3 / SimpMusic style: one bitmap in DISPLAY_ICON and
-                        // ALBUM_ART, capped at the platform's own metadata artwork
-                        // limit so MediaSession never rescales (or recycles) it.
-                        val rawArt = artworkBitmap?.takeIf { !it.isRecycled }
-                        val limit = sessionArtworkLimitPx
-                        val art = if (rawArt != null && (rawArt.width > limit || rawArt.height > limit)) {
-                            val scale = limit.toFloat() / maxOf(rawArt.width, rawArt.height)
-                            Bitmap.createScaledBitmap(
-                                rawArt,
-                                (rawArt.width * scale).toInt().coerceAtLeast(1),
-                                (rawArt.height * scale).toInt().coerceAtLeast(1),
-                                true,
-                            )
-                        } else rawArt
-                        if (art != null) {
-                            putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, art)
-                            putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
+                        if (sessionArt != null) {
+                            // METADATA_KEY_ART is checked FIRST by Android Bluetooth AVRCP;
+                            // ALBUM_ART and DISPLAY_ICON cover car displays and SystemUI.
+                            putBitmap(MediaMetadataCompat.METADATA_KEY_ART, sessionArt)
+                            putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, sessionArt)
+                            putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, sessionArt)
                         }
                     }
                     .build(),
             )
+            true
+        }.onFailure { error ->
+            android.util.Log.w("MusicPlaybackService", "Media session metadata publish failed", error)
+        }.getOrDefault(false)
+
+        val playbackSpeed = if (playbackState == PlaybackStateCompat.STATE_PLAYING) state.speed else 0f
+        val stateOk = runCatching {
             session.setPlaybackState(
                 PlaybackStateCompat.Builder()
                     .setActions(
                         PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
                             PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_SEEK_TO or
                             PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                            PlaybackStateCompat.ACTION_FAST_FORWARD or PlaybackStateCompat.ACTION_REWIND or
                             PlaybackStateCompat.ACTION_SKIP_TO_QUEUE_ITEM or PlaybackStateCompat.ACTION_STOP or
                             PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID or PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH or
                             PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE or PlaybackStateCompat.ACTION_SET_REPEAT_MODE or
@@ -504,7 +521,7 @@ internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState) {
                     }
                     .setActiveQueueItemId(state.currentIndex.toLong())
                     .setBufferedPosition(state.bufferedPositionMs)
-                    .setState(playbackState, state.positionMs, if (state.isPlaying) state.speed else 0f)
+                    .setState(playbackState, state.positionMs, playbackSpeed)
                     .build(),
             )
             session.setShuffleMode(
@@ -518,10 +535,15 @@ internal fun MusicPlaybackService.publishSystemState(state: MusicPlayerState) {
                     else -> PlaybackStateCompat.REPEAT_MODE_NONE
                 },
             )
+            true
         }.onFailure { error ->
-            // Binder IPC into a broken OEM media stack must not kill the
-            // state collector that also drives notifications and widget.
-            android.util.Log.w("MusicPlaybackService", "Media session publish failed", error)
+            android.util.Log.w("MusicPlaybackService", "Media session playback state publish failed", error)
+        }.getOrDefault(false)
+
+        // Only advance the dedup signature when both IPC calls succeeded so a
+        // transient binder failure retries cleanly on the next tick.
+        if (metadataOk && stateOk) {
+            systemStateSignature = signature
         }
     }
 
@@ -647,6 +669,7 @@ internal fun MusicPlaybackService.detectWaveSeek(state: MusicPlayerState) {
             val expectedAdvanceMs = (elapsedMs * previous.speed.coerceAtLeast(0f)).toLong()
             val actualAdvanceMs = state.positionMs - previous.positionMs
             if (abs(actualAdvanceMs - expectedAdvanceMs) >= WAVE_SEEK_DISCONTINUITY_MS) {
+                publishSystemState(state, force = true)
                 publishWaveWidget(state, force = true)
             }
         }

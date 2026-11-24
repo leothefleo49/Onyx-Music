@@ -55,6 +55,46 @@ object AudioSignature {
     fun toDataUri(pcm: ShortArray): String =
         "data:audio/vnd.shazam.sig;base64," + Base64.encodeToString(encode(pcm), Base64.NO_WRAP)
 
+    /**
+     * Conditions live microphone PCM before fingerprinting:
+     * 1) 150 Hz 1st-order high-pass filter strips car engine/road/HVAC sub-bass rumble.
+     * 2) Adaptive RMS auto-gain brings quiet or overly hot speaker recordings into
+     *    Shazam's optimal dynamic range without clipping.
+     */
+    fun conditionLivePcm(pcm: ShortArray): ShortArray {
+        if (pcm.size < FRAME) return pcm
+        val filtered = DoubleArray(pcm.size)
+        // RC high-pass at ~150 Hz for 16 kHz sample rate: alpha = 1 / (1 + 2*pi*150/16000) ~= 0.944
+        val alpha = 0.944
+        var prevX = 0.0
+        var prevY = 0.0
+        var sumSq = 0.0
+        for (i in pcm.indices) {
+            val x = pcm[i].toDouble()
+            val y = alpha * (prevY + x - prevX)
+            prevX = x
+            prevY = y
+            filtered[i] = y
+            sumSq += y * y
+        }
+        val rms = kotlin.math.sqrt(sumSq / pcm.size)
+        val targetRms = 6500.0 // ~0.20 full-scale — ideal for spectral peak SNR
+        val gain = if (rms > 25.0) (targetRms / rms).coerceIn(0.35, 18.0) else 1.0
+        val out = ShortArray(pcm.size)
+        for (i in filtered.indices) {
+            val scaled = (filtered[i] * gain).toInt()
+            out[i] = scaled.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
+        return out
+    }
+
+    /**
+     * Convenience wrapper that conditions live mic audio (HPF + auto-gain) and
+     * encodes a Shazam signature URI for progressive probes.
+     */
+    fun toConditionedDataUri(pcm16k: ShortArray): String =
+        toDataUri(conditionLivePcm(pcm16k))
+
     /** Serialised bytes; separate from Base64 so unit tests can inspect them. */
     internal fun encode(pcm: ShortArray): ByteArray {
         require(pcm.size >= FRAME) { "need at least $FRAME samples" }

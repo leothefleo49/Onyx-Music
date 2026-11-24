@@ -301,8 +301,8 @@ class ChunkedRangeDataSource(
     companion object {
         const val DEFAULT_CHUNK_SIZE = 512 * 1024L
         const val MAX_CHUNK_SIZE = 512 * 1024L
-        const val DEFAULT_MAX_CHUNK_DURATION_MS = 15_000L
-        private const val MAX_REFRESHES_PER_OPEN = 3
+        const val DEFAULT_MAX_CHUNK_DURATION_MS = 8_000L
+        private const val MAX_REFRESHES_PER_OPEN = 1
 
         private val CONTENT_RANGE_TOTAL = Regex("""/\s*(\d+)\s*$""")
 

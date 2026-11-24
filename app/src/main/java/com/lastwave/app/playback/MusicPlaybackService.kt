@@ -190,17 +190,20 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
     internal var originLyricsMediaId: String? = null
     internal var artworkUrl: String? = null
     internal var artworkBitmap: Bitmap? = null
+    internal var artworkContentUri: android.net.Uri? = null
+    internal var activeAppIcon: com.lastwave.app.data.local.AppIcon = com.lastwave.app.data.local.AppIcon.DEFAULT
     /**
-     * The platform's `config_mediaMetadataBitmapMaxSize` (320dp in AOSP),
-     * resolved against this app's resources exactly as MediaSession does, so
-     * session artwork is never larger than what the framework accepts as-is.
+     * Capped at 320px (<= 400KB ARGB_8888) so MediaMetadataCompat IPC into
+     * system_server and Bluetooth AVRCP (e.g. Tesla) never triggers
+     * TransactionTooLargeException when multiple bitmap keys are populated.
      */
     internal val sessionArtworkLimitPx: Int by lazy {
-        runCatching {
+        val platformLimit = runCatching {
             val id = resources.getIdentifier("config_mediaMetadataBitmapMaxSize", "dimen", "android")
             if (id != 0) resources.getDimensionPixelSize(id) else 0
         }.getOrDefault(0).takeIf { it > 0 }
             ?: (320 * resources.displayMetrics.density).toInt()
+        minOf(platformLimit, 320)
     }
     internal var notificationSignature = ""
     internal var widgetSignature = ""
@@ -237,18 +240,68 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
 
         createNotificationChannel()
         runCatching {
-            val session = MediaSessionCompat(this, "LastWavePlayer").apply {
+            val mbrComponent = android.content.ComponentName(
+                this,
+                androidx.media.session.MediaButtonReceiver::class.java,
+            )
+            val mbrIntent = Intent(Intent.ACTION_MEDIA_BUTTON).setComponent(mbrComponent)
+            val mbrFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+            val mbrPendingIntent = PendingIntent.getBroadcast(this, 0, mbrIntent, mbrFlags)
+            val session = MediaSessionCompat(this, "OnyxMusicPlayer", mbrComponent, mbrPendingIntent).apply {
                 setFlags(
                     MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
                         MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS,
                 )
+                setMediaButtonReceiver(mbrPendingIntent)
                 setPlaybackToLocal(android.media.AudioManager.STREAM_MUSIC)
                 setCallback(object : MediaSessionCompat.Callback() {
-                    override fun onPlay() = musicPlayer.resume()
+                    override fun onPlay() {
+                        if (musicPlayer.state.value.current == null) {
+                            runCatching { musicPlayer.restoreSessionIfNeeded() }
+                        }
+                        runCatching { this@apply.isActive = true }
+                        musicPlayer.resume()
+                    }
                     override fun onPause() = musicPlayer.pause()
                     override fun onSkipToNext() = musicPlayer.next()
                     override fun onSkipToPrevious() = musicPlayer.previous()
                     override fun onSeekTo(pos: Long) = musicPlayer.seekTo(pos)
+                    override fun onFastForward() {
+                        val st = musicPlayer.state.value
+                        val dur = st.durationMs.takeIf { it > 0L } ?: Long.MAX_VALUE
+                        musicPlayer.seekTo((st.positionMs + 10_000L).coerceAtMost(dur))
+                    }
+                    override fun onRewind() {
+                        val st = musicPlayer.state.value
+                        musicPlayer.seekTo((st.positionMs - 10_000L).coerceAtLeast(0L))
+                    }
+                    override fun onMediaButtonEvent(mediaButtonEvent: Intent?): Boolean {
+                        val keyEvent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            mediaButtonEvent?.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            mediaButtonEvent?.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+                        }
+                        if (keyEvent != null && keyEvent.action == KeyEvent.ACTION_DOWN && keyEvent.repeatCount == 0) {
+                            when (keyEvent.keyCode) {
+                                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                                KeyEvent.KEYCODE_HEADSETHOOK -> {
+                                    val st = musicPlayer.state.value
+                                    if (st.isPlaying || st.isBuffering) onPause() else onPlay()
+                                    return true
+                                }
+                                KeyEvent.KEYCODE_MEDIA_PLAY -> { onPlay(); return true }
+                                KeyEvent.KEYCODE_MEDIA_PAUSE -> { onPause(); return true }
+                                KeyEvent.KEYCODE_MEDIA_NEXT -> { onSkipToNext(); return true }
+                                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { onSkipToPrevious(); return true }
+                                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { onFastForward(); return true }
+                                KeyEvent.KEYCODE_MEDIA_REWIND -> { onRewind(); return true }
+                                KeyEvent.KEYCODE_MEDIA_STOP -> { onStop(); return true }
+                            }
+                        }
+                        return super.onMediaButtonEvent(mediaButtonEvent)
+                    }
                     // A stop from an external controller (Bluetooth/car unit,
                     // OEM media card, system UI) ends playback but must not
                     // destroy the session. Wiping the queue, the persisted
@@ -327,6 +380,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
             ActiveMediaSessionHolder.ownToken = null
         }
         notificationPalette = NotificationPalette.from(themeRepository.uiState.value.colorScheme)
+        activeAppIcon = themeRepository.uiState.value.appIcon
         scope.launch {
             wavePlaylistShortcuts = loadWavePlaylistShortcuts()
             publishWaveWidget(musicPlayer.state.value, force = true)
@@ -335,11 +389,13 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
         scope.launch {
             themeRepository.uiState.collectLatest { theme ->
                 val newPalette = NotificationPalette.from(theme.colorScheme)
-                // Only force a notification rebuild when the palette actually
-                // changed — unrelated DataStore settings also flow through this
-                // state and used to trigger pointless RemoteViews rebuilds.
-                if (newPalette != notificationPalette) {
+                val iconChanged = theme.appIcon != activeAppIcon
+                // Only force a notification rebuild when the palette or chosen app
+                // logo actually changed — unrelated DataStore settings also flow
+                // through this state and used to trigger pointless rebuilds.
+                if (newPalette != notificationPalette || iconChanged) {
                     notificationPalette = newPalette
+                    activeAppIcon = theme.appIcon
                     notificationSignature = ""
                     publishNotification(musicPlayer.state.value, force = true)
                 }

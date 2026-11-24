@@ -55,6 +55,7 @@ class FeedPlaylistDetailViewModel @Inject constructor(
     private val playlistRepository: PlaylistRepository,
     private val feedRepository: FeedRepository,
     private val spotifyPlaylistImporter: SpotifyPlaylistImporter,
+    private val downloadManager: com.lastwave.app.data.download.TrackDownloadManager,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow<FeedPlaylistDetailUiState>(FeedPlaylistDetailUiState.Loading)
     val uiState: StateFlow<FeedPlaylistDetailUiState> = _uiState.asStateFlow()
@@ -305,6 +306,23 @@ class FeedPlaylistDetailViewModel @Inject constructor(
     fun shuffle() {
         val playlist = (_uiState.value as? FeedPlaylistDetailUiState.Success)?.playlist ?: return
         shuffleTracks(playlist.tracks)
+    }
+
+    fun downloadAll(tracks: List<YouTubeMusicTrack>): Int {
+        val playlist = (_uiState.value as? FeedPlaylistDetailUiState.Success)?.playlist
+        var count = 0
+        tracks.forEach { t ->
+            downloadManager.downloadTrack(
+                title = t.title,
+                artist = t.artist,
+                album = t.album ?: playlist?.title,
+                artworkUrl = t.artworkUrl,
+                videoId = t.videoId.takeIf { it.isNotBlank() },
+                durationMs = t.durationSeconds?.takeIf { it > 0 }?.times(1_000L),
+            )
+            count++
+        }
+        return count
     }
 
     private fun GeneratedTrack.toYouTubeMusicTrack(): YouTubeMusicTrack = YouTubeMusicTrack(

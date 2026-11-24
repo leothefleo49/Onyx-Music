@@ -301,12 +301,19 @@ fun FriendsScreen(
                                     },
                                     onStartJam = { showJamSheet = true },
                                     onShareTrack = {
-                                        val track = state.currentTrackLabel ?: return@OnyxFriendCard
-                                        friendsViewModel.recordSharedTrack(friend.id, track)
-                                        shareText(
-                                            "Listen with me on Onyx Music",
-                                            "Hey ${friend.displayName}, check out $track on Onyx Music!",
-                                        )
+                                        val label = state.currentTrackLabel ?: return@OnyxFriendCard
+                                        friendsViewModel.recordSharedTrack(friend.id, label)
+                                        val playing = state.currentTrack
+                                        val realUrl = playing?.let {
+                                            com.lastwave.app.util.ShareHelper.verifiedTrackUrlOrNull(it.videoId, it.playbackUrl)
+                                                ?: com.lastwave.app.util.ShareHelper.fallbackSearchUrl(it.title, it.artist)
+                                        }
+                                        val msg = if (realUrl != null) {
+                                            "Hey ${friend.displayName}, listen to $label:\n$realUrl"
+                                        } else {
+                                            "Hey ${friend.displayName}, listen to $label!"
+                                        }
+                                        shareText(label, msg)
                                     },
                                     onTogglePin = { friendsViewModel.togglePinned(friend.id) },
                                     onRemove = { friendsViewModel.removeFriend(friend.id) },

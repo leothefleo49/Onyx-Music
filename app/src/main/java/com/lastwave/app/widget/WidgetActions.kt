@@ -60,8 +60,14 @@ object WidgetActions {
         PendingIntent.getActivity(
             context,
             REQ_OPEN_APP,
-            Intent(context, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            Intent(context, com.lastwave.app.MainShellActivity::class.java)
+                .setAction(com.lastwave.app.widget.wave.WaveWidgetNavigation.ACTION_OPEN_NOW_PLAYING)
+                .putExtra("open_player", true)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                ),
             flags(),
         )
 

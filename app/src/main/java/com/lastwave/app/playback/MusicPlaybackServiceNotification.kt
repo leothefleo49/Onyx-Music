@@ -165,22 +165,27 @@ internal fun MusicPlaybackService.requestArtwork(track: PlayableTrack?) {
         artworkRequestKey = requestKey
 
         // Track has changed: immediately clear previous track's artwork
-        // so the notification bar never displays the old song's cover art
+        // so the notification bar and Bluetooth head units never display stale cover art
         artworkBitmap = null
         artworkUrl = null
+        artworkContentUri = null
         artworkJob?.cancel()
 
         val key = com.lastwave.app.data.artwork.ArtworkNormalizer.cacheKey(track.title, track.artist)
         val cached = artworkRepository.resolved.value[key]?.takeIf(String::isNotBlank)
         if (cached != null) {
-            fetchArtwork(cached)
+            fetchArtwork(cached, fallbackUrl = track.artworkUrl?.takeIf { it != cached })
             return
         }
 
-        // Show immediate upscaled placeholder while high-res artwork resolves
-        val placeholder = com.lastwave.app.data.artwork.ArtworkNormalizer.upscaleYoutubeArtwork(track.artworkUrl)?.takeIf(String::isNotBlank)
+        // Show immediate upscaled placeholder while high-res artwork resolves,
+        // falling back to the raw track artworkUrl if maxresdefault.jpg 404s.
+        val rawFallback = track.artworkUrl?.takeIf(String::isNotBlank)
+        val placeholder = com.lastwave.app.data.artwork.ArtworkNormalizer.upscaleYoutubeArtwork(rawFallback)?.takeIf(String::isNotBlank)
         if (placeholder != null) {
-            fetchArtwork(placeholder)
+            fetchArtwork(placeholder, fallbackUrl = rawFallback?.takeIf { it != placeholder })
+        } else if (rawFallback != null) {
+            fetchArtwork(rawFallback)
         }
 
         // Resolve high-resolution master artwork after this track is audible.
@@ -216,7 +221,7 @@ internal fun MusicPlaybackService.requestArtwork(track: PlayableTrack?) {
         }
     }
 
-internal fun MusicPlaybackService.fetchArtwork(url: String) {
+internal fun MusicPlaybackService.fetchArtwork(url: String, fallbackUrl: String? = null) {
         val cleanUrl = url.trim()
         if (cleanUrl.isBlank()) return
         if (cleanUrl == artworkUrl && artworkBitmap != null) return
@@ -236,19 +241,27 @@ internal fun MusicPlaybackService.fetchArtwork(url: String) {
 
         artworkJob = scope.launch {
             val expectedUrl = cleanUrl
-            val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                imageLoader.execute(
-                    ImageRequest.Builder(this@fetchArtwork)
-                        .data(expectedUrl)
-                        .size(512)
-                        .allowHardware(false)
-                        .build(),
-                )
+            val decoded = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                suspend fun loadUrl(target: String): Bitmap? {
+                    val res = imageLoader.execute(
+                        ImageRequest.Builder(this@fetchArtwork)
+                            .data(target)
+                            .size(512)
+                            .allowHardware(false)
+                            .build(),
+                    )
+                    return (res as? SuccessResult)?.drawable?.toBitmap()
+                }
+                val primary = loadUrl(expectedUrl)
+                val bmp = primary ?: fallbackUrl?.trim()?.takeIf { it.isNotBlank() && it != expectedUrl }?.let { loadUrl(it) }
+                val contentUri = bmp?.let { publishArtworkContentUri(it, expectedUrl) }
+                bmp to contentUri
             }
             if (expectedUrl != artworkUrl) return@launch
-            artworkBitmap = (result as? SuccessResult)?.drawable?.toBitmap()
+            artworkBitmap = decoded.first
+            artworkContentUri = decoded.second
             val state = musicPlayer.state.value
-            publishSystemState(state)
+            publishSystemState(state, force = true)
             publishNotification(state, force = true)
             widgetSignature = ""
             publishWidget(state)
@@ -256,19 +269,63 @@ internal fun MusicPlaybackService.fetchArtwork(url: String) {
         }
     }
 
+/**
+ * Writes a compact 320px JPEG copy into cache/shared/ and exposes it via
+ * FileProvider with explicit read grants to Android Bluetooth AVRCP BIP
+ * (e.g. Tesla / car head units), SystemUI, and Android Auto.
+ */
+private fun MusicPlaybackService.publishArtworkContentUri(bitmap: Bitmap, key: String): android.net.Uri? = runCatching {
+    val dir = java.io.File(cacheDir, "shared").apply { mkdirs() }
+    val tag = key.hashCode().toUInt().toString(16)
+    val outFile = java.io.File(dir, "media_art_$tag.jpg")
+    if (!outFile.exists() || outFile.length() == 0L) {
+        val scaled = if (bitmap.width > 320 || bitmap.height > 320) {
+            val scale = 320f / maxOf(bitmap.width, bitmap.height)
+            Bitmap.createScaledBitmap(
+                bitmap,
+                (bitmap.width * scale).toInt().coerceAtLeast(1),
+                (bitmap.height * scale).toInt().coerceAtLeast(1),
+                true,
+            )
+        } else bitmap
+        java.io.FileOutputStream(outFile).use { fos ->
+            scaled.compress(Bitmap.CompressFormat.JPEG, 88, fos)
+        }
+        // Keep cache bounded to the latest 6 cover art files
+        dir.listFiles { f -> f.name.startsWith("media_art_") && f.name.endsWith(".jpg") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(6)
+            ?.forEach { runCatching { it.delete() } }
+    }
+    val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.provider", outFile)
+    val grantees = listOf(
+        "com.android.bluetooth",
+        "com.google.android.bluetooth",
+        "com.android.systemui",
+        "com.google.android.projection.gearhead",
+        "com.android.car.media",
+    )
+    for (pkg in grantees) {
+        runCatching { grantUriPermission(pkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+    }
+    uri
+}.getOrNull()
+
 
 internal fun MusicPlaybackService.openAppPendingIntent(): PendingIntent = PendingIntent.getActivity(
         this,
-        0,
-        // ColorOS opens the activity from the MediaSession's sessionActivity
-        // when the user taps the artwork in its expanded control-center
-        // player. Target the declared activity directly instead of the
-        // launcher alias, and explicitly bring the app task to the foreground.
-        Intent(this, MainShellActivity::class.java).addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP,
-        ),
+        4102,
+        // Samsung One UI / Android 13+ media card / ColorOS open this activity
+        // when the user taps the media player popup. Include ACTION_OPEN_NOW_PLAYING
+        // so MainShellActivity immediately expands the FullPlayer sheet.
+        Intent(this, MainShellActivity::class.java)
+            .setAction(com.lastwave.app.widget.wave.WaveWidgetNavigation.ACTION_OPEN_NOW_PLAYING)
+            .putExtra("open_player", true)
+            .addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
+            ),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -313,6 +370,21 @@ internal fun MusicPlaybackService.buildNotification(state: MusicPlayerState, art
             @Suppress("DEPRECATION") Notification.Builder(this)
         }
 
+        val notificationAccentColor = when (activeAppIcon) {
+            com.lastwave.app.data.local.AppIcon.BLACK -> 0xFF141418.toInt()
+            com.lastwave.app.data.local.AppIcon.WHITE -> 0xFF22242C.toInt()
+            else -> notificationPalette.primary
+        }
+        val effectiveLargeIcon = scaledBitmap(art, 384) ?: runCatching {
+            com.lastwave.app.ui.common.renderOnyxLogoBitmap(
+                context = this,
+                appIcon = activeAppIcon,
+                primaryArgb = notificationAccentColor,
+                onPrimaryArgb = 0xFFFFFFFF.toInt(),
+                sizePx = 192,
+            )
+        }.getOrNull()
+
         // System-rendered MediaStyle path. Used on Android 13+ (SystemUI /
         // Samsung One UI host the player natively and reject custom
         // RemoteViews) and on Chinese-OEM skins (Vivo/OriginOS, OPPO/ColorOS,
@@ -336,12 +408,12 @@ internal fun MusicPlaybackService.buildNotification(state: MusicPlayerState, art
                 .setContentText(state.current?.artist ?: "Music player")
                 .setSubText(state.current?.album)
                 .setContentIntent(openAppPendingIntent())
-                .setLargeIcon(scaledBitmap(art, 384))
+                .setLargeIcon(effectiveLargeIcon)
                 .setOnlyAlertOnce(true)
                 .setOngoing(state.isPlaying)
                 .setShowWhen(false)
                 .setCategory(Notification.CATEGORY_TRANSPORT)
-                .setColor(notificationPalette.primary)
+                .setColor(notificationAccentColor)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setStyle(mediaStyle)
                 .addAction(Notification.Action.Builder(likeIcon, likeLabel, serviceAction(ACTION_LIKE, 7)).build())
@@ -402,12 +474,12 @@ internal fun MusicPlaybackService.buildNotification(state: MusicPlayerState, art
             .setContentText(state.current?.artist ?: "Music player")
             .setSubText(state.current?.album)
             .setContentIntent(openAppPendingIntent())
-            .setLargeIcon(scaledBitmap(art, 384))
+            .setLargeIcon(effectiveLargeIcon)
             .setOnlyAlertOnce(true)
             .setOngoing(state.isPlaying)
             .setShowWhen(false)
             .setCategory(Notification.CATEGORY_TRANSPORT)
-            .setColor(notificationPalette.primary)
+            .setColor(notificationAccentColor)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setStyle(style)
             .setCustomContentView(compact)

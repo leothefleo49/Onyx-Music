@@ -413,6 +413,7 @@ internal fun FullPlayer(
     seekbarColorsOverride: Triple<Color, Color, Color>? = null,
     edgeGlow: EdgeGlowConfig = EdgeGlowConfig(),
     onEnterAod: (() -> Unit)? = null,
+    preferVideoAutoStart: Boolean = false,
 ) {
     val track = state.current ?: return
     val haptics = LocalHapticFeedback.current
@@ -423,6 +424,7 @@ internal fun FullPlayer(
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val isTablet = isTabletOrWideScreen()
     val isTabletLandscape = isLandscape && (isTablet || configuration.screenWidthDp >= 600)
+    val isCompactHeightLandscape = isLandscape && configuration.screenHeightDp < 500
     val isCanvasActive = canvasEnabled && canvas != null
     // The two-column landscape layout has no single art area to replace, so
     // its lyrics button keeps opening the lyrics tab. Not tied to currentTab:
@@ -447,6 +449,11 @@ internal fun FullPlayer(
         { syncedVideoVm.setVideoActive(!showSyncedVideo) }
     } else null
     val isVideoActive = showSyncedVideo && musicVideoEnabled
+    LaunchedEffect(track.videoId, track.title, preferVideoAutoStart, musicVideoEnabled) {
+        if (preferVideoAutoStart && musicVideoEnabled && !showSyncedVideo) {
+            syncedVideoVm.setVideoActive(true)
+        }
+    }
     LaunchedEffect(track.videoId, track.title, track.durationMs, musicVideoEnabled) {
         if (!musicVideoEnabled || track.artworkUrl?.startsWith("file://") == true) return@LaunchedEffect
         // Waits out rapid skips, so only a song the user stays on spends the lookup.
@@ -1157,7 +1164,7 @@ internal fun FullPlayer(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .height(52.dp)
+                                .height(if (isCompactHeightLandscape) 38.dp else 52.dp)
                                 .padding(horizontal = if (isTabletLandscape) 32.dp else 16.dp)
                                 .playerVerticalSwipe(enabled = currentTab == FullPlayerTab.QUEUE),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1371,9 +1378,82 @@ internal fun FullPlayer(
                                 // Landscape: lyrics beside the same full-bleed art pane as
                                 // Now Playing.
                                 // Lyrics' own fullscreen still takes the whole width.
-                                val landscapeSplit = isTabletLandscape && !lyricsFullscreen
+                                val landscapeSplit = (isTabletLandscape || isCompactHeightLandscape) && !lyricsFullscreen
+                                val phoneLandscapeLyrics = landscapeSplit && isCompactHeightLandscape
                                 Row(Modifier.fillMaxSize()) {
-                                if (landscapeSplit) {
+                                if (phoneLandscapeLyrics) {
+                                    // Smartphone landscape: compact left deck (cover + track + transport)
+                                    // so the right column gives 100% of vertical screen height to lyrics.
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(0.72f)
+                                            .fillMaxHeight()
+                                            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center,
+                                    ) {
+                                        coil.compose.AsyncImage(
+                                            model = resolvedAmbientUrl ?: track.artworkUrl,
+                                            contentDescription = track.title,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(112.dp)
+                                                .clip(RoundedCornerShape(14.dp)),
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(
+                                            text = track.title,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center,
+                                        )
+                                        Text(
+                                            text = track.artist,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.White.copy(alpha = 0.72f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center,
+                                        )
+                                        Spacer(Modifier.height(10.dp))
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            IconButton(onClick = { player.previous() }, modifier = Modifier.size(36.dp)) {
+                                                Icon(Icons.Filled.SkipPrevious, contentDescription = "Previous", tint = Color.White)
+                                            }
+                                            Surface(
+                                                onClick = { if (state.isPlaying) player.pause() else player.resume() },
+                                                shape = CircleShape,
+                                                color = Color.White.copy(alpha = 0.22f),
+                                                modifier = Modifier.size(44.dp),
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                                        contentDescription = if (state.isPlaying) "Pause" else "Play",
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(26.dp),
+                                                    )
+                                                }
+                                            }
+                                            IconButton(onClick = { player.next() }, modifier = Modifier.size(36.dp)) {
+                                                Icon(Icons.Filled.SkipNext, contentDescription = "Next", tint = Color.White)
+                                            }
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        TextButton(
+                                            onClick = { lyricsFullscreen = true },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                        ) {
+                                            Text("Full width", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.85f))
+                                        }
+                                    }
+                                } else if (landscapeSplit) {
                                     LandscapeArtworkPane(
                                         track = track,
                                         state = state,
@@ -1417,7 +1497,7 @@ internal fun FullPlayer(
                                     // so it lands on its Now Playing.
                                     onToggleFullscreen = {
                                         if (lyricsFullscreen) {
-                                            if (!isTabletLandscape) onPlayerLyricsChange(true)
+                                            if (!isTabletLandscape && !isCompactHeightLandscape) onPlayerLyricsChange(true)
                                             onTabChange(FullPlayerTab.NOW_PLAYING)
                                         } else {
                                             lyricsFullscreen = true
@@ -1429,7 +1509,12 @@ internal fun FullPlayer(
                                     secondaryColor = ambientCompanion,
                                     tertiaryColor = ambientDeep,
                                     resolvedArtworkUrl = resolvedAmbientUrl,
-                                    modifier = if (landscapeSplit) {
+                                    hideBottomControls = phoneLandscapeLyrics,
+                                    modifier = if (phoneLandscapeLyrics) {
+                                        Modifier
+                                            .weight(1.45f)
+                                            .fillMaxHeight()
+                                    } else if (landscapeSplit) {
                                         Modifier
                                             .weight(1.15f)
                                             .fillMaxHeight()

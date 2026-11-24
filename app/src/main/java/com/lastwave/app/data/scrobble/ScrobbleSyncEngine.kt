@@ -784,50 +784,124 @@ class ScrobbleSyncEngine @Inject constructor(
 
     /**
      * Scans the entire scrobble database and removes cross-source duplicate plays
-     * (same canonical artist + track within +/- 5 minutes, e.g. Onyx + Last.fm app
-     * + Spotify Extended history), preserving the richest row (artwork, genre, longest
-     * listenedMs, Onyx source preference).
+     * (same canonical artist + track within a duration-aware window across Onyx,
+     * Last.fm, Spotify Extended/Account exports, and YouTube / YT Music Takeout),
+     * merging richer metadata (artwork, genre, album, exact ms_played, loved flag)
+     * into the surviving row so nothing is lost and nothing is double-counted.
      * @return number of duplicate rows removed.
      */
     suspend fun deduplicateDatabase(): Int = withContext(Dispatchers.IO) {
-        val all = eventDao.getAll().sortedBy { it.scrobbledAtMs }
+        val all = eventDao.getAll().sortedBy { minTimestampOf(it) }
         if (all.size < 2) return@withContext 0
-
-        fun richnessScore(e: ScrobbleEventEntity): Int {
-            var s = 0
-            if (e.sourcePackage == context.packageName) s += 4
-            if (!e.artworkUrl.isNullOrBlank()) s += 2
-            if (e.genre.isNotBlank()) s += 2
-            if (e.album.isNotBlank()) s += 1
-            if (e.outputDevice.isNotBlank()) s += 1
-            if (e.listenedMs > 0L) s += 1
-            return s
-        }
 
         val lastKeptByKey = HashMap<String, ScrobbleEventEntity>()
         val idsToDelete = mutableListOf<Long>()
+        val updatedWinners = LinkedHashMap<Long, ScrobbleEventEntity>()
 
         for (ev in all) {
             val cKey = canonicalScrobbleKey(ev.artist, ev.title)
             if (cKey.isBlank()) continue
             val prev = lastKeptByKey[cKey]
-            if (prev != null && kotlin.math.abs(ev.scrobbledAtMs - prev.scrobbledAtMs) <= CROSS_SOURCE_DEDUP_WINDOW_MS) {
-                // Keep the richer row and drop the duplicate
-                if (richnessScore(ev) > richnessScore(prev)) {
-                    idsToDelete += prev.id
-                    lastKeptByKey[cKey] = ev
+            if (prev != null && areSamePlayEvent(prev, ev)) {
+                val (winner, loser) = if (sourceRichnessScore(ev) > sourceRichnessScore(prev)) {
+                    mergeScrobbleMetadata(primary = ev, secondary = prev) to prev
                 } else {
-                    idsToDelete += ev.id
+                    mergeScrobbleMetadata(primary = prev, secondary = ev) to ev
                 }
+                idsToDelete += loser.id
+                updatedWinners.remove(loser.id)
+                updatedWinners[winner.id] = winner
+                lastKeptByKey[cKey] = winner
             } else {
                 lastKeptByKey[cKey] = ev
             }
+        }
+        if (updatedWinners.isNotEmpty()) {
+            updatedWinners.values.forEach { winner -> eventDao.update(winner) }
         }
         if (idsToDelete.isNotEmpty()) {
             idsToDelete.chunked(400).forEach { chunk -> eventDao.deleteByIds(chunk) }
             _scrobbleEvents.tryEmit(Unit)
         }
         idsToDelete.size
+    }
+
+    private fun minTimestampOf(e: ScrobbleEventEntity): Long =
+        if (e.startedAtMs > 0L) minOf(e.startedAtMs, e.scrobbledAtMs) else e.scrobbledAtMs
+
+    private fun sourceRichnessScore(e: ScrobbleEventEntity): Int {
+        var s = 0
+        when {
+            e.sourcePackage == context.packageName -> s += 6
+            e.sourcePackage == "com.spotify.music" -> s += 5 // Exact ms_played & timestamps
+            e.sourcePackage == "com.google.android.apps.youtube.music" && !isSyntheticYtHistory(e) -> s += 4
+            e.sourcePackage == "fm.last.android" -> s += 3
+            isSyntheticYtHistory(e) -> s += 1
+            else -> s += 2
+        }
+        if (!e.artworkUrl.isNullOrBlank()) s += 2
+        if (e.genre.isNotBlank()) s += 2
+        if (e.album.isNotBlank()) s += 1
+        if (e.outputDevice.isNotBlank()) s += 1
+        if (e.listenedMs > 0L && e.listenedMs != 210_000L) s += 2
+        return s
+    }
+
+    private fun isSyntheticYtHistory(e: ScrobbleEventEntity): Boolean =
+        e.sourceAppName.equals("YouTube Music History", ignoreCase = true) ||
+            e.sourcePackage == "com.google.android.apps.youtube.music.history"
+
+    /**
+     * Checks whether two events for the same canonical song represent the same play
+     * across Last.fm (start/threshold timestamp), Spotify (start/end timestamp),
+     * YouTube Takeout (start timestamp), and Onyx playback.
+     */
+    private fun areSamePlayEvent(a: ScrobbleEventEntity, b: ScrobbleEventEntity): Boolean {
+        val maxDurMs = maxOf(a.durationMs, b.durationMs, a.listenedMs, b.listenedMs)
+            .takeIf { it > 0L } ?: 210_000L
+        val dynamicWindowMs = maxOf(CROSS_SOURCE_DEDUP_WINDOW_MS, maxDurMs + 180_000L)
+            .coerceAtMost(MAX_CROSS_SOURCE_DEDUP_WINDOW_MS)
+
+        val aTimes = longArrayOf(a.scrobbledAtMs, a.startedAtMs.takeIf { it > 0L } ?: a.scrobbledAtMs)
+        val bTimes = longArrayOf(b.scrobbledAtMs, b.startedAtMs.takeIf { it > 0L } ?: b.scrobbledAtMs)
+        for (ta in aTimes) {
+            for (tb in bTimes) {
+                if (kotlin.math.abs(ta - tb) <= dynamicWindowMs) return true
+            }
+        }
+        // Synthetic FEmusic_history rows only know the calendar day (not exact seconds):
+        // collapse them into any real-timestamped play of the same song on the same day.
+        if (isSyntheticYtHistory(a) != isSyntheticYtHistory(b)) {
+            val dayA = a.scrobbledAtMs / 86_400_000L
+            val dayB = b.scrobbledAtMs / 86_400_000L
+            if (kotlin.math.abs(dayA - dayB) <= 1L) return true
+        }
+        return false
+    }
+
+    private fun mergeScrobbleMetadata(
+        primary: ScrobbleEventEntity,
+        secondary: ScrobbleEventEntity,
+    ): ScrobbleEventEntity {
+        val bestListened = when {
+            primary.listenedMs > 0L && primary.listenedMs != 210_000L -> primary.listenedMs
+            secondary.listenedMs > 0L && secondary.listenedMs != 210_000L -> secondary.listenedMs
+            else -> maxOf(primary.listenedMs, secondary.listenedMs)
+        }
+        val bestDuration = when {
+            primary.durationMs > 0L && primary.durationMs != 210_000L -> primary.durationMs
+            secondary.durationMs > 0L && secondary.durationMs != 210_000L -> secondary.durationMs
+            else -> maxOf(primary.durationMs, secondary.durationMs)
+        }
+        return primary.copy(
+            album = primary.album.ifBlank { secondary.album },
+            genre = primary.genre.ifBlank { secondary.genre },
+            artworkUrl = primary.artworkUrl?.takeIf { it.isNotBlank() } ?: secondary.artworkUrl,
+            outputDevice = primary.outputDevice.ifBlank { secondary.outputDevice },
+            listenedMs = bestListened,
+            durationMs = bestDuration,
+            isLoved = primary.isLoved || secondary.isLoved,
+        )
     }
 
     /**
@@ -896,22 +970,19 @@ class ScrobbleSyncEngine @Inject constructor(
 
         val rules = runCatching { editRuleDao.getEnabledRules() }.getOrDefault(emptyList())
         val existing = eventDao.getAll()
-        // Sliding-window canonical deduplication (+/- 5 min across Last.fm startTime,
-        // Onyx live time, Spotify endTime, and YT Music history) — eliminates boundary
-        // splits and cross-source doubling cleanly!
-        val keptTimestampsByKey = HashMap<String, MutableList<Long>>(existing.size / 2 + 16)
+        // Duration-aware cross-source deduplication (checking BOTH startedAtMs & scrobbledAtMs
+        // across Last.fm, Onyx, Spotify full exports, and YouTube / YT Music Takeout) with
+        // metadata merging so Last.fm + Spotify/YT full exports NEVER double-count plays!
+        val keptByKey = HashMap<String, MutableList<ScrobbleEventEntity>>(existing.size / 2 + 16)
         for (ex in existing) {
             val cKey = canonicalScrobbleKey(ex.artist, ex.title)
             if (cKey.isNotBlank()) {
-                val list = keptTimestampsByKey.getOrPut(cKey) { mutableListOf() }
-                list.add(ex.scrobbledAtMs)
-                if (ex.startedAtMs > 0L && kotlin.math.abs(ex.startedAtMs - ex.scrobbledAtMs) > 5_000L) {
-                    list.add(ex.startedAtMs)
-                }
+                keptByKey.getOrPut(cKey) { mutableListOf() }.add(ex)
             }
         }
 
         val toInsert = mutableListOf<ScrobbleEventEntity>()
+        val updatedExisting = LinkedHashMap<Long, ScrobbleEventEntity>()
         var skippedDupes = 0
         for (rawEvent in events) {
             val cleaned = ScrobbleRulesEngine.cleanMetadata(
@@ -924,25 +995,46 @@ class ScrobbleSyncEngine @Inject constructor(
             }
             val key = normalizeScrobbleTrackKey(edited.artist, edited.title)
             val cKey = canonicalScrobbleKey(edited.artist, edited.title)
-            val ts = rawEvent.scrobbledAtMs
-            val existingTimes = keptTimestampsByKey[cKey]
-            val isDuplicate = existingTimes != null && existingTimes.any { prevTs ->
-                kotlin.math.abs(prevTs - ts) <= CROSS_SOURCE_DEDUP_WINDOW_MS
-            }
-            if (isDuplicate) {
-                skippedDupes++
-                continue
-            }
-            keptTimestampsByKey.getOrPut(cKey) { mutableListOf() }.add(ts)
-            toInsert += rawEvent.copy(
+            val candidate = rawEvent.copy(
                 trackKey = key,
                 title = edited.title,
                 artist = edited.artist,
                 album = edited.album,
             )
+            val bucket = keptByKey[cKey]
+            val matchIdx = bucket?.indexOfFirst { prev -> areSamePlayEvent(prev, candidate) } ?: -1
+            if (matchIdx >= 0 && bucket != null) {
+                val prev = bucket[matchIdx]
+                // Merge richer metadata into existing persisted row (e.g. upgrading a Last.fm
+                // scrobble with Spotify's exact ms_played, or copying Last.fm artwork/album
+                // onto a Spotify/Takeout play) without creating a duplicate row.
+                if (prev.id > 0L) {
+                    val merged = if (sourceRichnessScore(candidate) > sourceRichnessScore(prev)) {
+                        mergeScrobbleMetadata(
+                            primary = candidate.copy(id = prev.id),
+                            secondary = prev,
+                        )
+                    } else {
+                        mergeScrobbleMetadata(primary = prev, secondary = candidate)
+                    }
+                    if (merged != prev) {
+                        bucket[matchIdx] = merged
+                        updatedExisting[prev.id] = merged
+                    }
+                }
+                skippedDupes++
+                continue
+            }
+            keptByKey.getOrPut(cKey) { mutableListOf() }.add(candidate)
+            toInsert += candidate
+        }
+        if (updatedExisting.isNotEmpty()) {
+            updatedExisting.values.forEach { merged -> eventDao.update(merged) }
         }
         if (toInsert.isNotEmpty()) {
             toInsert.chunked(250).forEach { chunk -> eventDao.insertAll(chunk) }
+        }
+        if (toInsert.isNotEmpty() || updatedExisting.isNotEmpty()) {
             _scrobbleEvents.tryEmit(Unit)
         }
         ScrobbleImportExport.ImportResult(
@@ -1052,7 +1144,8 @@ class ScrobbleSyncEngine @Inject constructor(
         const val MAX_RETRIES = 8
         const val FLUSH_BATCH_SIZE = 50
         const val LIVE_DEDUP_WINDOW_MS = 90_000L
-        const val CROSS_SOURCE_DEDUP_WINDOW_MS = 300_000L // +/- 5 min handles start vs threshold vs end timestamps
+        const val CROSS_SOURCE_DEDUP_WINDOW_MS = 300_000L // +/- 5 min base window
+        const val MAX_CROSS_SOURCE_DEDUP_WINDOW_MS = 20L * 60_000L // Handles long tracks logged at start vs end
         val KNOWN_EXTERNAL_SCROBBLERS = listOf(
             "fm.last.android" to "Last.fm",
             "com.arn.scrobble" to "Pano Scrobbler",

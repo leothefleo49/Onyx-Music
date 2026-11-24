@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.2.7] - 2026-11-24
+
+### 🛠️ Fixed
+* **Eliminated 30+ Second Playback Delays (Even for Downloaded Songs & Minimal Data):**
+  * Removed the blocking `Music/` FUSE directory walk (`deepScan = true`) that ran on every Fast Start playback attempt and forced the candidate race to stall 10–30+ seconds before YouTube fallback could start.
+  * Added a scheme-routing `DataSource.Factory` so local downloads (`file://` / `content://`) play straight from `DefaultDataSource`, completely bypassing `SimpleCache` locks, cache eviction, and `ChunkedRangeDataSource`.
+  * Deferred fragmented-MP4 index healing (`Fmp4IndexBuilder.finalizeFmp4`) and skipped redundant `MediaMetadataRetriever` parsing on Room-indexed downloads; removed main-thread `File.exists()` calls in `DownloadsViewModel`.
+  * Gave `mediaHttpClient` a dedicated 64-slot OkHttp `Dispatcher` so Home metadata, artwork, lyrics, and background probes can never starve live audio; tightened stacked timeouts across `MusicPlayer`, `HybridMediaServer`, `ChunkedRangeDataSource`, and `Ipv4FirstDnsResolver` (including immediate offline DoH short-circuit).
+* **Fixed Infinite Quality Switching / Never-Playing Loop:**
+  * Added `failedQualitySwitches` lock per `(mediaId, targetQuality)` and paused `AdaptiveQualityController` while an upgrade or hot-swap is active, completely stopping the 60ms infinite retry loop and quality ping-ponging.
+  * Bounded mid-song quality promotion to a single clean attempt within 5–9s (`AUDITION_MIN_BUFFER_MS = 3s`, `LOSSLESS_BACKGROUND_BUDGET_MS = 9s`), skipped mid-song lossy-to-lossy hops when settings don't require higher quality, skipped 2× 4×-speed PCM probes on cellular/low buffer, moved the `qualitySwitch` banner so it only appears when a swap actually commits, recorded `qualityUpgradedMediaIds` on `OverlapSwap.Swapped`, and allowed pre-resolved DASH/DRM lossless streams during `preloadNextTrack` so upcoming queue items start immediately at best quality.
+* **Tesla / Bluetooth Artwork & External Playback Controls:**
+  * Capped `MediaSessionCompat` artwork to an immutable 320px bitmap, populated `METADATA_KEY_ART`, `METADATA_KEY_ALBUM_ART`, and `METADATA_KEY_DISPLAY_ICON`, and exposed a `FileProvider` `content://` URI granted directly to Bluetooth AVRCP BIP, SystemUI, and Android Auto (no more raw `https://` URIs or `TransactionTooLargeException` killing state sync).
+  * Isolated `setMetadata()` and `setPlaybackState()` into independent `runCatching` blocks, wired explicit `MediaButtonReceiver` + `onMediaButtonEvent` (Play/Pause works reliably even during `STATE_BUFFERING`), added cold-start session restoration in `onPlay()`, added Fast Forward / Rewind actions, sent speed `0f` during `STATE_BUFFERING`, and synced `MediaSessionCompat` on user seeks.
+* **Samsung / System UI Media Popup Opens Full Player:**
+  * Added `ACTION_OPEN_NOW_PLAYING` + `open_player` extra to `openAppPendingIntent()` and `WidgetActions.openAppPending()` (targeting `MainShellActivity` instead of disabled `MainActivity`) with history-launch guard so tapping the Samsung / system media notification card opens Onyx directly into the expanded FullPlayer.
+* **Eliminated Remaining Green Logo in Notifications & Deep System UI:**
+  * Updated manifest `<application>` and `MusicPlaybackService` fallback icons to `@mipmap/ic_launcher_black`, honored user-selected `AppIcon.BLACK` / `WHITE` in notification accent colors and fallback large icons, updated API 33+ Recents `TaskDescription.Builder().setIcon(appIcon.mipmapRes)`, and replaced neon-green widget preview drawables and fallback accents.
+* **Smartphone Landscape Mode Lyrics Visibility:**
+  * Added `isCompactHeightLandscape` (`screenHeightDp < 500`) two-column lyrics layout placing compact cover art + transport controls in the left pane so the right pane dedicates full vertical screen height to scrolling lyrics; scaled lyric typography, clamped `lyricsFadingEdge` proportionally, and tightened landscape `LazyColumn` padding and header height.
+* **Real Direct Sharing (No Fake Links, No Manual Copying):**
+  * Built `ShareHelper` with strict 11-character YouTube video ID and 22-character Spotify ID validation (never fabricating broken links from internal/local IDs) and native `Intent.createChooser(ACTION_SEND)` sharing across Track context menu, Friends, Albums, and Playlists.
+* **Queue Previous Wrap-Around:**
+  * Updated `previousQueueIndex` to wrap symmetrically from the first track to the last track (mirroring Next wrap-around) and seek to `0:00` on single-track queues.
+* **Consistent Spotify & YouTube Music Library UI:**
+  * Unified `FeedPlaylistDetailScreen` hero controls (Play FAB, Shuffle, Download All, Share) to match `AlbumDetailScreen` and hid the redundant `"Save to library"` button on already-synced Spotify (`sp_*`) and YouTube Music (`yt_liked`, `yt_recent`) playlists.
+* **Full Spotify & Google Takeout Exports + Last.fm Cross-Deduplication:**
+  * Hardened ZIP archive classification to allowlist real streaming/watch history files while safely skipping Spotify `Spotify Technical Log Information/` error/telemetry logs and non-YouTube Google Takeout services, ads, playlists CSVs, and search history; automatically deduplicates overlapping Spotify Account History when Extended History is present in the same ZIP; added chunked streaming HTML parsing for massive multi-year Takeout files; fixed YouTube Music `" - "` title/artist splitting and tightened `MediaCategoryClassifier`.
+  * Upgraded `ScrobbleSyncEngine` cross-source deduplication (`importScrobbleEvents` & `deduplicateDatabase`) with dynamic duration-aware window matching across BOTH `startedAtMs` and `scrobbledAtMs`, expanded edition-tag normalization (`Deluxe`, `Bonus Track`, `Radio Edit`, etc.), synthetic YT History day-bucket collapsing, and automatic metadata merging so Last.fm scrobbles never double-count against full Spotify / YouTube Takeout imports.
+
+### ✨ What's New
+* **Shazam-Speed Song Recognition (~3s) & Working Sing/Lyrics + Hum-to-Search:**
+  * Rebuilt live audio recognition around native 16 kHz streaming capture (`UNPROCESSED` → `VOICE_RECOGNITION` → `MIC`), a 512-phase precomputed polyphase sinc resampler LUT, 150 Hz car-rumble high-pass filtering + adaptive RMS auto-gain, fixed millisecond timestamps + shared session UUIDs + `retryms` handling, and progressive Shazam probes at **2.8s → 5.0s → 7.5s → 10.5s** with immediate cancel-on-match and 1-tap start.
+  * Replaced broken humming-to-Shazam with real **Sing / Lyrics** recognition (voice or typed lyric snippet matching via Genius multi-search + YouTube Music fallback with Play Now & alternate matches) plus 1-tap **Hum a Tune** launching Google's neural Hum-to-Search.
+* **Whole-Album Playback Defaults & Album Download Button:**
+  * Added **Download Album**, **Share Album**, and **Album Playback Defaults** (`AlbumOverride` + `DefaultPlayerMode`: App Default, Fullscreen, Lyrics Visible, Music Video, Live Background, or Minimal/None + album-wide Video/Canvas/Motion toggles) directly to `AlbumDetailScreen`, enforced automatically via Track → Album → Global precedence in `PlayerHost` & `FullPlayer`, and manageable under Settings → Playback Overrides (**Songs** & **Albums** tabs).
+
 ## [1.2.6] - 2026-11-23
 
 ### ✨ What's New

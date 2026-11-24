@@ -168,4 +168,93 @@ class ScrobbleImportExportTest {
         assertEquals(1_730_000_000_000L, track.scrobbledAtMs)
         assertEquals(ScrobbleSyncStatus.SYNCED, track.lastFmSyncStatus)
     }
+
+    @Test
+    fun `full Spotify ZIP skips Technical Log Information error logs and avoids Account overlap`() {
+        val baos = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(baos).use { zos ->
+            fun addEntry(path: String, body: String) {
+                zos.putNextEntry(java.util.zip.ZipEntry(path))
+                zos.write(body.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+            addEntry(
+                "Spotify Technical Log Information/PlaybackError.json",
+                """[{"name":"Error 500","artist":"PlaybackEngine","timestamp":1730000000}]""",
+            )
+            addEntry(
+                "Spotify Technical Log Information/RawCoreStream.json",
+                """[{"name":"raw_chunk","artist":"cdn","timestamp":1730000005}]""",
+            )
+            addEntry(
+                "Spotify Extended Streaming History/Streaming_History_Audio_2025.json",
+                """[{"ts":"2025-11-01T21:15:00Z","ms_played":240000,"master_metadata_track_name":"Let It Happen","master_metadata_album_artist_name":"Tame Impala","master_metadata_album_album_name":"Currents"}]""",
+            )
+            addEntry(
+                "Spotify Account Data/StreamingHistory_music_0.json",
+                """[{"endTime":"2025-11-01 21:15","artistName":"Tame Impala","trackName":"Let It Happen","msPlayed":240000}]""",
+            )
+        }
+        val result = ScrobbleImportExport.importFromZipBytes(baos.toByteArray())
+        assertEquals(1, result.events.size)
+        assertEquals("Let It Happen", result.events.first().title)
+        assertEquals("Tame Impala", result.events.first().artist)
+        assertEquals("Currents", result.events.first().album)
+    }
+
+    @Test
+    fun `full Google Takeout ZIP handles ALL YouTube plus YT Music and skips non-YouTube and Ads`() {
+        val baos = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(baos).use { zos ->
+            fun addEntry(path: String, body: String) {
+                zos.putNextEntry(java.util.zip.ZipEntry(path))
+                zos.write(body.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+            addEntry(
+                "Takeout/Chrome/BrowserHistory.json",
+                """[{"name":"Random Page","artist":"Chrome","timestamp":1730000000}]""",
+            )
+            addEntry(
+                "Takeout/YouTube and YouTube Music/playlists/Liked videos.csv",
+                "Video Id,Time Added\nabcdef12345,2025-01-01T00:00:00Z",
+            )
+            addEntry(
+                "Takeout/YouTube and YouTube Music/history/watch-history.json",
+                """[
+                  {
+                    "header": "YouTube Music",
+                    "title": "Watched Midnight City - Radio Edit",
+                    "titleUrl": "https://music.youtube.com/watch?v=dX3k_QDnzHE",
+                    "subtitles": [{"name": "M83 - Topic"}],
+                    "time": "2025-11-02T10:00:00.123456Z"
+                  },
+                  {
+                    "header": "YouTube",
+                    "title": "Watched Sponsored Car Ad",
+                    "titleUrl": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+                    "subtitles": [{"name": "Ad Brand Official"}],
+                    "details": [{"name": "From Google Ads"}],
+                    "time": "2025-11-02T10:05:00Z"
+                  },
+                  {
+                    "header": "YouTube",
+                    "title": "Watched Best Smartphones 2026 - Full Review",
+                    "titleUrl": "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+                    "subtitles": [{"name": "Tech Reviewer Official"}],
+                    "time": "2025-11-02T10:10:00Z"
+                  }
+                ]""",
+            )
+        }
+        val result = ScrobbleImportExport.importFromZipBytes(baos.toByteArray())
+        assertEquals(2, result.events.size)
+        val ytMusicSong = result.events.first { it.sourceAppName == "YouTube Music" }
+        assertEquals("M83", ytMusicSong.artist)
+        assertTrue(ytMusicSong.title.startsWith("Midnight City"))
+        assertEquals(ScrobbleMediaCategory.MUSIC, ytMusicSong.mediaCategory)
+
+        val ytVideo = result.events.first { it.sourceAppName == "YouTube" }
+        assertEquals(ScrobbleMediaCategory.VIDEO, ytVideo.mediaCategory)
+    }
 }

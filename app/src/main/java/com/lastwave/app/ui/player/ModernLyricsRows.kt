@@ -302,11 +302,19 @@ internal fun ModernSyncedLyricsList(
 
     val focusValue: () -> Float = remember(focus) { { focus.value } }
     val trailValue: () -> Float = remember(trail) { { trail.value } }
+    val compactHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 500
 
     LazyColumn(
         state = listState,
-        modifier = modifier.lyricsFadingEdge(topFadeDp = 36.dp, bottomFadeDp = 110.dp),
-        contentPadding = PaddingValues(top = 40.dp, bottom = 140.dp, start = 20.dp, end = 20.dp),
+        modifier = modifier.lyricsFadingEdge(
+            topFadeDp = if (compactHeight) 14.dp else 36.dp,
+            bottomFadeDp = if (compactHeight) 32.dp else 110.dp,
+        ),
+        contentPadding = if (compactHeight) {
+            PaddingValues(top = 12.dp, bottom = 44.dp, start = 16.dp, end = 16.dp)
+        } else {
+            PaddingValues(top = 40.dp, bottom = 140.dp, start = 20.dp, end = 20.dp)
+        },
     ) {
         itemsIndexed(
             items,

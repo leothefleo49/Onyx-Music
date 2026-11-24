@@ -84,7 +84,7 @@ object SpotifyTrackNormalizer {
         """(?i)\s*(?:\||//)\s*(?:official\s*(?:music\s*)?video|official\s*audio|lyrics?|visualizer|hd|4k|vevo|audio).*$""",
     )
     private val REMASTER_SUFFIX_REGEX = Regex(
-        """(?i)(?:\s*-\s*(?:\d{4}\s*)?remaster(?:ed)?(?:\s*\d{4})?|\s*[\(\[](?:\d{4}\s*)?remaster(?:ed)?(?:\s*\d{4})?(?:\s*version)?[\)\]])""",
+        """(?i)(?:\s*-\s*(?:(?:\d{4}\s*)?remaster(?:ed)?(?:\s*\d{4})?|radio\s*edit|single\s*version|album\s*version|original\s*mix|deluxe(?:\s*edition)?|bonus\s*track|explicit|clean)|\s*[\(\[](?:(?:\d{4}\s*)?remaster(?:ed)?(?:\s*\d{4})?(?:\s*version)?|radio\s*edit|single\s*version|album\s*version|original\s*mix|deluxe(?:\s*edition)?|bonus\s*track(?:\s*version)?|anniversary\s*edition)[\)\]])""",
     )
     private val FEATURED_BRACKET_REGEX = Regex(
         """(?i)\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+([^\)\]]+)[\)\]]""",

@@ -188,7 +188,7 @@ internal fun TrackDownloadManager.showErrorNotification(
     }
 
 internal fun TrackDownloadManager.viewDownloadsPendingIntent(requestCode: Int): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(context, com.lastwave.app.MainShellActivity::class.java).apply {
             action = ACTION_VIEW_DOWNLOADS
             putExtra(EXTRA_NAVIGATE_TO, "downloads")
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP

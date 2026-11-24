@@ -109,8 +109,7 @@ class OnyxFriendsStore @Inject constructor(
 
     fun buildInviteMessage(): String {
         val p = _profile.value
-        val link = buildInviteUri()
-        return "Add me on Onyx Music! My code is ${p.friendCode} (@${p.handle}). Tap to connect: $link"
+        return "Add me on Onyx Music! My friend code is ${p.friendCode} (@${p.handle}).\nGet Onyx Music: https://github.com/leothefleo49/Onyx-Music/releases/latest"
     }
 
     fun setPendingInviteFromUri(uri: Uri) {

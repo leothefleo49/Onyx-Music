@@ -12,6 +12,6 @@
     android:widgetCategory="home_screen"
     android:initialLayout="@layout/widget_obsidian_horizontal"
     android:previewLayout="@layout/widget_obsidian_horizontal"
-    android:previewImage="@mipmap/ic_launcher"
+    android:previewImage="@mipmap/ic_launcher_black"
     android:description="@string/widget_obsidian_description"
     android:updatePeriodMillis="0" />

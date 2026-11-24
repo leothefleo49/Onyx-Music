@@ -12,6 +12,7 @@ enum class AppIcon(
     val componentName: String,
     @DrawableRes val logoRes: Int,
     @ColorRes val backgroundRes: Int,
+    val mipmapRes: Int,
 ) {
     DEFAULT(
         id = "default",
@@ -20,6 +21,7 @@ enum class AppIcon(
         componentName = "com.lastwave.app.MainActivity",
         logoRes = R.drawable.ic_launcher_logo,
         backgroundRes = R.color.ic_launcher_background,
+        mipmapRes = R.mipmap.ic_launcher,
     ),
     DESKTOP(
         id = "desktop",
@@ -28,6 +30,7 @@ enum class AppIcon(
         componentName = "com.lastwave.app.MainActivityDesktop",
         logoRes = R.drawable.ic_launcher_logo_desktop,
         backgroundRes = R.color.ic_launcher_background_desktop,
+        mipmapRes = R.mipmap.ic_launcher_desktop,
     ),
     WHITE(
         id = "white",
@@ -36,6 +39,7 @@ enum class AppIcon(
         componentName = "com.lastwave.app.MainActivityWhite",
         logoRes = R.drawable.ic_launcher_logo_white,
         backgroundRes = R.color.ic_launcher_background_white,
+        mipmapRes = R.mipmap.ic_launcher_white,
     ),
     BLACK(
         id = "black",
@@ -44,6 +48,7 @@ enum class AppIcon(
         componentName = "com.lastwave.app.MainActivityBlack",
         logoRes = R.drawable.ic_launcher_logo_black,
         backgroundRes = R.color.ic_launcher_background_black,
+        mipmapRes = R.mipmap.ic_launcher_black,
     );
 
     companion object {

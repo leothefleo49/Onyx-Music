@@ -191,8 +191,12 @@ fun ModernLyricsPanel(
     onSelectLyricsProvider: ((LyricsProvider) -> Unit)? = null,
     onTryAnotherLyricsSource: (() -> Unit)? = null,
     resolvedArtworkUrl: String? = null,
+    hideBottomControls: Boolean = false,
 ) {
     val track = state.current ?: return
+    val isCompactHeightLandscape = androidx.compose.ui.platform.LocalConfiguration.current.let {
+        it.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE && it.screenHeightDp < 500
+    }
 
     var showShareDialog by rememberSaveable { mutableStateOf(false) }
     val canShareLyrics = lyricsState is LyricsUiState.Success &&
@@ -447,8 +451,9 @@ fun ModernLyricsPanel(
                             val themeSpec = remember(lyricsStyle) { lyricsStyle.toThemeSpec() }
                             val chosenLeadFont = themeSpec.fontFamily ?: if (useAppFont) com.lastwave.app.ui.theme.lyricsLeadFontFamily(boldFont) else androidx.compose.ui.text.font.FontFamily.Default
                             val chosenBackingFont = themeSpec.fontFamily ?: if (useAppFont) com.lastwave.app.ui.theme.lyricsBackingFontFamily(boldFont) else androidx.compose.ui.text.font.FontFamily.Default
-                            val karaokeNormalStyle = remember(currentTextStyle, isAppleMusic, isWordSynced, effectiveFontScale, useAppFont, boldFont, lyricsStyle) {
-                                val baseSize = (if (isAppleMusic) 30f else if (isWordSynced) 34f else 32f) * effectiveFontScale * themeSpec.fontSizeMultiplier
+                            val landscapeScaleFactor = if (isCompactHeightLandscape) 0.72f else 1f
+                            val karaokeNormalStyle = remember(currentTextStyle, isAppleMusic, isWordSynced, effectiveFontScale, landscapeScaleFactor, useAppFont, boldFont, lyricsStyle) {
+                                val baseSize = (if (isAppleMusic) 30f else if (isWordSynced) 34f else 32f) * effectiveFontScale * landscapeScaleFactor * themeSpec.fontSizeMultiplier
                                 currentTextStyle.copy(
                                     fontFamily = chosenLeadFont,
                                     fontSize = baseSize.sp,
@@ -458,9 +463,9 @@ fun ModernLyricsPanel(
                                     textMotion = TextMotion.Animated,
                                 )
                             }
-                            val karaokeAccompanimentStyle = remember(currentTextStyle, isAppleMusic, isWordSynced, effectiveFontScale, useAppFont, boldFont, lyricsStyle) {
+                            val karaokeAccompanimentStyle = remember(currentTextStyle, isAppleMusic, isWordSynced, effectiveFontScale, landscapeScaleFactor, useAppFont, boldFont, lyricsStyle) {
                                 // Backing vocals: 0.65x of the lead row.
-                                val baseSize = (if (isAppleMusic) 30f else if (isWordSynced) 34f else 32f) * 0.65f * effectiveFontScale * themeSpec.fontSizeMultiplier
+                                val baseSize = (if (isAppleMusic) 30f else if (isWordSynced) 34f else 32f) * 0.65f * effectiveFontScale * landscapeScaleFactor * themeSpec.fontSizeMultiplier
                                 currentTextStyle.copy(
                                     fontFamily = chosenBackingFont,
                                     fontSize = baseSize.sp,
@@ -472,11 +477,11 @@ fun ModernLyricsPanel(
                             }
                             // Sub-lines (translation / romanization) draw
                             // smaller and lighter than the lyric they follow.
-                            val subLineStyle = remember(currentTextStyle, effectiveFontScale, useAppFont, boldFont) {
+                            val subLineStyle = remember(currentTextStyle, effectiveFontScale, landscapeScaleFactor, useAppFont, boldFont) {
                                 currentTextStyle.copy(
                                     fontFamily = if (useAppFont) com.lastwave.app.ui.theme.lyricsSubLineFontFamily(boldFont) else androidx.compose.ui.text.font.FontFamily.Default,
-                                    fontSize = (16f * effectiveFontScale).sp,
-                                    lineHeight = (22f * effectiveFontScale).sp,
+                                    fontSize = (16f * effectiveFontScale * landscapeScaleFactor).sp,
+                                    lineHeight = (22f * effectiveFontScale * landscapeScaleFactor).sp,
                                     fontWeight = FontWeight.Medium,
                                     letterSpacing = (-0.1).sp,
                                     textMotion = TextMotion.Animated,
@@ -485,8 +490,8 @@ fun ModernLyricsPanel(
 
                             val layoutDirection = if (isOverallRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
                             // Sync-type badge: makes it visible why words animate
-                            // (word-sync) or just scroll (line-sync). The provider
-                            // is credited only on the signature intro card.
+                            // (word-sync) or just scroll (line-sync). Hidden on short
+                            // phone landscape viewports so lyrics get maximum height.
                             val wordSyncLabel = stringResource(R.string.ly_word_sync)
                             val lineSyncLabel = stringResource(R.string.ly_line_sync)
                             val syncLabel = if (isWordSynced) wordSyncLabel else lineSyncLabel
@@ -494,27 +499,29 @@ fun ModernLyricsPanel(
                                 Column(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .padding(top = 8.dp),
+                                        .padding(top = if (isCompactHeightLandscape) 0.dp else 8.dp),
                                 ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(bottom = 6.dp),
-                                        horizontalArrangement = Arrangement.Center,
-                                    ) {
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = liquidGlassContainerColor(Color.White.copy(alpha = 0.16f)),
-                                            contentColor = Color.White.copy(alpha = 0.92f),
+                                    if (!isCompactHeightLandscape) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(bottom = 6.dp),
+                                            horizontalArrangement = Arrangement.Center,
                                         ) {
-                                            Text(
-                                                text = syncLabel,
-                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                    letterSpacing = 0.6.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                ),
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                                            )
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = liquidGlassContainerColor(Color.White.copy(alpha = 0.16f)),
+                                                contentColor = Color.White.copy(alpha = 0.92f),
+                                            ) {
+                                                Text(
+                                                    text = syncLabel,
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        letterSpacing = 0.6.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                    ),
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                                                )
+                                            }
                                         }
                                     }
                                     SyncedLyricsProgressHost(
@@ -565,49 +572,54 @@ fun ModernLyricsPanel(
             }
         }
 
-        ModernLyricsControlsHost(
-            state = state,
-            progressFlow = progressFlow,
-            progressInitial = progressInitial,
-            player = player,
-            seekbarStyle = seekbarStyle,
-            wavySeekbarEnabled = wavySeekbarEnabled,
-            lyricsStyle = lyricsStyle,
-            onLyricsStyleChange = onLyricsStyleChange,
-            onToggleFullscreen = onToggleFullscreen,
-            isFullscreen = isFullscreen,
-            lyricsOffsetMs = lyricsOffsetMs,
-            onOpenLyricsOffset = onOpenLyricsOffset,
-            controlsVisible = controlsVisible,
-            displayMode = displayMode,
-            translationLoading = translationLoading,
-            romanizationLoading = romanizationLoading,
-            translationAvailable = translatableLines != null,
-            onToggleTranslation = onToggleTranslation,
-            onToggleRomanization = onToggleRomanization,
-            showFontSlider = fontSliderOpen,
-            onShowFontSliderChange = { fontSliderOpen = it },
-            onOpenLyricsSource = if (onSelectLyricsProvider != null || onTryAnotherLyricsSource != null) {
-                { sourceDialogOpen = true }
-            } else null,
-            lyricsFontScale = effectiveFontScale,
-            onLyricsFontScaleChange = { newScale ->
-                effectiveFontScale = newScale
-                onLyricsFontScaleChange(newScale)
-            },
-            onLyricsFontScalePreview = { previewScale ->
-                effectiveFontScale = previewScale
-            },
-            primaryColor = primaryColor,
-            secondaryColor = secondaryColor,
-            tertiaryColor = tertiaryColor,
-            canShareLyrics = canShareLyrics,
-            onShareLyrics = { showShareDialog = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 16.dp, top = 6.dp),
-        )
+        if (!hideBottomControls) {
+            ModernLyricsControlsHost(
+                state = state,
+                progressFlow = progressFlow,
+                progressInitial = progressInitial,
+                player = player,
+                seekbarStyle = seekbarStyle,
+                wavySeekbarEnabled = wavySeekbarEnabled,
+                lyricsStyle = lyricsStyle,
+                onLyricsStyleChange = onLyricsStyleChange,
+                onToggleFullscreen = onToggleFullscreen,
+                isFullscreen = isFullscreen,
+                lyricsOffsetMs = lyricsOffsetMs,
+                onOpenLyricsOffset = onOpenLyricsOffset,
+                controlsVisible = controlsVisible,
+                displayMode = displayMode,
+                translationLoading = translationLoading,
+                romanizationLoading = romanizationLoading,
+                translationAvailable = translatableLines != null,
+                onToggleTranslation = onToggleTranslation,
+                onToggleRomanization = onToggleRomanization,
+                showFontSlider = fontSliderOpen,
+                onShowFontSliderChange = { fontSliderOpen = it },
+                onOpenLyricsSource = if (onSelectLyricsProvider != null || onTryAnotherLyricsSource != null) {
+                    { sourceDialogOpen = true }
+                } else null,
+                lyricsFontScale = effectiveFontScale,
+                onLyricsFontScaleChange = { newScale ->
+                    effectiveFontScale = newScale
+                    onLyricsFontScaleChange(newScale)
+                },
+                onLyricsFontScalePreview = { previewScale ->
+                    effectiveFontScale = previewScale
+                },
+                primaryColor = primaryColor,
+                secondaryColor = secondaryColor,
+                tertiaryColor = tertiaryColor,
+                canShareLyrics = canShareLyrics,
+                onShareLyrics = { showShareDialog = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(
+                        bottom = if (isCompactHeightLandscape) 4.dp else 16.dp,
+                        top = if (isCompactHeightLandscape) 2.dp else 6.dp,
+                    ),
+            )
+        }
 
         if (sourceDialogOpen) {
             LaunchedEffect(Unit) {

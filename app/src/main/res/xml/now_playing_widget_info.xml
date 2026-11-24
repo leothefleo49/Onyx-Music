@@ -12,6 +12,6 @@
     android:widgetCategory="home_screen"
     android:initialLayout="@layout/widget_now_playing"
     android:previewLayout="@layout/widget_now_playing"
-    android:previewImage="@mipmap/ic_launcher"
+    android:previewImage="@mipmap/ic_launcher_black"
     android:description="@string/widget_description"
     android:updatePeriodMillis="0" />

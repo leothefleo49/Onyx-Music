@@ -146,49 +146,173 @@ object ScrobbleImportExport {
         importFromZipStream(ByteArrayInputStream(bytes))
 
     fun importFromZipStream(stream: InputStream): ImportResult {
-        val allEvents = mutableListOf<ScrobbleEventEntity>()
+        val extendedSpotifyEvents = mutableListOf<ScrobbleEventEntity>()
+        val accountSpotifyEvents = mutableListOf<ScrobbleEventEntity>()
+        val otherEvents = mutableListOf<ScrobbleEventEntity>()
         val formats = linkedSetOf<String>()
         var totalSkipped = 0
+        var hasExtendedSpotify = false
+
         ZipInputStream(stream).use { zis ->
             while (true) {
                 val entry = zis.nextEntry ?: break
-                val name = entry.name
+                val name = entry.name.replace('\\', '/')
                 val lower = name.lowercase(Locale.ROOT)
                 val baseName = lower.substringAfterLast('/')
-                val isNonHistorySpotifyFile = baseName in NON_HISTORY_SPOTIFY_FILES ||
-                    baseName.startsWith("playlist") && baseName.endsWith(".json")
-                val isSupportedFile = !entry.isDirectory &&
-                    !lower.contains("__macosx") &&
-                    !baseName.startsWith(".") &&
-                    !isNonHistorySpotifyFile &&
-                    (lower.endsWith(".json") || lower.endsWith(".jsonl") ||
-                        lower.endsWith(".csv") || lower.endsWith(".txt") ||
-                        lower.endsWith(".html") || lower.endsWith(".htm"))
-                if (isSupportedFile) {
-                    val entryBytes = readBoundedEntry(zis, MAX_ZIP_ENTRY_BYTES)
-                    if (entryBytes != null && entryBytes.isNotEmpty()) {
-                        val content = entryBytes.toString(Charsets.UTF_8)
-                        val parsed = if (lower.endsWith(".html") || lower.endsWith(".htm")) {
-                            parseYouTubeTakeoutHtml(content)
-                        } else {
-                            importFromText(content)
+                val entryKind = classifyZipEntry(entry.isDirectory, lower, baseName)
+
+                if (entryKind != ZipEntryKind.SKIP) {
+                    val parsed = when (entryKind) {
+                        ZipEntryKind.YOUTUBE_HTML -> parseYouTubeTakeoutHtmlStream(zis)
+                        else -> {
+                            val entryBytes = readBoundedEntry(zis, MAX_ZIP_ENTRY_BYTES)
+                            if (entryBytes != null && entryBytes.isNotEmpty()) {
+                                importFromText(entryBytes.toString(Charsets.UTF_8))
+                            } else null
                         }
-                        if (parsed.events.isNotEmpty()) {
-                            allEvents += parsed.events
-                            formats += parsed.formatDetected
-                            totalSkipped += parsed.skippedCount
+                    }
+                    if (parsed != null && parsed.events.isNotEmpty()) {
+                        totalSkipped += parsed.skippedCount
+                        when (entryKind) {
+                            ZipEntryKind.SPOTIFY_EXTENDED -> {
+                                hasExtendedSpotify = true
+                                extendedSpotifyEvents += parsed.events
+                                formats += parsed.formatDetected
+                            }
+                            ZipEntryKind.SPOTIFY_ACCOUNT -> {
+                                accountSpotifyEvents += parsed.events
+                                if (!hasExtendedSpotify) formats += parsed.formatDetected
+                            }
+                            else -> {
+                                otherEvents += parsed.events
+                                formats += parsed.formatDetected
+                            }
                         }
                     }
                 }
                 zis.closeEntry()
             }
         }
+
+        // Full Spotify exports often include BOTH Extended Streaming History AND Account Data
+        // StreamingHistory_music_*.json (which overlaps the last 12 months). Prefer Extended
+        // whenever present so the user's past year is never double-imported!
+        val allEvents = ArrayList<ScrobbleEventEntity>(
+            extendedSpotifyEvents.size + otherEvents.size + if (hasExtendedSpotify) 0 else accountSpotifyEvents.size,
+        )
+        allEvents += extendedSpotifyEvents
+        if (!hasExtendedSpotify) {
+            allEvents += accountSpotifyEvents
+        } else if (accountSpotifyEvents.isNotEmpty()) {
+            // Keep any podcast rows from Account History if Extended had none, drop music overlap
+            allEvents += accountSpotifyEvents.filter { it.mediaCategory == ScrobbleMediaCategory.PODCAST }
+            formats.remove("Spotify Streaming History")
+        }
+        allEvents += otherEvents
+
         val label = when {
             formats.isEmpty() -> "ZIP Archive (no history found)"
             formats.size == 1 -> "${formats.first()} (ZIP)"
             else -> "${formats.take(2).joinToString(" + ")} (ZIP)"
         }
         return ImportResult(allEvents, label, totalSkipped)
+    }
+
+    private enum class ZipEntryKind {
+        SKIP,
+        SPOTIFY_EXTENDED,
+        SPOTIFY_ACCOUNT,
+        YOUTUBE_JSON,
+        YOUTUBE_HTML,
+        GENERIC_HISTORY,
+    }
+
+    private fun classifyZipEntry(isDirectory: Boolean, lowerPath: String, baseName: String): ZipEntryKind {
+        if (isDirectory || lowerPath.contains("__macosx") || baseName.startsWith(".")) {
+            return ZipEntryKind.SKIP
+        }
+        // Always ignore Spotify Technical Log Information / error logs / telemetry / metadata
+        if (lowerPath.contains("technical log") ||
+            lowerPath.contains("technical_log") ||
+            baseName in NON_HISTORY_SPOTIFY_FILES ||
+            baseName.contains("error") ||
+            baseName.contains("rawcorestream") ||
+            baseName.contains("stutter") ||
+            baseName.contains("clientevent") ||
+            baseName.contains("diagnostic") ||
+            baseName.contains("crash") ||
+            baseName.startsWith("playlist") ||
+            baseName.contains("search-history") ||
+            baseName.contains("search_history") ||
+            baseName.contains("subscriptions") ||
+            baseName.contains("comments") ||
+            baseName.contains("live-chat") ||
+            baseName.contains("my-comments") ||
+            baseName.contains("library-songs")
+        ) {
+            return ZipEntryKind.SKIP
+        }
+
+        // Spotify Extended Streaming History (exact allowlist)
+        if ((baseName.startsWith("streaming_history_audio") ||
+                baseName.startsWith("streaming_history_video") ||
+                baseName.startsWith("endsong")) &&
+            baseName.endsWith(".json")
+        ) {
+            return ZipEntryKind.SPOTIFY_EXTENDED
+        }
+
+        // Spotify Account Data Streaming History (exact allowlist)
+        if ((baseName.startsWith("streaminghistory_music") ||
+                baseName.startsWith("streaminghistory_podcast") ||
+                baseName.startsWith("streaminghistory")) &&
+            baseName.endsWith(".json")
+        ) {
+            return ZipEntryKind.SPOTIFY_ACCOUNT
+        }
+
+        // If inside a Spotify export folder and NOT one of the streaming history files above, skip it!
+        if (lowerPath.contains("spotify") &&
+            (lowerPath.contains("my_spotify_data") ||
+                lowerPath.contains("spotify account data") ||
+                lowerPath.contains("spotify extended streaming history"))
+        ) {
+            return ZipEntryKind.SKIP
+        }
+
+        // Google Takeout full archive: allowlist ONLY YouTube / YouTube Music watch & music history!
+        if (lowerPath.startsWith("takeout/") || lowerPath.contains("/takeout/")) {
+            val isYouTubeFolder = lowerPath.contains("youtube")
+            if (!isYouTubeFolder) return ZipEntryKind.SKIP
+            val isHistoryFile = baseName == "watch-history.json" ||
+                baseName == "music-history.json" ||
+                baseName == "myactivity.json" ||
+                baseName == "watch-history.html" ||
+                baseName == "music-history.html" ||
+                baseName == "myactivity.html" ||
+                (lowerPath.contains("/history/") && (baseName.endsWith(".json") || baseName.endsWith(".html")))
+            if (!isHistoryFile) return ZipEntryKind.SKIP
+            return if (baseName.endsWith(".html") || baseName.endsWith(".htm")) {
+                ZipEntryKind.YOUTUBE_HTML
+            } else {
+                ZipEntryKind.YOUTUBE_JSON
+            }
+        }
+
+        // Standalone YouTube Takeout HTML/JSON files inside a custom ZIP
+        if (baseName == "watch-history.html" || baseName == "music-history.html" || baseName == "myactivity.html") {
+            return ZipEntryKind.YOUTUBE_HTML
+        }
+        if (baseName == "watch-history.json" || baseName == "music-history.json") {
+            return ZipEntryKind.YOUTUBE_JSON
+        }
+
+        // Generic exports (Onyx, Last.fm, Pano, ListenBrainz, stats.fm, SoundCloud, Apple Music)
+        val supportedExt = baseName.endsWith(".json") ||
+            baseName.endsWith(".jsonl") ||
+            baseName.endsWith(".csv")
+        if (supportedExt) return ZipEntryKind.GENERIC_HISTORY
+        return ZipEntryKind.SKIP
     }
 
     private fun readBoundedEntry(input: InputStream, maxBytes: Int): ByteArray? {
@@ -300,7 +424,11 @@ object ScrobbleImportExport {
                         parseOnyxEvents(element)
                     sample.containsKey("time") && (sample.containsKey("artist") || sample.containsKey("track")) && !sample.containsKey("header") ->
                         parsePanoArray(element)
-                    else -> parseLastFmArray(element)
+                    sample.containsKey("artist") &&
+                        (sample.containsKey("name") || sample.containsKey("track")) &&
+                        (sample.containsKey("date") || sample.containsKey("uts") || sample.containsKey("timestamp")) ->
+                        parseLastFmArray(element)
+                    else -> ImportResult(emptyList(), "Unsupported JSON Array", 0)
                 }
             }
             else -> ImportResult(emptyList(), "Unsupported", 0)
@@ -459,14 +587,15 @@ object ScrobbleImportExport {
                 continue
             }
             val tsMs = parseFlexibleTimestamp(obj.str("endTime")) ?: run { skipped++; continue }
+            val startedMs = (tsMs - msPlayed).coerceAtLeast(1L)
             results += ScrobbleEventEntity(
                 trackKey = normalizeScrobbleTrackKey(artist, title),
                 title = title,
                 artist = artist,
                 durationMs = msPlayed,
                 listenedMs = msPlayed,
-                startedAtMs = (tsMs - msPlayed).coerceAtLeast(1L),
-                scrobbledAtMs = tsMs,
+                startedAtMs = startedMs,
+                scrobbledAtMs = startedMs,
                 sourcePackage = "com.spotify.music",
                 sourceAppName = "Spotify",
                 lastFmSyncStatus = ScrobbleSyncStatus.SYNCED,
@@ -484,7 +613,10 @@ object ScrobbleImportExport {
             val obj = item as? JsonObject ?: run { skipped++; continue }
             val header = obj.str("header").trim()
             val rawTitle = obj.str("title").trim()
-            if (rawTitle.isBlank() || rawTitle.startsWith("Watched a video that has been removed", ignoreCase = true)) {
+            val isAd = (obj["details"] as? JsonArray)?.any { detail ->
+                (detail as? JsonObject)?.str("name")?.contains("Google Ads", ignoreCase = true) == true
+            } == true
+            if (isAd || rawTitle.isBlank() || rawTitle.startsWith("Watched a video that has been removed", ignoreCase = true)) {
                 skipped++
                 continue
             }
@@ -500,7 +632,11 @@ object ScrobbleImportExport {
             val isYtMusic = header.equals("YouTube Music", ignoreCase = true) ||
                 obj.str("titleUrl").contains("music.youtube.com", ignoreCase = true)
 
-            val (parsedArtist, parsedTitle) = splitYouTubeTitleAndArtist(strippedTitle, subtitleChannel)
+            val (parsedArtist, parsedTitle) = splitYouTubeTitleAndArtist(
+                rawTitle = strippedTitle,
+                channelName = subtitleChannel,
+                isYouTubeMusic = isYtMusic,
+            )
             if (parsedTitle.isBlank() || parsedArtist.isBlank()) {
                 skipped++
                 continue
@@ -537,8 +673,19 @@ object ScrobbleImportExport {
         return ImportResult(results, "YouTube / YT Music Takeout", skipped)
     }
 
-    private fun splitYouTubeTitleAndArtist(rawTitle: String, channelName: String): Pair<String, String> {
+    private fun splitYouTubeTitleAndArtist(
+        rawTitle: String,
+        channelName: String,
+        isYouTubeMusic: Boolean = false,
+    ): Pair<String, String> {
+        val isTopicChannel = channelName.trim().endsWith("- Topic", ignoreCase = true)
         val cleanChannel = channelName.replace(Regex("\\s*-\\s*Topic$", RegexOption.IGNORE_CASE), "").trim()
+        // For YouTube Music or auto-generated "- Topic" channels, the channel name IS
+        // the true artist and the title IS the true track name — splitting on " - "
+        // corrupts song titles like "Song - Radio Edit" or "Part 1 - Intro".
+        if ((isYouTubeMusic || isTopicChannel) && cleanChannel.isNotBlank()) {
+            return cleanChannel to rawTitle
+        }
         val separators = listOf(" - ", " — ", " – ")
         for (sep in separators) {
             val idx = rawTitle.indexOf(sep)
@@ -988,6 +1135,46 @@ object ScrobbleImportExport {
     }
 
     /**
+     * Streams a Google Takeout `watch-history.html` entry without loading an entire
+     * 100MB+ multi-year DOM tree into RAM (splits on `outer-cell` boundaries cleanly).
+     */
+    private fun parseYouTubeTakeoutHtmlStream(input: InputStream): ImportResult {
+        val reader = java.io.BufferedReader(java.io.InputStreamReader(input, Charsets.UTF_8), 64 * 1024)
+        val results = mutableListOf<ScrobbleEventEntity>()
+        var totalSkipped = 0
+        val chunkBuilder = StringBuilder(64 * 1024)
+        val buf = CharArray(32 * 1024)
+        var totalChars = 0L
+
+        fun flushChunk(text: String) {
+            if (text.isBlank()) return
+            val parsed = parseYouTubeTakeoutHtml(text)
+            results += parsed.events
+            totalSkipped += parsed.skippedCount
+        }
+
+        while (true) {
+            val n = reader.read(buf)
+            if (n <= 0) break
+            totalChars += n
+            if (totalChars > MAX_ZIP_ENTRY_BYTES.toLong() * 2L) break
+            chunkBuilder.append(buf, 0, n)
+            if (chunkBuilder.length >= 256 * 1024) {
+                val splitIdx = chunkBuilder.lastIndexOf("<div class=\"outer-cell")
+                if (splitIdx > 0) {
+                    val ready = chunkBuilder.substring(0, splitIdx)
+                    chunkBuilder.delete(0, splitIdx)
+                    flushChunk(ready)
+                }
+            }
+        }
+        if (chunkBuilder.isNotEmpty()) {
+            flushChunk(chunkBuilder.toString())
+        }
+        return ImportResult(results, "Google Takeout (YouTube HTML)", totalSkipped)
+    }
+
+    /**
      * Parses Google Takeout's default `watch-history.html` export (YouTube & YouTube Music).
      * Automatically separates Music vs. Videos/Other via [MediaCategoryClassifier].
      */
@@ -1000,6 +1187,13 @@ object ScrobbleImportExport {
         val results = mutableListOf<ScrobbleEventEntity>()
         var skipped = 0
         for (cell in cells) {
+            val cellFullText = cell.text()
+            if (cellFullText.contains("From Google Ads", ignoreCase = true) ||
+                cellFullText.startsWith("Searched for", ignoreCase = true)
+            ) {
+                skipped++
+                continue
+            }
             val links = cell.select("a")
             if (links.isEmpty()) continue
             val titleLink = links[0]
@@ -1021,7 +1215,11 @@ object ScrobbleImportExport {
                 ?: textLines.lastOrNull().orEmpty()
             val tsMs = parseTakeoutHtmlDate(dateCandidate) ?: run { skipped++; continue }
 
-            val (parsedArtist, parsedTitle) = splitYouTubeTitleAndArtist(rawTitle, channel)
+            val (parsedArtist, parsedTitle) = splitYouTubeTitleAndArtist(
+                rawTitle = rawTitle,
+                channelName = channel,
+                isYouTubeMusic = isYtMusic,
+            )
             if (parsedTitle.isBlank() || parsedArtist.isBlank()) {
                 skipped++
                 continue

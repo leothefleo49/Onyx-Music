@@ -375,6 +375,11 @@ class PlayerViewModel @Inject constructor(
         trackOverridesRepository.overrides
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    /** Whole-album overrides keyed by normalized album|artist. */
+    val albumOverrides: StateFlow<Map<String, com.lastwave.app.data.local.AlbumOverride>> =
+        trackOverridesRepository.albumOverrides
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     val undoQueueSwitch: StateFlow<com.lastwave.app.playback.QueueSwitchUndoSnapshot?> =
         player.undoQueueSwitch
 

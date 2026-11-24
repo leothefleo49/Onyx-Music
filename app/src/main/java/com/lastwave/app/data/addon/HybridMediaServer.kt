@@ -413,7 +413,7 @@ class HybridMediaServer @Inject constructor(
         const val MIME = "audio/mp4"
         const val PARALLEL = 6
         const val MAX_SESSIONS = 16
-        const val READ_WAIT_MS = 30_000L
+        const val READ_WAIT_MS = 10_000L
         /** Upper bound for the init→first-fragment gap we fetch as a segment index. */
         const val MAX_INDEX_GAP_BYTES = 256L * 1024
         /** CloudFront keeps idle keep-alive connections well beyond this. */

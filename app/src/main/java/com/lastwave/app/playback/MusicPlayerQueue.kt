@@ -288,16 +288,18 @@ internal fun MusicPlayer.nextQueueIndex(state: MusicPlayerState, wrap: Boolean =
             ?: C.INDEX_UNSET
     }
 
-internal fun MusicPlayer.previousQueueIndex(state: MusicPlayerState): Int {
+internal fun MusicPlayer.previousQueueIndex(state: MusicPlayerState, wrap: Boolean = true): Int {
         val queue = state.queue
         if (queue.isEmpty()) return C.INDEX_UNSET
+        if (queue.size == 1) return 0
         val start = state.currentIndex - 1
-        // Manual navigation only: repeat-one wraps like repeat-all so a
-        // manual previous never silently does nothing (auto-advance still
-        // replays in place on ONE via handleNaturalTrackEnd).
-        val wrapRepeat = state.repeatMode == Player.REPEAT_MODE_ALL
-        val ordered = (start downTo 0) + if (wrapRepeat) (queue.lastIndex downTo 0) else emptyList()
-        return ordered.firstOrNull { queue[it].mediaIdKey() !in unavailableMediaIds }
+        // Mirror nextQueueIndex(state, wrap = true): if skipping forward at the
+        // end of an album/queue wraps to the first track, skipping backward from
+        // the first track wraps cleanly to the last track.
+        val shouldWrap = wrap || state.repeatMode == Player.REPEAT_MODE_ALL
+        val ordered = (start downTo 0) + if (shouldWrap) (queue.lastIndex downTo 0) else emptyList()
+        return ordered.firstOrNull { it != state.currentIndex && queue[it].mediaIdKey() !in unavailableMediaIds }
+            ?: ordered.firstOrNull { queue[it].mediaIdKey() !in unavailableMediaIds }
             ?: C.INDEX_UNSET
     }
 

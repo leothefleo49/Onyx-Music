@@ -206,19 +206,27 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
                         (themeState.colorScheme.onPrimary.green * 255f).toInt(),
                         (themeState.colorScheme.onPrimary.blue * 255f).toInt(),
                     )
-                    val iconBmp = com.lastwave.app.ui.common.renderOnyxLogoBitmap(
-                        context = this@MainShellActivity,
-                        appIcon = themeState.appIcon,
-                        primaryArgb = primaryArgb,
-                        onPrimaryArgb = onPrimaryArgb,
-                        sizePx = 192,
-                    )
-                    @Suppress("DEPRECATION")
-                    val desc = android.app.ActivityManager.TaskDescription(
-                        getString(R.string.app_name),
-                        iconBmp,
-                        primaryArgb,
-                    )
+                    val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        android.app.ActivityManager.TaskDescription.Builder()
+                            .setLabel(getString(R.string.app_name))
+                            .setIcon(themeState.appIcon.mipmapRes)
+                            .setPrimaryColor(primaryArgb)
+                            .build()
+                    } else {
+                        val iconBmp = com.lastwave.app.ui.common.renderOnyxLogoBitmap(
+                            context = this@MainShellActivity,
+                            appIcon = themeState.appIcon,
+                            primaryArgb = primaryArgb,
+                            onPrimaryArgb = onPrimaryArgb,
+                            sizePx = 192,
+                        )
+                        @Suppress("DEPRECATION")
+                        android.app.ActivityManager.TaskDescription(
+                            getString(R.string.app_name),
+                            iconBmp,
+                            primaryArgb,
+                        )
+                    }
                     setTaskDescription(desc)
                 }
             }
@@ -378,11 +386,14 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
 
     private fun handleNavigationIntent(intent: Intent?) {
         if (intent == null) return
+        if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
         if (intent.getStringExtra("widget_navigation") == "search") {
             runCatching { appRouteNavigator.get().navigateTo(Screen.Search.createRoute()) }
             return
         }
-        if (intent.action == com.lastwave.app.widget.wave.WaveWidgetNavigation.ACTION_OPEN_NOW_PLAYING) {
+        if (intent.action == com.lastwave.app.widget.wave.WaveWidgetNavigation.ACTION_OPEN_NOW_PLAYING ||
+            intent.getBooleanExtra("open_player", false)
+        ) {
             com.lastwave.app.widget.wave.WaveWidgetNavigation.requestOpen()
             return
         }

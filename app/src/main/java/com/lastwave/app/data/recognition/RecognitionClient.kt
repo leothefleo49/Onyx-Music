@@ -48,7 +48,10 @@ private data class TagRequest(
 }
 
 @Serializable
-private data class TagResponse(val track: Track? = null) {
+private data class TagResponse(
+    val track: Track? = null,
+    val retryms: Long? = null,
+) {
     @Serializable
     data class Track(
         val title: String? = null,
@@ -76,7 +79,11 @@ private data class TagResponse(val track: Track? = null) {
 @Singleton
 class RecognitionClient @Inject constructor(baseClient: OkHttpClient) {
 
-    private val http = baseClient.newBuilder().callTimeout(20, TimeUnit.SECONDS).build()
+    private val http = baseClient.newBuilder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(7, TimeUnit.SECONDS)
+        .callTimeout(8, TimeUnit.SECONDS)
+        .build()
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; isLenient = true }
     private val gate = Mutex()
     private var lastSentAt = 0L
@@ -85,9 +92,26 @@ class RecognitionClient @Inject constructor(baseClient: OkHttpClient) {
             size > CACHE_SIZE
     }
 
-    suspend fun recognize(signatureUri: String, sampleMs: Long): RecognizedSong {
+    data class ProbeOutcome(
+        val song: RecognizedSong?,
+        val retryMs: Long? = null,
+    )
+
+    suspend fun recognize(signatureUri: String, sampleMs: Long): RecognizedSong =
+        recognizeProbe(signatureUri, sampleMs, sessionUuid = UUID.randomUUID().toString()).song
+            ?: throw RecognitionFailure.NoMatch()
+
+    /**
+     * Progressive recognition probe reusing [sessionUuid] across growing windows
+     * (e.g. 2.8s -> 5.0s -> 7.5s -> 10.5s), matching the real Shazam app protocol.
+     */
+    suspend fun recognizeProbe(
+        signatureUri: String,
+        sampleMs: Long,
+        sessionUuid: String,
+    ): ProbeOutcome {
         synchronized(cache) { cache[signatureUri] }?.let { (at, song) ->
-            if (System.currentTimeMillis() - at < CACHE_TTL_MS) return song
+            if (System.currentTimeMillis() - at < CACHE_TTL_MS) return ProbeOutcome(song)
         }
         return gate.withLock {
             var backoff = INITIAL_BACKOFF_MS
@@ -97,9 +121,11 @@ class RecognitionClient @Inject constructor(baseClient: OkHttpClient) {
                 if (wait > 0) delay(wait)
                 lastSentAt = System.currentTimeMillis()
                 try {
-                    val song = send(signatureUri, sampleMs)
-                    synchronized(cache) { cache[signatureUri] = System.currentTimeMillis() to song }
-                    return@withLock song
+                    val outcome = send(signatureUri, sampleMs, sessionUuid)
+                    outcome.song?.let { song ->
+                        synchronized(cache) { cache[signatureUri] = System.currentTimeMillis() to song }
+                    }
+                    return@withLock outcome
                 } catch (e: RecognitionFailure.RateLimited) {
                     if (attempt++ >= MAX_ATTEMPTS) throw e
                     delay(backoff)
@@ -111,18 +137,22 @@ class RecognitionClient @Inject constructor(baseClient: OkHttpClient) {
         }
     }
 
-    private suspend fun send(signatureUri: String, sampleMs: Long): RecognizedSong = withContext(Dispatchers.IO) {
-        val now = System.currentTimeMillis() / 1000
+    private suspend fun send(
+        signatureUri: String,
+        sampleMs: Long,
+        sessionUuid: String,
+    ): ProbeOutcome = withContext(Dispatchers.IO) {
+        val nowMs = System.currentTimeMillis()
         val body = json.encodeToString(
             TagRequest(
                 // Fixed placeholder: the service wants the fields, not the user's real position.
                 geolocation = TagRequest.Geo(altitude = 300.0, latitude = 45.0, longitude = 2.0),
-                signature = TagRequest.Sig(samplems = sampleMs, timestamp = now, uri = signatureUri),
-                timestamp = now,
+                signature = TagRequest.Sig(samplems = sampleMs, timestamp = nowMs, uri = signatureUri),
+                timestamp = nowMs,
                 timezone = TimeZone.getDefault().id,
             ),
         )
-        val url = "$ENDPOINT/${UUID.randomUUID().toString().uppercase()}/${UUID.randomUUID()}"
+        val url = "$ENDPOINT/${UUID.randomUUID().toString().uppercase()}/$sessionUuid"
             .toHttpUrl().newBuilder()
             .addQueryParameter("sync", "true")
             .addQueryParameter("webv3", "true")
@@ -144,21 +174,25 @@ class RecognitionClient @Inject constructor(baseClient: OkHttpClient) {
                 val code = response.code
                 when {
                     code == 429 -> throw RecognitionFailure.RateLimited()
-                    code == 404 -> throw RecognitionFailure.NoMatch()
+                    code == 404 -> return@withContext ProbeOutcome(null)
                     code !in 200..299 -> throw RecognitionFailure.Server(code)
                 }
                 val text = response.body?.string().orEmpty()
-                val track = runCatching { json.decodeFromString<TagResponse>(text) }.getOrNull()?.track
-                    ?: throw RecognitionFailure.NoMatch()
-                val title = track.title?.takeIf { it.isNotBlank() } ?: throw RecognitionFailure.NoMatch()
+                val parsed = runCatching { json.decodeFromString<TagResponse>(text) }.getOrNull()
+                val track = parsed?.track
+                    ?: return@withContext ProbeOutcome(null, retryMs = parsed?.retryms)
+                val title = track.title?.takeIf { it.isNotBlank() }
+                    ?: return@withContext ProbeOutcome(null, retryMs = parsed.retryms)
                 val album = track.sections.orEmpty().firstOrNull { it?.type == "SONG" }
                     ?.metadata.orEmpty().firstOrNull { it?.title == "Album" }?.text
-                RecognizedSong(
-                    title = title,
-                    artist = track.subtitle.orEmpty(),
-                    album = album,
-                    coverUrl = track.images?.coverArtHq ?: track.images?.coverart,
-                    shazamUrl = track.url,
+                ProbeOutcome(
+                    song = RecognizedSong(
+                        title = title,
+                        artist = track.subtitle.orEmpty(),
+                        album = album,
+                        coverUrl = track.images?.coverArtHq ?: track.images?.coverart,
+                        shazamUrl = track.url,
+                    ),
                 )
             }
         } catch (e: IOException) {
@@ -168,13 +202,13 @@ class RecognitionClient @Inject constructor(baseClient: OkHttpClient) {
 
     private companion object {
         const val ENDPOINT = "https://amp.shazam.com/discovery/v5/en/US/android/-/tag"
-        const val MIN_INTERVAL_MS = 1_000L
-        const val INITIAL_BACKOFF_MS = 2_000L
-        const val MAX_ATTEMPTS = 3
+        const val MIN_INTERVAL_MS = 400L
+        const val INITIAL_BACKOFF_MS = 1_500L
+        const val MAX_ATTEMPTS = 2
         const val CACHE_TTL_MS = 5 * 60_000L
         const val CACHE_SIZE = 20
 
-        // The service only answers clients that look like its Android app.
-        const val USER_AGENT = "Dalvik/2.1.0 (Linux; U; Android 6.0.1; SM-G920F Build/MMB29K)"
+        // Modern Android Dalvik User-Agent matching current Shazam Android clients.
+        const val USER_AGENT = "Dalvik/2.1.0 (Linux; U; Android 14; Pixel 8 Build/UQ1A.240205.004)"
     }
 }

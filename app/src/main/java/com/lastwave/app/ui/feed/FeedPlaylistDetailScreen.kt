@@ -20,11 +20,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -157,6 +165,7 @@ fun FeedPlaylistDetailScreen(
                     onPlay = viewModel::playTracks,
                     onShuffle = viewModel::shuffleTracks,
                     onSave = viewModel::saveToLibrary,
+                    onDownloadAll = viewModel::downloadAll,
                     isSaving = current.isSaving,
                     savedToLibrary = current.savedToLibrary,
                     saveError = current.saveError,
@@ -202,6 +211,7 @@ private fun PlaylistContent(
     onPlay: (List<YouTubeMusicTrack>, Int) -> Unit,
     onShuffle: (List<YouTubeMusicTrack>) -> Unit,
     onSave: () -> Unit,
+    onDownloadAll: (List<YouTubeMusicTrack>) -> Int,
     isSaving: Boolean,
     savedToLibrary: Boolean,
     saveError: String?,
@@ -280,40 +290,146 @@ private fun PlaylistContent(
                     textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(18.dp))
+                // Synced Spotify / YouTube Music library playlists are ALREADY in the user's
+                // library — never show a confusing "Save to library" button on them, and use
+                // the same polished circular action bar + Play FAB as AlbumDetailScreen.
+                val isAlreadySynced = playlist.id.startsWith("sp_") ||
+                    playlist.id.startsWith("spotify:") ||
+                    playlist.id == "yt_liked" ||
+                    playlist.id == "yt_recent"
+                var downloadTriggered by remember(playlist.id) { mutableStateOf(false) }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Button(
-                        onClick = { onPlay(displayedTracks, 0) },
-                        modifier = Modifier.weight(1f),
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.home_play))
+                        FilledTonalIconButton(
+                            onClick = { onShuffle(displayedTracks) },
+                            enabled = displayedTracks.isNotEmpty(),
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            ),
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Shuffle,
+                                contentDescription = stringResource(R.string.feed_shuffle),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(21.dp),
+                            )
+                        }
+
+                        FilledTonalIconButton(
+                            onClick = {
+                                val count = onDownloadAll(displayedTracks)
+                                if (count > 0) {
+                                    downloadTriggered = true
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "Downloading $count tracks",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            },
+                            enabled = displayedTracks.isNotEmpty(),
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = if (downloadTriggered) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                            ),
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                if (downloadTriggered) Icons.Filled.DownloadDone else Icons.Filled.Download,
+                                contentDescription = "Download all tracks",
+                                tint = if (downloadTriggered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(21.dp),
+                            )
+                        }
+
+                        if (!isAlreadySynced) {
+                            FilledTonalIconButton(
+                                onClick = onSave,
+                                enabled = !isSaving && !savedToLibrary && displayedTracks.isNotEmpty(),
+                                shape = CircleShape,
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = if (savedToLibrary) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                ),
+                                modifier = Modifier.size(48.dp),
+                            ) {
+                                Icon(
+                                    if (savedToLibrary) Icons.Filled.Check else Icons.Filled.BookmarkAdd,
+                                    contentDescription = if (savedToLibrary) "Saved to library" else "Save to library",
+                                    tint = if (savedToLibrary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(21.dp),
+                                )
+                            }
+                        }
+
+                        FilledTonalIconButton(
+                            onClick = {
+                                com.lastwave.app.util.ShareHelper.sharePlaylist(
+                                    context = context,
+                                    playlistTitle = playlist.title.ifBlank { "Playlist" },
+                                    playlistId = playlist.id,
+                                    tracksPreview = displayedTracks.take(10).map { t ->
+                                        PlayableTrack(title = t.title, artist = t.artist, album = t.album, videoId = t.videoId)
+                                    },
+                                )
+                            },
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            ),
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Share,
+                                contentDescription = "Share playlist",
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(21.dp),
+                            )
+                        }
                     }
-                    FilledTonalButton(
-                        onClick = { onShuffle(displayedTracks) },
-                        modifier = Modifier.weight(1f),
+
+                    Surface(
+                        onClick = { onPlay(displayedTracks, 0) },
+                        enabled = displayedTracks.isNotEmpty(),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        shadowElevation = 6.dp,
+                        modifier = Modifier.size(56.dp),
                     ) {
-                        Icon(Icons.Filled.Shuffle, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.feed_shuffle))
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Filled.PlayArrow,
+                                contentDescription = stringResource(R.string.home_play),
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(30.dp),
+                            )
+                        }
                     }
                 }
-                Spacer(Modifier.height(18.dp))
-                FilledTonalButton(
-                    onClick = onSave,
-                    enabled = !isSaving && !savedToLibrary,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(when {
-                        isSaving -> "Saving…"
-                        savedToLibrary -> "Saved to library"
-                        else -> "Save to library"
-                    })
+                if (isAlreadySynced) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = if (playlist.id.startsWith("sp_") || playlist.id.startsWith("spotify:")) {
+                            "Synced with your Spotify library"
+                        } else {
+                            "Synced with your YouTube Music library"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                 }
                 saveError?.let { message ->
+                    Spacer(Modifier.height(6.dp))
                     Text(message, color = MaterialTheme.colorScheme.error)
                 }
                 Spacer(Modifier.height(18.dp))

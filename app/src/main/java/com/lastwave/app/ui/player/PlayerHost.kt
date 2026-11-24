@@ -1046,12 +1046,58 @@ internal fun ExpandedPlayer(
     val canvas by viewModel.canvasState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val trackOverrides by viewModel.trackOverrides.collectAsStateWithLifecycle()
+    val albumOverrides by viewModel.albumOverrides.collectAsStateWithLifecycle()
     val likedTrackKeys by viewModel.likedTrackKeys.collectAsStateWithLifecycle()
     val currentTrack = state.current
     val currentOverride = currentTrack?.let {
         trackOverrides[
             com.lastwave.app.data.local.trackOverrideKey(it.title, it.artist, it.videoId)
         ]
+    }
+    val currentAlbumOverride = currentTrack?.album?.takeIf { it.isNotBlank() }?.let { albumName ->
+        albumOverrides[com.lastwave.app.data.local.albumOverrideKey(albumName, currentTrack.artist)]
+            ?: albumOverrides[com.lastwave.app.data.local.albumOverrideKey(albumName)]
+            ?: albumOverrides.values.firstOrNull { it.album.equals(albumName, ignoreCase = true) }
+    }
+    val effectivePlayMode = currentOverride?.defaultPlayMode
+        ?.takeIf { it != com.lastwave.app.data.local.DefaultPlayerMode.FOLLOW_GLOBAL }
+        ?: currentAlbumOverride?.defaultPlayMode
+        ?: com.lastwave.app.data.local.DefaultPlayerMode.FOLLOW_GLOBAL
+    val effectiveVideoDisabled = (currentOverride?.videoDisabled == true) ||
+        (currentAlbumOverride?.videoDisabled == true) ||
+        effectivePlayMode == com.lastwave.app.data.local.DefaultPlayerMode.NONE
+    val effectiveCanvasDisabled = (currentOverride?.canvasDisabled == true) ||
+        (currentAlbumOverride?.canvasDisabled == true) ||
+        effectivePlayMode == com.lastwave.app.data.local.DefaultPlayerMode.NONE
+    val effectiveAnimationsDisabled = (currentOverride?.animationsDisabled == true) ||
+        (currentAlbumOverride?.animationsDisabled == true) ||
+        effectivePlayMode == com.lastwave.app.data.local.DefaultPlayerMode.NONE
+    val effectiveFullBleed = when (effectivePlayMode) {
+        com.lastwave.app.data.local.DefaultPlayerMode.FULLSCREEN_ARTWORK -> true
+        com.lastwave.app.data.local.DefaultPlayerMode.NONE -> false
+        else -> settings.canvasFullBleed
+    }
+    val effectiveLiveBackground = when (effectivePlayMode) {
+        com.lastwave.app.data.local.DefaultPlayerMode.LIVE_BACKGROUND -> true
+        com.lastwave.app.data.local.DefaultPlayerMode.NONE -> false
+        else -> settings.rotatingBackgroundEnabled && !effectiveAnimationsDisabled
+    }
+
+    // Apply per-album / per-track default playing mode whenever the active track changes.
+    val overrideTrackKey = currentTrack?.let { it.videoId ?: "${it.artist}|${it.title}" }
+    LaunchedEffect(overrideTrackKey, effectivePlayMode) {
+        if (overrideTrackKey == null) return@LaunchedEffect
+        when (effectivePlayMode) {
+            com.lastwave.app.data.local.DefaultPlayerMode.LYRICS -> onTabChange(FullPlayerTab.LYRICS)
+            com.lastwave.app.data.local.DefaultPlayerMode.FULLSCREEN_ARTWORK,
+            com.lastwave.app.data.local.DefaultPlayerMode.LIVE_BACKGROUND,
+            com.lastwave.app.data.local.DefaultPlayerMode.VIDEO,
+            com.lastwave.app.data.local.DefaultPlayerMode.NONE -> {
+                onPlayerLyricsChange(false)
+                onTabChange(FullPlayerTab.NOW_PLAYING)
+            }
+            com.lastwave.app.data.local.DefaultPlayerMode.FOLLOW_GLOBAL -> Unit
+        }
     }
     // Same test Liked Songs storage uses: normalized title|artist OR YouTube id.
     val isLiked = currentTrack != null &&
@@ -1075,9 +1121,9 @@ internal fun ExpandedPlayer(
         onSetLyricsStyle = viewModel::setLyricsStyle,
         seekbarStyle = settings.seekbarStyle,
         wavySeekbarEnabled = settings.wavySeekbarEnabled,
-        rotatingBackgroundEnabled = settings.rotatingBackgroundEnabled && currentOverride?.animationsDisabled != true,
-        lyricsRotatingBackgroundEnabled = settings.lyricsRotatingBackgroundEnabled && currentOverride?.animationsDisabled != true,
-        fluidBeatSyncEnabled = settings.fluidBeatSyncEnabled && currentOverride?.animationsDisabled != true,
+        rotatingBackgroundEnabled = effectiveLiveBackground,
+        lyricsRotatingBackgroundEnabled = settings.lyricsRotatingBackgroundEnabled && !effectiveAnimationsDisabled,
+        fluidBeatSyncEnabled = (settings.fluidBeatSyncEnabled || effectivePlayMode == com.lastwave.app.data.local.DefaultPlayerMode.LIVE_BACKGROUND) && !effectiveAnimationsDisabled,
         lyricsOffsetMs = lyricsOffsetMs,
         onSetLyricsOffsetMs = viewModel::setLyricsOffsetMs,
         lyricsFontScale = settings.lyricsFontScale,
@@ -1086,12 +1132,13 @@ internal fun ExpandedPlayer(
         onSetLyricsCentered = viewModel::setLyricsCentered,
         lyricsButtonsAutoHideSeconds = settings.lyricsButtonsAutoHideSeconds,
         translationLanguage = settings.translationLanguage,
-        canvas = if (currentOverride?.canvasDisabled == true) null else canvas,
-        canvasEnabled = settings.canvasEnabled && currentOverride?.canvasDisabled != true,
-        canvasFullBleedEnabled = settings.canvasFullBleed,
+        canvas = if (effectiveCanvasDisabled) null else canvas,
+        canvasEnabled = (settings.canvasEnabled || effectivePlayMode == com.lastwave.app.data.local.DefaultPlayerMode.LIVE_BACKGROUND) && !effectiveCanvasDisabled,
+        canvasFullBleedEnabled = effectiveFullBleed,
         canvasGradientBlurEnabled = settings.canvasGradientBlurEnabled,
-        musicVideoEnabled = settings.musicVideoEnabled && currentOverride?.videoDisabled != true,
-        musicVideoNowPlayingButtonEnabled = settings.musicVideoNowPlayingButtonEnabled && currentOverride?.videoDisabled != true,
+        musicVideoEnabled = (settings.musicVideoEnabled || effectivePlayMode == com.lastwave.app.data.local.DefaultPlayerMode.VIDEO) && !effectiveVideoDisabled,
+        musicVideoNowPlayingButtonEnabled = (settings.musicVideoNowPlayingButtonEnabled || effectivePlayMode == com.lastwave.app.data.local.DefaultPlayerMode.VIDEO) && !effectiveVideoDisabled,
+        preferVideoAutoStart = effectivePlayMode == com.lastwave.app.data.local.DefaultPlayerMode.VIDEO && !effectiveVideoDisabled,
         swipeToChangeTrack = settings.swipeToChangeTrack,
         showAutoEqInVolumePanel = settings.showAutoEqInVolumePanel,
         currentTab = currentTab,

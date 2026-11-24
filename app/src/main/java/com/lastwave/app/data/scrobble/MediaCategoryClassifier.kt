@@ -72,7 +72,7 @@ object MediaCategoryClassifier {
     )
 
     private val MUSIC_CHANNEL_REGEX = Regex(
-        """(-\s*topic$|vevo$|\brecords\b|\bmusic\b|\bofficial\b|\brecordings\b|\bsounds\b|\baudio\b)""",
+        """(-\s*topic$|vevo$|\brecords\b|\bmusic\b|\brecordings\b|\bsounds\b|\baudio\b)""",
         RegexOption.IGNORE_CASE,
     )
 
@@ -180,9 +180,10 @@ object MediaCategoryClassifier {
             if (hasPodcastCue && !hasMusicCue) return ScrobbleMediaCategory.PODCAST
             if (hasVideoCue && !hasMusicCue) return ScrobbleMediaCategory.VIDEO
             if (hasMusicCue) return ScrobbleMediaCategory.MUSIC
-            // Standard YouTube music uploads often format titles as "Artist - Track" and are under 10 min.
+            // Standard YouTube music uploads often format titles as "Artist - Track" and have known song duration (1-10 min).
+            // Never auto-classify unknown-duration (0ms) Takeout videos as MUSIC purely because of a dash in the title.
             val hasDashSplit = cleanTitle.contains(" - ") || cleanTitle.contains(" — ") || cleanTitle.contains(" – ")
-            if (hasDashSplit && (durationMs <= 0L || durationMs in 60_000L..600_000L) && !hasVideoCue) {
+            if (hasDashSplit && durationMs in 60_000L..600_000L && !hasVideoCue) {
                 return ScrobbleMediaCategory.MUSIC
             }
             if (durationMs >= 20L * 60_000L) {

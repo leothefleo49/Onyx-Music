@@ -168,11 +168,20 @@ internal fun ModernPlainLyricsView(
     val layoutDirection = if (isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
     CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
         val scrollState = rememberScrollState()
+        val compactHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 500
         Column(
             modifier = modifier
-                .lyricsFadingEdge(topFadeDp = 24.dp, bottomFadeDp = 100.dp)
+                .lyricsFadingEdge(
+                    topFadeDp = if (compactHeight) 12.dp else 24.dp,
+                    bottomFadeDp = if (compactHeight) 28.dp else 100.dp,
+                )
                 .verticalScroll(scrollState)
-                .padding(top = 24.dp, bottom = 90.dp, start = 16.dp, end = 16.dp),
+                .padding(
+                    top = if (compactHeight) 10.dp else 24.dp,
+                    bottom = if (compactHeight) 32.dp else 90.dp,
+                    start = 16.dp,
+                    end = 16.dp,
+                ),
         ) {
             Row(
                 modifier = Modifier.padding(bottom = 20.dp),

@@ -46,6 +46,57 @@ class GeniusLyricsApi @Inject constructor(
         }
     }
 
+    /**
+     * Keyless lyric-snippet / hummed-line search via Genius multi-search.
+     * Checks the `lyric` section first (exact line match inside lyrics) and falls
+     * back to `song` / `top_hit` sections. Used by Sing/Say-Lyrics recognition.
+     */
+    suspend fun searchByLyricSnippet(snippet: String): List<com.lastwave.app.data.recognition.RecognizedSong> =
+        withContext(Dispatchers.IO) {
+            val cleaned = snippet.trim()
+            if (cleaned.length < 3) return@withContext emptyList()
+            val url = "https://genius.com/api/search/multi?q=${URLEncoder.encode(cleaned, "UTF-8")}"
+            val body = runCatching { httpGet(url) }.getOrNull() ?: return@withContext emptyList()
+            runCatching {
+                val root = json.parseToJsonElement(body).jsonObject
+                val sections = root["response"]?.jsonObject?.get("sections")?.jsonArray
+                    ?: return@withContext emptyList()
+                val preferredTypes = listOf("lyric", "song", "top_hit")
+                val results = ArrayList<com.lastwave.app.data.recognition.RecognizedSong>()
+                val seen = HashSet<String>()
+                for (type in preferredTypes) {
+                    val section = sections.firstOrNull {
+                        (it as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == type
+                    }?.jsonObject ?: continue
+                    val hits = section["hits"]?.jsonArray ?: continue
+                    for (hit in hits) {
+                        val hitObj = hit as? JsonObject ?: continue
+                        val hitType = hitObj["type"]?.jsonPrimitive?.contentOrNull
+                        if (type == "top_hit" && hitType != "song" && hitType != "lyric") continue
+                        val res = hitObj["result"]?.jsonObject ?: continue
+                        val title = res["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                        val artist = res["artist_names"]?.jsonPrimitive?.contentOrNull?.trim()
+                            ?: res["primary_artist"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                        if (title.isBlank()) continue
+                        val key = "${title.lowercase()}|${artist.lowercase()}"
+                        if (!seen.add(key)) continue
+                        val cover = res["song_art_image_url"]?.jsonPrimitive?.contentOrNull
+                            ?: res["header_image_thumbnail_url"]?.jsonPrimitive?.contentOrNull
+                        val songUrl = res["url"]?.jsonPrimitive?.contentOrNull
+                        results += com.lastwave.app.data.recognition.RecognizedSong(
+                            title = title,
+                            artist = artist,
+                            album = null,
+                            coverUrl = cover,
+                            shazamUrl = songUrl,
+                        )
+                        if (results.size >= 5) return@withContext results
+                    }
+                }
+                results
+            }.getOrDefault(emptyList())
+        }
+
     private suspend fun scrape(title: String, artist: String): String? {
         val cleanTitle = cleanQuery(title)
         val cleanArtist = cleanQuery(artist)

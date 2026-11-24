@@ -43,6 +43,7 @@ data class OnyxFriendsUiState(
     val isLastFmConnected: Boolean = false,
     val isImportingLastFm: Boolean = false,
     val currentTrackLabel: String? = null,
+    val currentTrack: com.lastwave.app.playback.PlayableTrack? = null,
     val statusMessage: String? = null,
 ) {
     val sortedFriends: List<OnyxFriend>
@@ -105,7 +106,7 @@ class FriendsViewModel @Inject constructor(
         viewModelScope.launch {
             musicPlayer.chromeState.collect { chrome ->
                 val label = chrome.current?.let { "${it.title} — ${it.artist}" }
-                _uiState.update { it.copy(currentTrackLabel = label) }
+                _uiState.update { it.copy(currentTrackLabel = label, currentTrack = chrome.current) }
             }
         }
         if (friendsStore.contactsDiscoveryEnabled.value && ContactsDiscoveryHelper.hasContactsPermission(context)) {

@@ -53,6 +53,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Delete
@@ -306,41 +307,66 @@ class TrackLinkViewModel @Inject constructor(
     private val innerTube: com.lastwave.app.data.music.InnerTubeMusicApi,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
+    /**
+     * Resolves a verified YouTube Music / Spotify URL (never fabricating fake IDs)
+     * and opens Android's direct Share sheet so the user can send it straight to
+     * Messages, WhatsApp, Discord, etc. without manual copying.
+     */
+    fun shareTrack(
+        context: android.content.Context,
+        title: String,
+        artist: String,
+        existingVideoId: String?,
+        url: String?,
+    ) {
+        val verified = com.lastwave.app.util.ShareHelper.verifiedTrackUrlOrNull(existingVideoId, url)
+        if (verified != null) {
+            val body = com.lastwave.app.util.ShareHelper.buildTrackShareText(title, artist, verified)
+            com.lastwave.app.util.ShareHelper.shareText(context, "$title — $artist", body, "Share song")
+            return
+        }
+        viewModelScope.launch {
+            val resolvedUrl = resolveVerifiedTrackUrl(title, artist)
+            val body = com.lastwave.app.util.ShareHelper.buildTrackShareText(title, artist, resolvedUrl)
+            com.lastwave.app.util.ShareHelper.shareText(context, "$title — $artist", body, "Share song")
+        }
+    }
+
     fun copyYouTubeLink(
         title: String,
         artist: String,
         existingVideoId: String?,
         url: String?,
     ) {
-        val directId = existingVideoId?.takeIf { it.isNotBlank() } ?: extractYouTubeVideoId(url)
-        if (directId != null) {
-            copyToClipboard("https://www.youtube.com/watch?v=$directId")
+        val verified = com.lastwave.app.util.ShareHelper.verifiedTrackUrlOrNull(existingVideoId, url)
+        if (verified != null) {
+            copyToClipboard(verified)
             return
         }
         viewModelScope.launch {
-            val link = runCatching {
-                val match = innerTube.findBestMatchOrNull(title, artist, prefetchStreams = false)
-                if (match != null && match.videoId.isNotBlank()) {
-                    "https://www.youtube.com/watch?v=${match.videoId}"
-                } else {
-                    val query = "$title $artist".trim()
-                    val encoded = java.net.URLEncoder.encode(query, "UTF-8")
-                    "https://www.youtube.com/results?search_query=$encoded"
-                }
-            }.getOrElse {
-                val query = "$title $artist".trim()
-                val encoded = runCatching { java.net.URLEncoder.encode(query, "UTF-8") }.getOrDefault("")
-                "https://www.youtube.com/results?search_query=$encoded"
-            }
-            copyToClipboard(link)
+            copyToClipboard(resolveVerifiedTrackUrl(title, artist))
+        }
+    }
+
+    private suspend fun resolveVerifiedTrackUrl(title: String, artist: String): String {
+        val matchId = runCatching {
+            val match = innerTube.findBestMatchOrNull(title, artist, prefetchStreams = false)
+            com.lastwave.app.util.ShareHelper.validYouTubeVideoId(match?.videoId)
+        }.getOrNull()
+        return if (matchId != null) {
+            "https://music.youtube.com/watch?v=$matchId"
+        } else {
+            com.lastwave.app.util.ShareHelper.fallbackSearchUrl(title, artist)
         }
     }
 
     private fun copyToClipboard(link: String) {
-        val clipboard = appContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-        val clip = android.content.ClipData.newPlainText("YouTube Link", link)
-        clipboard?.setPrimaryClip(clip)
-        android.widget.Toast.makeText(appContext, appContext.getString(R.string.link_copied), android.widget.Toast.LENGTH_SHORT).show()
+        com.lastwave.app.util.ShareHelper.copyToClipboard(
+            context = appContext,
+            label = "Music Link",
+            text = link,
+            toastMessage = appContext.getString(R.string.link_copied),
+        )
     }
 }
 
@@ -768,9 +794,8 @@ private fun ColumnScope.RedesignedTrackMenuContent(
                         }
                     }
                     add {
-                        MenuActionRow(Icons.Outlined.ContentCopy, stringResource(R.string.menu_copy_song), enabled = !dismissing) {
-                            clipboard.setText(AnnotatedString(t.name + " \u2014 " + t.artist))
-                            android.widget.Toast.makeText(context, context.getString(R.string.song_copied), android.widget.Toast.LENGTH_SHORT).show()
+                        MenuActionRow(Icons.Outlined.Share, "Share", enabled = !dismissing) {
+                            trackLinkViewModel.shareTrack(context, t.name, t.artist, playable.videoId, t.url)
                             dismissMenu()
                         }
                     }
@@ -1101,15 +1126,14 @@ private fun ColumnScope.ModernTrackMenuContent(
             ModernMenuActionGrid(actions)
             val copyActions = buildList<@Composable () -> Unit> {
                 add {
+                    ModernMenuActionRow(Icons.Outlined.Share, "Share", quiet = false, enabled = !dismissing) {
+                        trackLinkViewModel.shareTrack(context, t.name, t.artist, playable.videoId, t.url)
+                        dismissMenu()
+                    }
+                }
+                add {
                     ModernMenuActionRow(Icons.Outlined.Link, stringResource(R.string.menu_copy_link), quiet = true, enabled = !dismissing) {
-                        val directId = playable.videoId?.takeIf { it.isNotBlank() } ?: extractYouTubeVideoId(t.url)
-                        if (directId != null) {
-                            val link = "https://www.youtube.com/watch?v=$directId"
-                            clipboard.setText(AnnotatedString(link))
-                            android.widget.Toast.makeText(context, context.getString(R.string.link_copied), android.widget.Toast.LENGTH_SHORT).show()
-                        } else {
-                            trackLinkViewModel.copyYouTubeLink(t.name, t.artist, playable.videoId, t.url)
-                        }
+                        trackLinkViewModel.copyYouTubeLink(t.name, t.artist, playable.videoId, t.url)
                         dismissMenu()
                     }
                 }

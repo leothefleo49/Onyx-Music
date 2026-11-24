@@ -256,10 +256,13 @@ internal fun Modifier.lyricsFadingEdge(
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
     .drawWithContent {
         drawContent()
-        val topFadePx = topFadeDp.toPx()
-        val bottomFadePx = bottomFadeDp.toPx()
         val height = size.height
-        if (height > topFadePx + bottomFadePx) {
+        if (height <= 0f) return@drawWithContent
+        // Clamp fades proportionally to viewport height so compact smartphone
+        // landscape screens never fade out the visible lyrics region.
+        val topFadePx = minOf(topFadeDp.toPx(), height * 0.14f)
+        val bottomFadePx = minOf(bottomFadeDp.toPx(), height * 0.22f)
+        if (height > topFadePx + bottomFadePx && topFadePx > 0f && bottomFadePx > 0f) {
             drawRect(
                 brush = Brush.verticalGradient(
                     0f to Color.Transparent,

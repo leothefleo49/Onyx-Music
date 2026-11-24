@@ -44,10 +44,19 @@ class AlbumViewModel @Inject constructor(
     private val playlistRepository: PlaylistRepository,
     private val musicPlayer: MusicPlayer,
     private val settingsPreferences: SettingsPreferences,
+    private val downloadManager: com.lastwave.app.data.download.TrackDownloadManager,
+    private val overridesRepository: com.lastwave.app.data.local.TrackOverridesRepository,
 ) : ViewModel() {
 
     val settings: StateFlow<MiscSettings> = settingsPreferences.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MiscSettings())
+
+    val albumOverrides: StateFlow<Map<String, com.lastwave.app.data.local.AlbumOverride>> =
+        overridesRepository.albumOverrides
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    private val _downloadQueuedCount = MutableStateFlow(0)
+    val downloadQueuedCount: StateFlow<Int> = _downloadQueuedCount.asStateFlow()
 
     private val _uiState = MutableStateFlow<AlbumUiState>(AlbumUiState.Loading)
     val uiState: StateFlow<AlbumUiState> = _uiState.asStateFlow()
@@ -169,6 +178,38 @@ class AlbumViewModel @Inject constructor(
             } catch (_: Exception) {
                 _saveUiState.value = AlbumSaveUiState(saveError = appContext.getString(com.lastwave.app.R.string.alb_save_fail))
             }
+        }
+    }
+
+    fun downloadAlbum(): Int {
+        val data = (_uiState.value as? AlbumUiState.Success)?.data ?: return 0
+        if (data.tracks.isEmpty()) return 0
+        var queued = 0
+        data.tracks.forEach { track ->
+            downloadManager.downloadTrack(
+                title = track.title,
+                artist = track.artist.ifBlank { data.artist },
+                album = data.title,
+                artworkUrl = track.artworkUrl ?: data.artworkUrl,
+                year = data.releaseYear,
+                videoId = track.videoId,
+                durationMs = track.durationMs,
+            )
+            queued++
+        }
+        _downloadQueuedCount.value = queued
+        return queued
+    }
+
+    fun saveAlbumOverride(override: com.lastwave.app.data.local.AlbumOverride) {
+        viewModelScope.launch {
+            overridesRepository.setAlbumOverride(override)
+        }
+    }
+
+    fun clearAlbumOverride(id: String) {
+        viewModelScope.launch {
+            overridesRepository.removeAlbumOverride(id)
         }
     }
 

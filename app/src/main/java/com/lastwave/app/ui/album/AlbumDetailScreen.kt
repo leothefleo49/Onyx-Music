@@ -40,10 +40,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -125,6 +129,10 @@ fun AlbumDetailScreen(
     }
 
     var selectedTrackMenu by remember { mutableStateOf<PlayableTrack?>(null) }
+    var showAlbumDefaultsDialog by remember { mutableStateOf(false) }
+    val albumOverrides by viewModel.albumOverrides.collectAsStateWithLifecycle()
+    val downloadQueuedCount by viewModel.downloadQueuedCount.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val listState = rememberLazyListState()
 
     val scrollOffset by remember {
@@ -320,14 +328,16 @@ fun AlbumDetailScreen(
 
                             Spacer(Modifier.height(18.dp))
 
-                            // Hero Action Buttons (Shuffle • Save to Library • Large Play FAB)
+                            // Hero Action Buttons (Shuffle • Download • Album Defaults • Save • Share • Large Play FAB)
+                            val albumOverrideId = com.lastwave.app.data.local.albumOverrideKey(data.title, data.artist)
+                            val activeAlbumOverride = albumOverrides[albumOverrideId]
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Row(
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     FilledTonalIconButton(
@@ -349,16 +359,70 @@ fun AlbumDetailScreen(
                                                 MaterialTheme.colorScheme.onSecondaryContainer
                                             },
                                         ),
-                                        modifier = Modifier.size(50.dp),
+                                        modifier = Modifier.size(46.dp),
                                     ) {
                                         Icon(
                                             Icons.Filled.Shuffle,
                                             contentDescription = stringResource(R.string.alb_shuffle_cd),
-                                            modifier = Modifier.size(22.dp),
+                                            modifier = Modifier.size(20.dp),
                                             tint = if (isAlbumQueue && playbackState.shuffleEnabled) {
                                                 MaterialTheme.colorScheme.onPrimary
                                             } else {
                                                 MaterialTheme.colorScheme.primary
+                                            },
+                                        )
+                                    }
+
+                                    FilledTonalIconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                                            val count = viewModel.downloadAlbum()
+                                            if (count > 0) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    "Downloading $count tracks from ${data.title}",
+                                                    android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
+                                        },
+                                        enabled = data.tracks.isNotEmpty(),
+                                        shape = CircleShape,
+                                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                            containerColor = if (downloadQueuedCount > 0) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                        ),
+                                        modifier = Modifier.size(46.dp),
+                                    ) {
+                                        Icon(
+                                            if (downloadQueuedCount > 0) Icons.Filled.DownloadDone else Icons.Filled.Download,
+                                            contentDescription = "Download album",
+                                            modifier = Modifier.size(20.dp),
+                                            tint = if (downloadQueuedCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer,
+                                        )
+                                    }
+
+                                    FilledTonalIconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                                            showAlbumDefaultsDialog = true
+                                        },
+                                        shape = CircleShape,
+                                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                            containerColor = if (activeAlbumOverride?.isActive == true) {
+                                                MaterialTheme.colorScheme.primaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.secondaryContainer
+                                            },
+                                        ),
+                                        modifier = Modifier.size(46.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Tune,
+                                            contentDescription = "Album playback defaults",
+                                            modifier = Modifier.size(20.dp),
+                                            tint = if (activeAlbumOverride?.isActive == true) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
                                             },
                                         )
                                     }
@@ -373,13 +437,37 @@ fun AlbumDetailScreen(
                                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                                             containerColor = if (saveState.savedToLibrary) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
                                         ),
-                                        modifier = Modifier.size(50.dp),
+                                        modifier = Modifier.size(46.dp),
                                     ) {
                                         Icon(
                                             if (saveState.savedToLibrary) Icons.Filled.Check else Icons.Filled.BookmarkAdd,
                                             contentDescription = if (saveState.savedToLibrary) "Saved to library" else "Save album to library",
-                                            modifier = Modifier.size(22.dp),
+                                            modifier = Modifier.size(20.dp),
                                             tint = if (saveState.savedToLibrary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer,
+                                        )
+                                    }
+
+                                    FilledTonalIconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+                                            com.lastwave.app.util.ShareHelper.shareAlbum(
+                                                context = context,
+                                                albumTitle = data.title,
+                                                artistName = data.artist,
+                                                browseId = browseId,
+                                            )
+                                        },
+                                        shape = CircleShape,
+                                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        ),
+                                        modifier = Modifier.size(46.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Share,
+                                            contentDescription = "Share album",
+                                            modifier = Modifier.size(20.dp),
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
                                         )
                                     }
                                 }
@@ -406,6 +494,32 @@ fun AlbumDetailScreen(
                                         )
                                     }
                                 }
+                            }
+
+                            if (showAlbumDefaultsDialog) {
+                                AlbumDefaultsDialog(
+                                    albumTitle = data.title,
+                                    artistName = data.artist,
+                                    current = activeAlbumOverride ?: com.lastwave.app.data.local.AlbumOverride(
+                                        id = albumOverrideId,
+                                        album = data.title,
+                                        artist = data.artist,
+                                    ),
+                                    onSave = { updated ->
+                                        viewModel.saveAlbumOverride(updated)
+                                        showAlbumDefaultsDialog = false
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Saved album defaults for ${data.title}",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    },
+                                    onReset = {
+                                        viewModel.clearAlbumOverride(albumOverrideId)
+                                        showAlbumDefaultsDialog = false
+                                    },
+                                    onDismiss = { showAlbumDefaultsDialog = false },
+                                )
                             }
 
                             saveState.saveError?.let { message ->
@@ -770,5 +884,118 @@ private fun AlbumCard(
                 maxLines = 1,
             )
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AlbumDefaultsDialog(
+    albumTitle: String,
+    artistName: String,
+    current: com.lastwave.app.data.local.AlbumOverride,
+    onSave: (com.lastwave.app.data.local.AlbumOverride) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var mode by remember(current) { mutableStateOf(current.defaultPlayMode) }
+    var videoDisabled by remember(current) { mutableStateOf(current.videoDisabled) }
+    var canvasDisabled by remember(current) { mutableStateOf(current.canvasDisabled) }
+    var animationsDisabled by remember(current) { mutableStateOf(current.animationsDisabled) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Album Playback Defaults", fontWeight = FontWeight.Bold)
+                Text(
+                    text = listOf(albumTitle, artistName).filter { it.isNotBlank() }.joinToString(" — "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Default playing view for every song in this album",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    com.lastwave.app.data.local.DefaultPlayerMode.entries.forEach { option ->
+                        val selected = option == mode
+                        Surface(
+                            onClick = { mode = option },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHighest
+                            },
+                        ) {
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+                }
+                androidx.compose.material3.HorizontalDivider()
+                AlbumOverrideToggleRow("Disable music video for album", videoDisabled) { videoDisabled = it }
+                AlbumOverrideToggleRow("Disable Canvas for album", canvasDisabled) { canvasDisabled = it }
+                AlbumOverrideToggleRow("Disable live background / motion", animationsDisabled) { animationsDisabled = it }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        current.copy(
+                            album = albumTitle,
+                            artist = artistName,
+                            defaultPlayMode = mode,
+                            videoDisabled = videoDisabled,
+                            canvasDisabled = canvasDisabled,
+                            animationsDisabled = animationsDisabled,
+                        ),
+                    )
+                },
+            ) { Text("Save for Album") }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (current.isActive) {
+                    androidx.compose.material3.TextButton(onClick = onReset) { Text("Reset") }
+                }
+                androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
+}
+
+@Composable
+private fun AlbumOverrideToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f).padding(end = 8.dp),
+        )
+        androidx.compose.material3.Switch(checked = checked, onCheckedChange = onChange)
     }
 }

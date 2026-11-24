@@ -40,10 +40,10 @@ class Ipv4FirstDnsResolver(
         val builder = bootstrapClient?.newBuilder() ?: OkHttpClient.Builder()
         builder
             .dns(Dns.SYSTEM)
-            .connectTimeout(2500, TimeUnit.MILLISECONDS)
-            .readTimeout(2500, TimeUnit.MILLISECONDS)
-            .writeTimeout(2500, TimeUnit.MILLISECONDS)
-            .retryOnConnectionFailure(true)
+            .connectTimeout(1500, TimeUnit.MILLISECONDS)
+            .readTimeout(1500, TimeUnit.MILLISECONDS)
+            .writeTimeout(1500, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(false)
             .build()
     }
 
@@ -77,12 +77,30 @@ class Ipv4FirstDnsResolver(
             Log.w(TAG, "System DNS lookup failed for $hostname (${e.message}), falling back to DoH")
         }
 
+        // When offline, skip DoH fallback immediately so playback fails fast or
+        // falls back to local/cached tracks without multi-second DNS stalls.
+        if (isDeviceOffline()) {
+            throw UnknownHostException("Device offline; skipping DoH fallback for '$hostname'")
+        }
+
         val dohResults = resolveDoh(hostname, wantIpv6First = vpnActive)
         if (dohResults.isNotEmpty()) {
             return if (vpnActive) dohResults else sortIpv4First(dohResults)
         }
 
         throw UnknownHostException("Unable to resolve host '$hostname' via system DNS or DoH fallback")
+    }
+
+    private fun isDeviceOffline(): Boolean {
+        val appContext = context ?: return false
+        return runCatching {
+            val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
+                ?: return@runCatching false
+            val activeNetwork = connectivity.activeNetwork ?: return@runCatching true
+            val capabilities = connectivity.getNetworkCapabilities(activeNetwork)
+                ?: return@runCatching true
+            !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }.getOrDefault(false)
     }
 
     private fun isVpnActiveCached(): Boolean {

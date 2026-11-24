@@ -36,8 +36,10 @@ private fun <T> Flow<T>.withDownloadsFallback(fallback: T): Flow<T> =
     }
 
 fun DownloadedTrackEntity.toPlayableTrack(): PlayableTrack {
+    // Never call File.exists() here — this runs on the Main thread for the entire
+    // downloads list when tapping Play, and FUSE stat calls stall playback start.
+    // MusicPlayer verifies accessibility off-thread in checkAndBuildLocalStream.
     val bestUrl = when {
-        filePath.startsWith("/") && java.io.File(filePath).exists() -> filePath
         !mediaStoreUri.isNullOrBlank() -> mediaStoreUri
         else -> filePath
     }
