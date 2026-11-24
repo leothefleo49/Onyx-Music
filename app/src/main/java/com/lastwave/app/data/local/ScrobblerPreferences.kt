@@ -38,11 +38,21 @@ data class ScrobblerSettings(
     val autoScrobbleKnownPlayers: Boolean = true,
     /** Two-way Last.fm love sync (push love/unlove and pull user.getLovedTracks). */
     val twoWayLoveSync: Boolean = true,
+    /** Push Onyx plays outbound to Last.fm API. Turn off to track locally only. */
+    val pushToLastFm: Boolean = true,
+    /** Automatically pause outbound Last.fm API pushes for Onyx plays when an external
+     *  scrobbler (official Last.fm app, Pano Scrobbler, etc.) is active on this device
+     *  so tracks are never double-scrobbled on Last.fm or double-counted in Onyx Stats. */
+    val avoidExternalScrobblerDuplicates: Boolean = true,
+    /** Automatically sync YT Music & Spotify recent listening history on launch/resume. */
+    val autoSyncHistoryEnabled: Boolean = true,
     /** Optional ListenBrainz submission toggle + user token. */
     val listenBrainzEnabled: Boolean = false,
     val listenBrainzToken: String = "",
     val listenBrainzUsername: String = "",
     val lastLovedSyncAtMs: Long = 0L,
+    /** Blocked artist names (lowercase) excluded from scrobbling (e.g., rain/sleep sounds). */
+    val blockedArtists: Set<String> = emptySet(),
 )
 
 @Singleton
@@ -57,6 +67,10 @@ class ScrobblerPreferences @Inject constructor(
         val BLOCKED_PACKAGES = stringSetPreferencesKey("lw_scrobbler_blocked_packages")
         val AUTO_KNOWN_PLAYERS = booleanPreferencesKey("lw_scrobbler_auto_known_players")
         val TWO_WAY_LOVE_SYNC = booleanPreferencesKey("lw_scrobbler_two_way_love")
+        val PUSH_TO_LASTFM = booleanPreferencesKey("lw_scrobbler_push_lastfm")
+        val AVOID_EXTERNAL_DUPES = booleanPreferencesKey("lw_scrobbler_avoid_ext_dupes")
+        val AUTO_SYNC_HISTORY = booleanPreferencesKey("lw_scrobbler_auto_sync_history")
+        val BLOCKED_ARTISTS = stringSetPreferencesKey("lw_scrobbler_blocked_artists")
         val LB_ENABLED = booleanPreferencesKey("lw_scrobbler_lb_enabled")
         val LB_TOKEN = stringPreferencesKey("lw_scrobbler_lb_token")
         val LB_USERNAME = stringPreferencesKey("lw_scrobbler_lb_username")
@@ -76,10 +90,14 @@ class ScrobblerPreferences @Inject constructor(
                 blockedPackages = p.readSafely(Keys.BLOCKED_PACKAGES) ?: emptySet(),
                 autoScrobbleKnownPlayers = p.readSafely(Keys.AUTO_KNOWN_PLAYERS) ?: true,
                 twoWayLoveSync = p.readSafely(Keys.TWO_WAY_LOVE_SYNC) ?: true,
+                pushToLastFm = p.readSafely(Keys.PUSH_TO_LASTFM) ?: true,
+                avoidExternalScrobblerDuplicates = p.readSafely(Keys.AVOID_EXTERNAL_DUPES) ?: true,
+                autoSyncHistoryEnabled = p.readSafely(Keys.AUTO_SYNC_HISTORY) ?: true,
                 listenBrainzEnabled = p.readSafely(Keys.LB_ENABLED) ?: false,
                 listenBrainzToken = p.readSafely(Keys.LB_TOKEN) ?: "",
                 listenBrainzUsername = p.readSafely(Keys.LB_USERNAME) ?: "",
                 lastLovedSyncAtMs = p.readSafely(Keys.LAST_LOVED_SYNC) ?: 0L,
+                blockedArtists = p.readSafely(Keys.BLOCKED_ARTISTS) ?: emptySet(),
             )
         }
 
@@ -142,5 +160,34 @@ class ScrobblerPreferences @Inject constructor(
 
     suspend fun setLastLovedSyncAt(timestampMs: Long) {
         dataStore.edit { it[Keys.LAST_LOVED_SYNC] = timestampMs }
+    }
+
+    suspend fun setPushToLastFm(enabled: Boolean) {
+        dataStore.edit { it[Keys.PUSH_TO_LASTFM] = enabled }
+    }
+
+    suspend fun setAvoidExternalScrobblerDuplicates(enabled: Boolean) {
+        dataStore.edit { it[Keys.AVOID_EXTERNAL_DUPES] = enabled }
+    }
+
+    suspend fun setAutoSyncHistoryEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.AUTO_SYNC_HISTORY] = enabled }
+    }
+
+    suspend fun addBlockedArtist(artist: String) {
+        val norm = artist.trim().lowercase()
+        if (norm.isBlank()) return
+        dataStore.edit { prefs ->
+            val current = prefs.readSafely(Keys.BLOCKED_ARTISTS) ?: emptySet()
+            prefs[Keys.BLOCKED_ARTISTS] = current + norm
+        }
+    }
+
+    suspend fun removeBlockedArtist(artist: String) {
+        val norm = artist.trim().lowercase()
+        dataStore.edit { prefs ->
+            val current = prefs.readSafely(Keys.BLOCKED_ARTISTS) ?: emptySet()
+            prefs[Keys.BLOCKED_ARTISTS] = current - norm
+        }
     }
 }

@@ -251,9 +251,16 @@ internal fun BeatSyncFluidArtworkBackground(
         }
     }
 
+    val cachedBlurEffect = remember {
+        RenderEffect.createBlurEffect(FLOW_SIGMA_PX, FLOW_SIGMA_PX, Shader.TileMode.CLAMP)
+            .asComposeRenderEffect()
+    }
+
     Box(modifier) {
-        // Always underneath, so a load or resume never flashes black.
-        fallback()
+        // Hide static fallback once the AGSL layer is fully opaque to avoid double full-screen draws.
+        if (appear.value < 1f || renderer == null || current == null) {
+            fallback()
+        }
         if (renderer == null || current == null) return@Box
         Box(
             Modifier
@@ -272,8 +279,7 @@ internal fun BeatSyncFluidArtworkBackground(
                             scaleX = w.toFloat() / sw
                             scaleY = h.toFloat() / sh
                             transformOrigin = TransformOrigin(0f, 0f)
-                            renderEffect = RenderEffect.createBlurEffect(FLOW_SIGMA_PX, FLOW_SIGMA_PX, Shader.TileMode.CLAMP)
-                                .asComposeRenderEffect()
+                            renderEffect = cachedBlurEffect
                         }
                     }
                 }

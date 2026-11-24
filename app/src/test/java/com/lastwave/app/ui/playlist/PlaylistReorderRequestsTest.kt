@@ -64,11 +64,14 @@ class PlaylistReorderRequestsTest {
         every { spotify.isConnected } returns MutableStateFlow(false)
         every { settings.settings } returns MutableStateFlow(MiscSettings())
         every { exportEvents.failures } returns MutableSharedFlow()
+        val spotifyLikedSync = mockk<com.lastwave.app.data.spotify.SpotifyLikedSongsSync>(relaxed = true)
+        every { spotifyLikedSync.livePlaylists } returns MutableStateFlow(emptyList())
         viewModel = PlaylistViewModel(
             repository, mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true),
             mockk(relaxed = true), GenerationStatus(), exportEvents, ytPreferences,
             mockk(relaxed = true), library, mockk(relaxed = true), mockk(relaxed = true),
-            mockk(relaxed = true), mockk(relaxed = true), spotify, settings,
+            mockk(relaxed = true), mockk(relaxed = true), spotify, spotifyLikedSync,
+            mockk(relaxed = true), settings,
         )
     }
 

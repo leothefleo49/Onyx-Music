@@ -84,6 +84,7 @@ fun ScrobbleHistorySheet(
     ) -> Unit,
     onPlayTrack: (ScrobbleEventEntity) -> Unit,
     onChangeCategory: ((ScrobbleEventEntity, String) -> Unit)? = null,
+    onEditGenre: ((ScrobbleEventEntity, String) -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var query by remember { mutableStateOf("") }
@@ -260,8 +261,11 @@ fun ScrobbleHistorySheet(
         EditScrobbleDialog(
             event = target,
             onDismiss = { editingEvent = null },
-            onConfirm = { title, artist, album, saveRule, retroactive ->
+            onConfirm = { title, artist, album, genre, saveRule, retroactive ->
                 onEdit(target, title, artist, album, saveRule, retroactive)
+                if (genre.trim() != target.genre.trim()) {
+                    onEditGenre?.invoke(target, genre.trim())
+                }
                 editingEvent = null
             },
         )
@@ -384,6 +388,20 @@ private fun ScrobbleHistoryRow(
                                 )
                             }
                         }
+                        if (event.outputDevice.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            ) {
+                                Text(
+                                    text = event.outputDevice,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
                         Text(
                             text = timeText,
                             style = MaterialTheme.typography.labelSmall,
@@ -478,6 +496,7 @@ private fun EditScrobbleDialog(
         title: String,
         artist: String,
         album: String,
+        genre: String,
         saveAsAutoRule: Boolean,
         applyRetroactively: Boolean,
     ) -> Unit,
@@ -485,12 +504,13 @@ private fun EditScrobbleDialog(
     var title by remember(event) { mutableStateOf(event.title) }
     var artist by remember(event) { mutableStateOf(event.artist) }
     var album by remember(event) { mutableStateOf(event.album) }
+    var genre by remember(event) { mutableStateOf(event.genre) }
     var saveAsRule by remember { mutableStateOf(true) }
     var applyRetro by remember { mutableStateOf(true) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit scrobble") },
+        title = { Text("Edit play metadata") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
@@ -511,6 +531,13 @@ private fun EditScrobbleDialog(
                     value = album,
                     onValueChange = { album = it },
                     label = { Text("Album") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = genre,
+                    onValueChange = { genre = it },
+                    label = { Text("Genre (optional)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -540,7 +567,7 @@ private fun EditScrobbleDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(title, artist, album, saveAsRule, saveAsRule && applyRetro) },
+                onClick = { onConfirm(title, artist, album, genre, saveAsRule, saveAsRule && applyRetro) },
                 enabled = title.isNotBlank() && artist.isNotBlank(),
             ) {
                 Text("Save")

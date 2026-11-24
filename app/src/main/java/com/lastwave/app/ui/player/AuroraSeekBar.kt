@@ -62,16 +62,24 @@ internal fun AuroraProgressTrack(
     val clock = remember { mutableFloatStateOf(0f) }
     val wavesActive = isPlaying && !dragging &&
         LocalAmbientAnimationsActive.current && rememberPlayerWindowActive()
+    androidx.compose.runtime.DisposableEffect(wavesActive) {
+        if (wavesActive) com.lastwave.app.playback.rhythm.FluidRhythmEngine.acquire()
+        onDispose { if (wavesActive) com.lastwave.app.playback.rhythm.FluidRhythmEngine.release() }
+    }
     LaunchedEffect(wavesActive) {
         clock.floatValue = 0f
         if (!wavesActive) return@LaunchedEffect
         var startNanos = -1L
+        var lastNanos = -1L
         while (isActive) {
             androidx.compose.runtime.withFrameNanos { now ->
                 if (startNanos < 0L) startNanos = now
+                val dt = if (lastNanos < 0L) 0.016f else ((now - lastNanos) / 1e9f).coerceIn(0.001f, 0.1f)
+                lastNanos = now
+                com.lastwave.app.playback.rhythm.FluidRhythmEngine.tick(dt, true)
                 clock.floatValue = ((now - startNanos) % 100_000_000_000L) / 1_000_000_000f
             }
-            delay(33)
+            delay(24)
         }
     }
 

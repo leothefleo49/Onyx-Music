@@ -9,12 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,23 +29,28 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.lastwave.app.R
 import com.lastwave.app.data.local.AppBackgroundStyle
+import com.lastwave.app.data.local.EdgeGlowEdgeMask
 import com.lastwave.app.data.local.EdgeGlowMode
 import com.lastwave.app.data.local.EdgeGlowMotion
 import com.lastwave.app.data.local.MiscSettings
-import com.lastwave.app.data.local.SpatialAudioMode
+import com.lastwave.app.ui.player.AmbientEdgeGlow
+import com.lastwave.app.ui.player.EdgeGlowConfig
 import com.lastwave.app.ui.player.parseHexColor
 
 /**
- * One sheet for the immersive-playback pack: the Lumn-style ambient edge
- * glow, progress-bar colours, the always-on player, headphone spatial audio
- * and the app background. Grouped by what the user is trying to change
- * rather than by which subsystem owns the preference.
+ * Unified customization dialog for **Vibe Mode, Always-On Display, Lumn Border
+ * Glow, Seekbar Colours, App Background, and Per-Surface Liquid Glass**.
+ * Includes a live OLED preview box so every change is visible immediately.
  */
 @Composable
 internal fun AmbienceSettingsDialog(
@@ -56,10 +61,13 @@ internal fun AmbienceSettingsDialog(
     onEdgeGlowIntensity: (Float) -> Unit,
     onEdgeGlowThickness: (Float) -> Unit,
     onEdgeGlowColor: (Int, String) -> Unit,
+    onEdgeGlowEdges: (Int) -> Unit = {},
+    onEdgeGlowStyle: (String) -> Unit = {},
     onAodLyrics: (Boolean) -> Unit,
     onAodVisualizerMode: (String) -> Unit,
     onAodShowControls: (Boolean) -> Unit,
     onAodShowArtwork: (Boolean) -> Unit,
+    onAodDefaultFull: (Boolean) -> Unit = {},
     onSeekbarMatch: (Boolean) -> Unit,
     onSeekbarColor: (Int, String) -> Unit,
     onBackground: (AppBackgroundStyle) -> Unit,
@@ -67,6 +75,9 @@ internal fun AmbienceSettingsDialog(
     onGlassSurface: (com.lastwave.app.data.local.GlassSurface, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val previewColor1 = parseHexColor(settings.edgeGlowColor1, MaterialTheme.colorScheme.primary)
+    val previewColor2 = parseHexColor(settings.edgeGlowColor2, MaterialTheme.colorScheme.secondary)
+
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -74,79 +85,180 @@ internal fun AmbienceSettingsDialog(
         },
         title = {
             Text(
-                "Visuals, AOD & glass",
+                "Vibe Mode, AOD & Glass",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 560.dp)
+                    .heightIn(max = 580.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
-                // ── Ambient edge glow ──
-                SectionHeader(stringResource(R.string.settings_edge_glow))
+                // Live Lumn OLED bezel preview
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(112.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color.Black)
+                        .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(20.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val activePreviewStyle = if (settings.aodVisualizerMode != "off") {
+                        settings.aodVisualizerMode
+                    } else {
+                        settings.edgeGlowStyle
+                    }
+                    AmbientEdgeGlow(
+                        config = EdgeGlowConfig(
+                            enabled = activePreviewStyle != "off",
+                            mode = if (settings.edgeGlowMode == EdgeGlowMode.OFF) EdgeGlowMode.GRADIENT else settings.edgeGlowMode,
+                            motion = settings.edgeGlowMotion,
+                            style = activePreviewStyle,
+                            edgeMask = settings.edgeGlowEdges,
+                            intensity = settings.edgeGlowIntensity,
+                            thickness = settings.edgeGlowThickness,
+                            color1 = previewColor1,
+                            color2 = previewColor2,
+                            color3 = lerp(previewColor1, previewColor2, 0.5f),
+                        ),
+                        isPlaying = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "9:41",
+                            color = Color.White.copy(alpha = 0.94f),
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.ExtraLight,
+                        )
+                        Text(
+                            text = if (settings.aodDefaultFull) "Full AOD Preview" else "Half AOD • Screen Awake",
+                            color = Color.White.copy(alpha = 0.60f),
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+
+                // ── Lumn Ambient Border Glow ──
+                SectionHeader("Lumn Border Glow")
                 ToggleRow(
-                    label = stringResource(R.string.settings_edge_glow_subtitle),
+                    label = "Show border glow in player",
                     checked = settings.edgeGlowEnabled,
                     onChange = onEdgeGlowEnabled,
                 )
-                val showGlowControls = settings.edgeGlowEnabled || settings.aodVisualizerMode != "off"
-                if (showGlowControls) {
-                    OptionRow(
-                        label = stringResource(R.string.settings_edge_glow_color_mode),
-                        options = listOf(
-                            EdgeGlowMode.ART to "Artwork",
-                            EdgeGlowMode.CUSTOM to "Custom",
-                            EdgeGlowMode.GRADIENT to "Gradient",
-                            EdgeGlowMode.OFF to "Off",
-                        ),
-                        selected = settings.edgeGlowMode,
-                        onSelect = onEdgeGlowMode,
-                    )
-                    if (settings.edgeGlowMode == EdgeGlowMode.CUSTOM ||
-                        settings.edgeGlowMode == EdgeGlowMode.GRADIENT
-                    ) {
-                        ColorPickerRow(
-                            label = stringResource(R.string.settings_edge_glow_custom_color_1),
-                            current = settings.edgeGlowColor1,
-                            onPick = { onEdgeGlowColor(1, it) },
-                        )
-                    }
-                    if (settings.edgeGlowMode == EdgeGlowMode.GRADIENT) {
-                        ColorPickerRow(
-                            label = stringResource(R.string.settings_edge_glow_custom_color_2),
-                            current = settings.edgeGlowColor2,
-                            onPick = { onEdgeGlowColor(2, it) },
-                        )
-                    }
-                    OptionRow(
-                        label = stringResource(R.string.settings_edge_glow_motion),
-                        options = listOf(
-                            EdgeGlowMotion.BEAT to "Beat",
-                            EdgeGlowMotion.IDLE to "Breathing",
-                            EdgeGlowMotion.STATIC to "Static",
-                        ),
-                        selected = settings.edgeGlowMotion,
-                        onSelect = onEdgeGlowMotion,
-                    )
-                    SliderRow(
-                        label = stringResource(R.string.settings_edge_glow_intensity),
-                        value = settings.edgeGlowIntensity,
-                        range = 0.2f..2f,
-                        valueLabel = "${(settings.edgeGlowIntensity * 100).toInt()}%",
-                        onChange = onEdgeGlowIntensity,
-                    )
-                    SliderRow(
-                        label = stringResource(R.string.settings_edge_glow_thickness),
-                        value = settings.edgeGlowThickness,
-                        range = 0.05f..1f,
-                        valueLabel = "${(settings.edgeGlowThickness * 100).toInt()}%",
-                        onChange = onEdgeGlowThickness,
+                OptionRow(
+                    label = "Glow & Visualizer Style",
+                    options = listOf(
+                        "glow" to "Lumn Glow",
+                        "wave" to "Smooth Curve",
+                        "bars" to "Edge EQ",
+                        "aurora" to "Aurora Silk",
+                        "off" to "Off",
+                    ),
+                    selected = settings.edgeGlowStyle,
+                    onSelect = { style ->
+                        onEdgeGlowStyle(style)
+                        onAodVisualizerMode(style)
+                    },
+                )
+                // Per-edge selection (Top / Bottom / Left / Right — choose any combination)
+                EdgeSelectorRow(
+                    edgeMask = settings.edgeGlowEdges,
+                    onChange = onEdgeGlowEdges,
+                )
+                OptionRow(
+                    label = stringResource(R.string.settings_edge_glow_color_mode),
+                    options = listOf(
+                        EdgeGlowMode.ART to "Album Art",
+                        EdgeGlowMode.CUSTOM to "Custom",
+                        EdgeGlowMode.GRADIENT to "Gradient",
+                        EdgeGlowMode.OFF to "Off",
+                    ),
+                    selected = settings.edgeGlowMode,
+                    onSelect = onEdgeGlowMode,
+                )
+                if (settings.edgeGlowMode == EdgeGlowMode.CUSTOM ||
+                    settings.edgeGlowMode == EdgeGlowMode.GRADIENT
+                ) {
+                    ColorPickerRow(
+                        label = stringResource(R.string.settings_edge_glow_custom_color_1),
+                        current = settings.edgeGlowColor1,
+                        onPick = { onEdgeGlowColor(1, it) },
                     )
                 }
+                if (settings.edgeGlowMode == EdgeGlowMode.GRADIENT) {
+                    ColorPickerRow(
+                        label = stringResource(R.string.settings_edge_glow_custom_color_2),
+                        current = settings.edgeGlowColor2,
+                        onPick = { onEdgeGlowColor(2, it) },
+                    )
+                }
+                OptionRow(
+                    label = stringResource(R.string.settings_edge_glow_motion),
+                    options = listOf(
+                        EdgeGlowMotion.BEAT to "Music Sync",
+                        EdgeGlowMotion.FLOW to "Flow",
+                        EdgeGlowMotion.IDLE to "Breathing",
+                        EdgeGlowMotion.STATIC to "Static",
+                    ),
+                    selected = settings.edgeGlowMotion,
+                    onSelect = onEdgeGlowMotion,
+                )
+                SliderRow(
+                    label = stringResource(R.string.settings_edge_glow_intensity),
+                    value = settings.edgeGlowIntensity,
+                    range = 0.2f..2f,
+                    valueLabel = "${(settings.edgeGlowIntensity * 100).toInt()}%",
+                    onChange = onEdgeGlowIntensity,
+                )
+                SliderRow(
+                    label = stringResource(R.string.settings_edge_glow_thickness),
+                    value = settings.edgeGlowThickness,
+                    range = 0.05f..1f,
+                    valueLabel = "${(settings.edgeGlowThickness * 100).toInt()}%",
+                    onChange = onEdgeGlowThickness,
+                )
+
+                Divider()
+                // ── Always-On Display (Half AOD + Full AOD) ──
+                SectionHeader("Always-On Display (AOD)")
+                Text(
+                    "Half AOD keeps your screen awake so it won't auto-sleep while letting you manually lock your phone or switch tabs, with a 1-tap button to open Full AOD.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                OptionRow(
+                    label = "Sparkle button launches",
+                    options = listOf(
+                        false to "Half AOD (Default)",
+                        true to "Full AOD",
+                    ),
+                    selected = settings.aodDefaultFull,
+                    onSelect = onAodDefaultFull,
+                )
+                ToggleRow(
+                    label = stringResource(R.string.settings_aod_lyrics),
+                    checked = settings.aodShowLyrics,
+                    onChange = onAodLyrics,
+                )
+                ToggleRow(
+                    label = "Show playback controls in Full AOD",
+                    checked = settings.aodShowControls,
+                    onChange = onAodShowControls,
+                )
+                ToggleRow(
+                    label = "Show album artwork in Full AOD",
+                    checked = settings.aodShowArtwork,
+                    onChange = onAodShowArtwork,
+                )
 
                 Divider()
                 // ── Progress bar colours ──
@@ -154,9 +266,7 @@ internal fun AmbienceSettingsDialog(
                 ToggleRow(
                     label = stringResource(R.string.settings_seekbar_colors_match),
                     checked = settings.seekbarMatchTrackColors,
-                    onChange = {
-                        onSeekbarMatch(it)
-                    },
+                    onChange = onSeekbarMatch,
                 )
                 if (!settings.seekbarMatchTrackColors) {
                     ColorPickerRow(
@@ -170,43 +280,6 @@ internal fun AmbienceSettingsDialog(
                         onPick = { onSeekbarColor(2, it) },
                     )
                 }
-
-                Divider()
-                // ── Always-on player ──
-                SectionHeader(stringResource(R.string.settings_aod))
-                Text(
-                    stringResource(R.string.settings_aod_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(6.dp))
-                ToggleRow(
-                    label = stringResource(R.string.settings_aod_lyrics),
-                    checked = settings.aodShowLyrics,
-                    onChange = onAodLyrics,
-                )
-                OptionRow(
-                    label = "Edge animation",
-                    options = listOf(
-                        "wave" to "Wave",
-                        "glow" to "Glow",
-                        "bars" to "Bars",
-                        "aurora" to "Aurora",
-                        "off" to "Off",
-                    ),
-                    selected = settings.aodVisualizerMode,
-                    onSelect = onAodVisualizerMode,
-                )
-                ToggleRow(
-                    label = "Show playback controls",
-                    checked = settings.aodShowControls,
-                    onChange = onAodShowControls,
-                )
-                ToggleRow(
-                    label = "Show artwork",
-                    checked = settings.aodShowArtwork,
-                    onChange = onAodShowArtwork,
-                )
 
                 Divider()
                 // ── App background ──
@@ -245,6 +318,86 @@ internal fun AmbienceSettingsDialog(
 }
 
 @Composable
+private fun EdgeSelectorRow(
+    edgeMask: Int,
+    onChange: (Int) -> Unit,
+) {
+    val items = listOf(
+        EdgeGlowEdgeMask.TOP to "Top",
+        EdgeGlowEdgeMask.BOTTOM to "Bottom",
+        EdgeGlowEdgeMask.LEFT to "Left",
+        EdgeGlowEdgeMask.RIGHT to "Right",
+    )
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(
+            "Active Edges (pick one or more)",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 5.dp),
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items.forEach { (flag, label) ->
+                val isSelected = (edgeMask and flag) != 0
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 2.dp)
+                        .border(
+                            width = if (isSelected) 1.5.dp else 1.dp,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outlineVariant,
+                            shape = CircleShape,
+                        )
+                        .background(
+                            if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                            else Color.Transparent,
+                            CircleShape,
+                        )
+                        .clickable {
+                            val next = if (isSelected) edgeMask and flag.inv() else edgeMask or flag
+                            if (next != 0) onChange(next)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                    )
+                }
+            }
+            val allSelected = (edgeMask and EdgeGlowEdgeMask.ALL) == EdgeGlowEdgeMask.ALL
+            Box(
+                modifier = Modifier
+                    .padding(vertical = 2.dp)
+                    .border(
+                        width = if (allSelected) 1.5.dp else 1.dp,
+                        color = if (allSelected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outlineVariant,
+                        shape = CircleShape,
+                    )
+                    .background(
+                        if (allSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        else Color.Transparent,
+                        CircleShape,
+                    )
+                    .clickable { onChange(EdgeGlowEdgeMask.ALL) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    "All 4",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (allSelected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SectionHeader(text: String) {
     Text(
         text = text,
@@ -272,7 +425,7 @@ internal fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> U
         Text(
             label,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).padding(end = 8.dp),
         )
         Switch(checked = checked, onCheckedChange = onChange)
     }
@@ -319,6 +472,7 @@ internal fun <T> OptionRow(
                         style = MaterialTheme.typography.labelMedium,
                         color = if (isSelected) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
                     )
                 }
             }
@@ -352,11 +506,11 @@ private fun SliderRow(
     }
 }
 
-/** Fixed swatches keep the picker thumb-friendly; no free-text hex entry. */
+/** Rich palette covering vibrant neon, pastel, and monochrome glow colours. */
 private val COLOR_SWATCHES = listOf(
-    "#8B5CF6", "#6366F1", "#22D3EE", "#06B6D4",
-    "#10B981", "#84CC16", "#F59E0B", "#F97316",
-    "#EF4444", "#EC4899", "#F4F4F5", "#0F172A",
+    "#8B5CF6", "#6366F1", "#3B82F6", "#22D3EE", "#06B6D4", "#14B8A6",
+    "#10B981", "#84CC16", "#EAB308", "#F97316", "#EF4444", "#F43F5E",
+    "#EC4899", "#D946EF", "#F8FAFC", "#0F172A",
 )
 
 @Composable

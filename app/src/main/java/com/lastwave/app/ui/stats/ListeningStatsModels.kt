@@ -90,6 +90,7 @@ data class ListeningHabitsData(
     val sessionsPerDay: String,
     val mostActiveDay: String,
     val peakTimelineSlot: String,
+    val avgSessionMinutes: Int = 0,
 )
 
 @Immutable

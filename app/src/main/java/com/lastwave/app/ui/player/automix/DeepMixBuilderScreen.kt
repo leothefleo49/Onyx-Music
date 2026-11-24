@@ -673,6 +673,7 @@ private fun CurationStatusCard(
                 ) {
                     Button(
                         onClick = onPlayMix,
+                        contentPadding = PaddingValues(horizontal = 12.dp),
                         modifier = Modifier.weight(1f).height(46.dp),
                     ) {
                         Icon(
@@ -681,11 +682,16 @@ private fun CurationStatusCard(
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.deep_mix_play_now))
+                        Text(
+                            text = stringResource(R.string.deep_mix_play_now),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     progress.savedPlaylistId?.let { id ->
                         OutlinedButton(
                             onClick = { onOpenPlaylist(id) },
+                            contentPadding = PaddingValues(horizontal = 12.dp),
                             modifier = Modifier.weight(1f).height(46.dp),
                         ) {
                             Icon(
@@ -694,7 +700,11 @@ private fun CurationStatusCard(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.deep_mix_open_playlist))
+                            Text(
+                                text = stringResource(R.string.deep_mix_open_playlist),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }

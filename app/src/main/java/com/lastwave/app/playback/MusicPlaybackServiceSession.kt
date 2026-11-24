@@ -128,22 +128,44 @@ internal fun MusicPlaybackService.detectTransition(state: MusicPlayerState) {
             return
         }
 
-        // If previous track reached threshold before transition but wasn't submitted yet, submit now
+        // Finalize or submit deferred scrobble for the previous track before switching.
         val prev = pendingPreviousTrack
-        if (prev != null && !submissionAttempted && accumulatedMs >= 30_000L) {
+        if (prev != null) {
             val (prevTitle, prevArtist) = cleanTrackMetadata(prev.title, prev.artist)
             val prevStartedAt = pendingPreviousStartedAt
-            scope.launch(Dispatchers.IO) {
-                runCatching {
-                    scrobbleRepository.scrobble(
-                        artist = prevArtist,
-                        track = prevTitle,
-                        album = prev.album,
-                        timestampSec = prevStartedAt,
-                        durationMs = prev.durationMs ?: 0L,
-                    )
-                }.onFailure { error ->
-                    android.util.Log.e("MusicPlaybackService", "Deferred scrobble failed", error)
+            val prevListened = accumulatedMs
+            val prevDuration = prev.durationMs?.takeIf { it > 0L } ?: 180_000L
+            val percent = if (settings.scrobblePercent in 25..90) settings.scrobblePercent else 50
+            val threshold = minOf(prevDuration * percent / 100, 4 * 60_000L).coerceAtLeast(30_000L)
+            val completedNaturally = prevListened >= (prevDuration * 0.85).toLong()
+            if (submissionAttempted) {
+                // Update the already-scrobbled event with full listened time & completion/skip status.
+                scope.launch(Dispatchers.IO) {
+                    runCatching {
+                        scrobbleRepository.finalizeScrobblePlayback(
+                            artist = prevArtist,
+                            track = prevTitle,
+                            startedAtSec = prevStartedAt,
+                            finalListenedMs = prevListened,
+                            durationMs = prevDuration,
+                            completedNaturally = completedNaturally,
+                        )
+                    }
+                }
+            } else if (prevListened >= threshold) {
+                scope.launch(Dispatchers.IO) {
+                    runCatching {
+                        scrobbleRepository.scrobble(
+                            artist = prevArtist,
+                            track = prevTitle,
+                            album = prev.album,
+                            timestampSec = prevStartedAt,
+                            durationMs = prevDuration,
+                            listenedMs = prevListened,
+                        )
+                    }.onFailure { error ->
+                        android.util.Log.e("MusicPlaybackService", "Deferred scrobble failed", error)
+                    }
                 }
             }
         }
@@ -229,7 +251,7 @@ internal fun MusicPlaybackService.startDetector() {
                     track.artist.equals("Podcast", ignoreCase = true)
 
                 if (isPodcast) {
-                    // Podcasts are tracked locally under Videos & Other (not pushed to Last.fm music charts)
+                    // Podcasts are tracked locally under Videos & Other (never pushed to Last.fm music charts)
                     // and clear music Now Playing when paused or stopped.
                     if (!state.isPlaying && (wasPlaying || nowPlayingAnnouncedKey.isNotEmpty())) {
                         scrobbleRepository.clearNowPlaying()
@@ -237,7 +259,30 @@ internal fun MusicPlaybackService.startDetector() {
                     }
                     wasPlaying = state.isPlaying
                     lastPositionMs = state.positionMs
-                    accumulatedMs = 0L
+                    if (state.isPlaying && !state.isBuffering) {
+                        accumulatedMs += 1_000L
+                        if (!submissionAttempted && accumulatedMs >= 30_000L) {
+                            submissionAttempted = true
+                            val podTitle = track.title.trim()
+                            val podArtist = track.artist.trim().ifBlank { "Podcast" }
+                            val podDur = state.durationMs.takeIf { it > 0L } ?: (track.durationMs ?: 0L)
+                            val podStarted = startedAtEpochSec
+                            val podListened = accumulatedMs
+                            scope.launch(Dispatchers.IO) {
+                                runCatching {
+                                    scrobbleRepository.scrobble(
+                                        artist = podArtist,
+                                        track = podTitle,
+                                        album = track.album,
+                                        timestampSec = podStarted,
+                                        durationMs = podDur,
+                                        listenedMs = podListened,
+                                        mediaCategory = com.lastwave.app.data.scrobble.ScrobbleMediaCategory.PODCAST,
+                                    )
+                                }
+                            }
+                        }
+                    }
                     continue
                 }
 
@@ -255,10 +300,27 @@ internal fun MusicPlaybackService.startDetector() {
                 }
                 wasPlaying = state.isPlaying
 
-                if (!state.isPlaying) continue
+                if (!state.isPlaying || state.isBuffering) continue
 
                 // Check for track replay / restart
                 if (state.positionMs in 1..4_000 && lastPositionMs > 20_000L && accumulatedMs > 15_000L) {
+                    if (submissionAttempted) {
+                        val doneListened = accumulatedMs
+                        val doneStarted = startedAtEpochSec
+                        val doneDur = state.durationMs.takeIf { it > 0L } ?: (track.durationMs ?: 180_000L)
+                        scope.launch(Dispatchers.IO) {
+                            runCatching {
+                                scrobbleRepository.finalizeScrobblePlayback(
+                                    artist = cleanArtist,
+                                    track = cleanTitle,
+                                    startedAtSec = doneStarted,
+                                    finalListenedMs = doneListened,
+                                    durationMs = doneDur,
+                                    completedNaturally = doneListened >= (doneDur * 0.85).toLong(),
+                                )
+                            }
+                        }
+                    }
                     accumulatedMs = 0L
                     startedAtEpochSec = System.currentTimeMillis() / 1000
                     submissionAttempted = false
@@ -304,12 +366,10 @@ internal fun MusicPlaybackService.startDetector() {
 
                             }
                             is ScrobbleRepository.Result.Failed -> {
-
-                                // Allow up to 3 retries on network failure
-                                if (retryCount < 3) {
-                                    retryCount++
-                                    submissionAttempted = false
-                                }
+                                // Already persisted as PENDING in Room by ScrobbleSyncEngine and will
+                                // auto-flush on network restore — never reset submissionAttempted or
+                                // a second duplicate Room row would be inserted.
+                                android.util.Log.d("MusicPlaybackService", "Scrobble queued for retry: ${result.message}")
                             }
                         }
                     }.onFailure { error ->

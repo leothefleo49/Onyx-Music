@@ -18,6 +18,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
     <!-- Target audio playback and known music players without requiring QUERY_ALL_PACKAGES -->
     <queries>
         <intent>
@@ -59,6 +60,11 @@
         <package android:name="com.google.android.youtube" />
         <package android:name="com.pandora.android" />
         <package android:name="com.arn.scrobble" />
+        <package android:name="fm.last.android" />
+        <package android:name="com.adam.aslfms" />
+        <package android:name="com.kawaii.scrobbler" />
+        <package android:name="com.simplelastfmscrobbler" />
+        <package android:name="com.peterjosling.scroball" />
         <package android:name="tv.twitch.android.app" />
         <package android:name="au.com.shiftyjelly.pocketcasts" />
         <package android:name="de.danoeh.antennapod" />
@@ -163,13 +169,14 @@
                 <data android:scheme="lastwave" android:host="auth-callback" />
             </intent-filter>
 
-            <!-- Onyx Music Jam deep links (onyxmusic://jam?code=... and onyxmusic://sync?code=...) -->
+            <!-- Onyx Music Jam & Friend deep links -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="onyxmusic" android:host="jam" />
                 <data android:scheme="onyxmusic" android:host="sync" />
+                <data android:scheme="onyxmusic" android:host="friend" />
                 <data android:scheme="lastwave" android:host="jam" />
                 <data android:scheme="lastwave" android:host="sync" />
             </intent-filter>
@@ -224,16 +231,10 @@
                 <data android:mimeType="application/x-flac" />
             </intent-filter>
 
-            <!-- Share target for music links & song titles -->
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
-            </intent-filter>
-
         </activity>
 
-        <!-- Dynamic App Icon Launcher Aliases -->
+        <!-- Dynamic App Icon Launcher & Share Aliases (exactly one is enabled by AppIconManager
+             so both Launcher and Android Share Sheet display the user's selected logo color). -->
         <!-- Legacy launcher alias (.MainActivity): 100% matches existing home screen shortcuts so they never open App Info! -->
         <activity-alias
             android:name=".MainActivity"
@@ -246,6 +247,11 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity-alias>
 
@@ -261,6 +267,11 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity-alias>
 
         <activity-alias
@@ -274,6 +285,11 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity-alias>
 
@@ -289,6 +305,11 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity-alias>
 
         <activity-alias
@@ -302,6 +323,11 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity-alias>
 

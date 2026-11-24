@@ -50,6 +50,9 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
     lateinit var appRouteNavigator: dagger.Lazy<com.lastwave.app.ui.navigation.AppRouteNavigator>
 
     @Inject
+    lateinit var onyxFriendsStore: dagger.Lazy<com.lastwave.app.data.friends.OnyxFriendsStore>
+
+    @Inject
     lateinit var settingsPreferences: com.lastwave.app.data.local.SettingsPreferences
 
     @Inject
@@ -70,7 +73,8 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
     }
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-        checkAndRequestAudioPermission()
+        // Defer READ_MEDIA_AUDIO prompt until the user opens Local Songs / Downloads
+        // so new users aren't hit with stacked system permission popups on first launch.
     }
 
     override fun attachBaseContext(newBase: Context) {
@@ -181,6 +185,43 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
         setContent {
             val themeViewModel: ThemeViewModel = hiltViewModel()
             val themeState by themeViewModel.uiState.collectAsStateWithLifecycle()
+
+            // Keep Android Recents / Overview task icon & header color synced with
+            // the user's selected App Icon and accent color.
+            androidx.compose.runtime.LaunchedEffect(
+                themeState.appIcon,
+                themeState.colorScheme.primary,
+                themeState.colorScheme.onPrimary,
+            ) {
+                runCatching {
+                    val primaryArgb = android.graphics.Color.argb(
+                        (themeState.colorScheme.primary.alpha * 255f).toInt(),
+                        (themeState.colorScheme.primary.red * 255f).toInt(),
+                        (themeState.colorScheme.primary.green * 255f).toInt(),
+                        (themeState.colorScheme.primary.blue * 255f).toInt(),
+                    )
+                    val onPrimaryArgb = android.graphics.Color.argb(
+                        (themeState.colorScheme.onPrimary.alpha * 255f).toInt(),
+                        (themeState.colorScheme.onPrimary.red * 255f).toInt(),
+                        (themeState.colorScheme.onPrimary.green * 255f).toInt(),
+                        (themeState.colorScheme.onPrimary.blue * 255f).toInt(),
+                    )
+                    val iconBmp = com.lastwave.app.ui.common.renderOnyxLogoBitmap(
+                        context = this@MainShellActivity,
+                        appIcon = themeState.appIcon,
+                        primaryArgb = primaryArgb,
+                        onPrimaryArgb = onPrimaryArgb,
+                        sizePx = 192,
+                    )
+                    @Suppress("DEPRECATION")
+                    val desc = android.app.ActivityManager.TaskDescription(
+                        getString(R.string.app_name),
+                        iconBmp,
+                        primaryArgb,
+                    )
+                    setTaskDescription(desc)
+                }
+            }
 
             LastWaveTheme(themeState = themeState) {
                 val currentConfig = androidx.compose.ui.platform.LocalViewConfiguration.current
@@ -346,6 +387,13 @@ open class MainShellActivity : androidx.fragment.app.FragmentActivity() {
             return
         }
         val uri = intent.data
+        val isFriendDeepLink = (uri?.scheme == "onyxmusic" || uri?.scheme == "lastwave") &&
+            (uri.host == "friend" || uri.host == "friends")
+        if (isFriendDeepLink && uri != null) {
+            runCatching { onyxFriendsStore.get().setPendingInviteFromUri(uri) }
+            runCatching { appRouteNavigator.get().navigateTo(Screen.Friends.route) }
+            return
+        }
         val isJamDeepLink = ((uri?.scheme == "onyxmusic" || uri?.scheme == "lastwave") && (uri.host == "jam" || uri.host == "sync")) ||
             ((uri?.scheme == "https" || uri?.scheme == "http") && (uri?.host == "jam.clashgram.org" || uri?.host == "jam.clashprojects.qd.je"))
         if (isJamDeepLink) {

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -194,12 +195,12 @@ fun SummaryStatCard(
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = containerColor,
-        modifier = modifier.height(106.dp),
+        modifier = modifier.heightIn(min = 106.dp),
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 18.dp, vertical = 16.dp),
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
@@ -207,11 +208,13 @@ fun SummaryStatCard(
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
                 color = contentColor.copy(alpha = 0.8f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 text = value,
-                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 26.sp),
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp),
                 fontWeight = FontWeight.Black,
                 color = contentColor,
                 maxLines = 1,
@@ -240,7 +243,7 @@ fun ListeningStatsBarChart(
         )
     }
 
-    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    var selectedIndex by remember(bars) { mutableStateOf<Int?>(null) }
     val textMeasurer = rememberTextMeasurer()
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val calloutColor = MaterialTheme.colorScheme.onSurface
@@ -265,7 +268,12 @@ fun ListeningStatsBarChart(
         val topMargin = 28.dp.toPx()
         val chartHeight = size.height - bottomMargin - topMargin
         val slotWidth = size.width / totalBars
-        val barWidth = (slotWidth * 0.55f).coerceIn(12.dp.toPx(), 44.dp.toPx())
+        val barWidth = (slotWidth * 0.55f).coerceIn(10.dp.toPx(), 42.dp.toPx())
+        val labelStep = when {
+            totalBars <= 7 -> 1
+            totalBars <= 10 -> 2
+            else -> 3
+        }
 
         bars.forEachIndexed { index, item ->
             val isHighlighted = (selectedIndex == index) || (selectedIndex == null && item.isPeak)
@@ -293,15 +301,19 @@ fun ListeningStatsBarChart(
                 )
             }
 
-            val textLayout = textMeasurer.measure(item.label, labelStyle)
-            val textLeft = left + (barWidth - textLayout.size.width) / 2f
-            val textTop = size.height - bottomMargin + 6.dp.toPx()
-            drawText(
-                textMeasurer = textMeasurer,
-                text = item.label,
-                topLeft = Offset(textLeft, textTop),
-                style = labelStyle,
-            )
+            val showLabel = (index % labelStep == 0) || (index == totalBars - 1 && totalBars % labelStep != 1) || isHighlighted
+            if (showLabel) {
+                val textLayout = textMeasurer.measure(item.label, labelStyle)
+                val textLeft = (left + (barWidth - textLayout.size.width) / 2f)
+                    .coerceIn(0f, (size.width - textLayout.size.width).coerceAtLeast(0f))
+                val textTop = size.height - bottomMargin + 6.dp.toPx()
+                drawText(
+                    textMeasurer = textMeasurer,
+                    text = item.label,
+                    topLeft = Offset(textLeft, textTop),
+                    style = labelStyle,
+                )
+            }
         }
     }
 }
@@ -701,20 +713,26 @@ private fun PersonalRecordRow(
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             if (!subtitle.isNullOrBlank()) {
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
+        Spacer(Modifier.width(10.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
         )
     }
 }
@@ -868,19 +886,24 @@ fun ConsistencyScoreCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Rhythm & Consistency",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = "Daily streak and listening cadence",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
+                Spacer(Modifier.width(8.dp))
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.primaryContainer,
@@ -890,6 +913,7 @@ fun ConsistencyScoreCard(
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        maxLines = 1,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     )
                 }
@@ -979,8 +1003,21 @@ private fun MetricLinePill(label: String, value: String) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+            Text(
+                label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
         }
     }
 }
@@ -1092,11 +1129,13 @@ private fun StageDetailRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        Spacer(Modifier.width(10.dp))
         Text(
             text = stage.durationLabel,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
         )
     }
 }

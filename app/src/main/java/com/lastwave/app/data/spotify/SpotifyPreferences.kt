@@ -149,6 +149,22 @@ class SpotifyPreferences @Inject constructor(
     }
 
 
+    /** Epoch ms cursor for Spotify `/v1/me/player/recently-played?after=...` live sync. */
+    val lastHistorySyncAfterMs: Flow<Long> = dataStore.data
+        .recoverPreferences("SpotifyPreferences")
+        .map { it.readSafely(LAST_HISTORY_SYNC_AFTER_MS_KEY) ?: 0L }
+
+    suspend fun getLastHistorySyncAfterMs(): Long = lastHistorySyncAfterMs.first()
+
+    suspend fun saveLastHistorySyncAfterMs(afterMs: Long) {
+        dataStore.edit { prefs ->
+            val current = prefs[LAST_HISTORY_SYNC_AFTER_MS_KEY] ?: 0L
+            if (afterMs > current) {
+                prefs[LAST_HISTORY_SYNC_AFTER_MS_KEY] = afterMs
+            }
+        }
+    }
+
     suspend fun clearConnection() {
         dataStore.edit { prefs ->
             prefs.remove(SP_DC_KEY)
@@ -158,6 +174,7 @@ class SpotifyPreferences @Inject constructor(
             prefs.remove(CLIENT_TOKEN_EXPIRES_KEY)
             prefs.remove(STREAMING_SCOPE_GRANTED_KEY)
             prefs.remove(ACCOUNT_PRODUCT_KEY)
+            prefs.remove(LAST_HISTORY_SYNC_AFTER_MS_KEY)
         }
     }
 
@@ -172,5 +189,6 @@ class SpotifyPreferences @Inject constructor(
         val DEVICE_ID_KEY = stringPreferencesKey("spotify_device_id")
         val STREAMING_SCOPE_GRANTED_KEY = booleanPreferencesKey("spotify_streaming_scope_granted")
         val ACCOUNT_PRODUCT_KEY = stringPreferencesKey("spotify_account_product")
+        val LAST_HISTORY_SYNC_AFTER_MS_KEY = longPreferencesKey("spotify_last_history_sync_after_ms")
     }
 }

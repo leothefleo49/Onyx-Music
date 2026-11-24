@@ -252,8 +252,8 @@ object SettingsSearchIndex {
                     icon = Icons.Filled.Lyrics,
                     iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
                     iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
-                    parentTab = SettingsTab.AUDIO,
-                    section = "Audio & Playback",
+                    parentTab = SettingsTab.APPEARANCE,
+                    section = "Player, Lyrics & Gestures",
                     type = EntryType.TOGGLE,
                 )
             )
@@ -303,8 +303,8 @@ object SettingsSearchIndex {
                     icon = Icons.Filled.Lyrics,
                     iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
                     iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
-                    parentTab = SettingsTab.AUDIO,
-                    section = "Audio & Playback",
+                    parentTab = SettingsTab.APPEARANCE,
+                    section = "Player, Lyrics & Gestures",
                     type = EntryType.TOGGLE,
                 )
             )
@@ -1164,9 +1164,9 @@ object SettingsSearchIndex {
             )
             add(
                 SettingsEntry(
-                    id = "spotify.recommendations",
+                    id = "library.recommendations",
                     title = "Recommendation provider",
-                    subtitle = "Seed recommendations from YouTube Music or Spotify",
+                    subtitle = "Choose YouTube Music or Spotify for Home & radio recommendations",
                     keywords = listOf(
                         "recommendation", "recommendations", "algorithm", "provider", "radio",
                         "discover", "mix", "mixes", "spotify recommendations", "youtube recommendations"
@@ -1174,8 +1174,25 @@ object SettingsSearchIndex {
                     icon = Icons.Filled.AutoAwesome,
                     iconContainer = { MaterialTheme.colorScheme.tertiaryContainer },
                     iconTint = { MaterialTheme.colorScheme.onTertiaryContainer },
-                    parentTab = SettingsTab.SPOTIFY,
-                    section = "Recommendations",
+                    parentTab = SettingsTab.LIBRARY,
+                    section = "Home & Recommendations",
+                    type = EntryType.ACTION,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "scrobbler.hub",
+                    title = "Universal Scrobbler & History Import",
+                    subtitle = "Double-scrobble guard, external app tracking, Spotify/YT/Takeout history import",
+                    keywords = listOf(
+                        "scrobbler", "scrobble", "double scrobble", "duplicate", "history", "import",
+                        "takeout", "spotify history", "youtube history", "stats", "tracking"
+                    ),
+                    icon = Icons.Filled.History,
+                    iconContainer = { MaterialTheme.colorScheme.primaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onPrimaryContainer },
+                    parentTab = SettingsTab.LAST_FM,
+                    section = "Universal Scrobbler & History",
                     type = EntryType.ACTION,
                 )
             )

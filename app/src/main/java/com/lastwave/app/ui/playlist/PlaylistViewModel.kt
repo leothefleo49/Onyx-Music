@@ -50,6 +50,7 @@ enum class PlaylistSortMode { DATE_DESC, DATE_ASC, NAME, TRACK_COUNT }
 @Immutable
 data class PlaylistUiState(
     val isLoading: Boolean = true,
+    val isRefreshing: Boolean = false,
     val playlists: List<SavedPlaylist> = emptyList(),
     val spotifyPlaylists: List<SpotifyUserPlaylist> = emptyList(),
     val isSpotifySyncEnabled: Boolean = false,
@@ -97,6 +98,8 @@ class PlaylistViewModel @Inject constructor(
     private val localMusicLibrary: com.lastwave.app.data.localmusic.LocalMusicLibrary,
     private val spotifyPlaylistImporter: SpotifyPlaylistImporter,
     private val spotifyPreferences: SpotifyPreferences,
+    private val spotifyLikedSongsSync: com.lastwave.app.data.spotify.SpotifyLikedSongsSync,
+    private val ytLikedSongsSync: com.lastwave.app.data.ytmusic.YtLikedSongsSync,
     private val settingsPreferences: SettingsPreferences,
 ) : ViewModel() {
 
@@ -165,6 +168,25 @@ class PlaylistViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            combine(
+                spotifyLikedSongsSync.livePlaylists,
+                spotifyLikedSongsSync.likedCount,
+            ) { livePlaylists, likedCount ->
+                livePlaylists to likedCount
+            }.collect { (livePlaylists, likedCount) ->
+                if (!_uiState.value.isSpotifySyncEnabled) return@collect
+                if (livePlaylists.isEmpty() && likedCount <= 0) return@collect
+                val likedSummary = SpotifyUserPlaylist(
+                    id = "liked",
+                    name = "Liked Songs",
+                    description = "Your Spotify likes",
+                    artworkUrl = null,
+                    trackCount = likedCount.takeIf { it > 0 } ?: _uiState.value.spotifyPlaylists.firstOrNull { it.id == "liked" }?.trackCount,
+                )
+                _uiState.update { it.copy(spotifyPlaylists = listOf(likedSummary) + livePlaylists, isSpotifyLoading = false) }
+            }
+        }
+        viewModelScope.launch {
             var wasGenerating = false
             generationStatus.state.collect { progress ->
                 _uiState.update { it.copy(isGenerating = progress.isGenerating, generatingMessage = progress.message) }
@@ -216,13 +238,30 @@ class PlaylistViewModel @Inject constructor(
     /** Re-reads from Room. Called on first composition and again whenever
      *  the Playlist tab regains visibility (e.g. right after Generate
      *  saves a new playlist) — see PlaylistScreen's LaunchedEffect. */
-    fun loadSpotifyPlaylists() {
+    fun refreshLibrary() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRefreshing = true) }
+            try {
+                ytLikedSongsSync.requestSync()
+                runCatching { ytMusicLibraryManager.refresh() }
+                if (_uiState.value.isSpotifySyncEnabled) {
+                    runCatching { spotifyLikedSongsSync.syncNow(force = true) }
+                    loadSpotifyPlaylists(forceRefresh = true)
+                }
+                load()
+            } finally {
+                _uiState.update { it.copy(isRefreshing = false) }
+            }
+        }
+    }
+
+    fun loadSpotifyPlaylists(forceRefresh: Boolean = false) {
         viewModelScope.launch {
             _uiState.update { it.copy(isSpotifyLoading = true) }
             val (raw, likedCount) = coroutineScope {
                 val playlistsDeferred = async {
                     try {
-                        spotifyPlaylistImporter.fetchUserPlaylists()
+                        spotifyPlaylistImporter.fetchUserPlaylists(forceRefresh = forceRefresh)
                     } catch (e: Exception) {
                         currentCoroutineContext().ensureActive()
                         emptyList()
@@ -231,9 +270,10 @@ class PlaylistViewModel @Inject constructor(
                 val likedCountDeferred = async {
                     try {
                         spotifyPlaylistImporter.fetchLikedSongsCount()
+                            ?: spotifyLikedSongsSync.likedCount.value.takeIf { it > 0 }
                     } catch (e: Exception) {
                         currentCoroutineContext().ensureActive()
-                        null
+                        spotifyLikedSongsSync.likedCount.value.takeIf { it > 0 }
                     }
                 }
                 playlistsDeferred.await() to likedCountDeferred.await()

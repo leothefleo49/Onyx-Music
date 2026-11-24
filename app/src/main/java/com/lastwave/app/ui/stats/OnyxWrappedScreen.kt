@@ -64,12 +64,13 @@ fun OnyxWrappedScreen(
         Box(
             Modifier
                 .fillMaxSize()
+                .background(Color(0xFF0D0F16))
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            primary.copy(alpha = 0.32f),
-                            MaterialTheme.colorScheme.background,
-                            secondary.copy(alpha = 0.20f),
+                            primary.copy(alpha = 0.34f),
+                            Color(0xFF10121A),
+                            secondary.copy(alpha = 0.24f),
                         ),
                     ),
                 ),
@@ -109,6 +110,31 @@ fun OnyxWrappedScreen(
                     }
                 }
 
+                // Always keep range chips accessible even if the currently selected range has 0 plays
+                androidx.compose.foundation.lazy.LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                ) {
+                    items(WrappedRange.entries.size) { idx ->
+                        val range = WrappedRange.entries[idx]
+                        val selected = state.range == range
+                        Surface(
+                            onClick = { viewModel.setRange(range) },
+                            shape = RoundedCornerShape(50),
+                            color = if (selected) primary else Color.White.copy(alpha = 0.12f),
+                        ) {
+                            Text(
+                                text = range.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimary else Color.White.copy(alpha = 0.88f),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+                }
+
                 if (state.isLoading) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("Building your Wrapped…", color = Color.White.copy(alpha = 0.8f))
@@ -118,8 +144,8 @@ fun OnyxWrappedScreen(
                 if (!state.hasData) {
                     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                         Text(
-                            "No listening history for ${state.year} yet.\nPlay a few songs and come back.",
-                            color = Color.White.copy(alpha = 0.8f),
+                            "No music listening history for ${state.range.label} yet.\nTry switching to All time or play a few songs.",
+                            color = Color.White.copy(alpha = 0.85f),
                             textAlign = TextAlign.Center,
                         )
                     }
@@ -136,21 +162,7 @@ fun OnyxWrappedScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     item {
-                        Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                            androidx.compose.foundation.layout.Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
-                            ) {
-                                WrappedRange.entries.forEach { range ->
-                                    androidx.compose.material3.FilterChip(
-                                        selected = state.range == range,
-                                        onClick = { viewModel.setRange(range) },
-                                        label = {
-                                            Text(range.label, style = MaterialTheme.typography.labelMedium)
-                                        },
-                                    )
-                                }
-                            }
+                        Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
                             Text(
                                 "ONYX WRAPPED",
                                 fontSize = 13.sp,

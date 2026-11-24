@@ -17,22 +17,25 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,27 +51,29 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
-import com.lastwave.app.R
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.lastwave.app.R
 import com.lastwave.app.data.generate.GeneratedTrack
+import com.lastwave.app.data.generate.GenreStat
+import com.lastwave.app.data.genre.GenreNormalizer
 import com.lastwave.app.ui.common.ArtworkImage
 import com.lastwave.app.ui.common.ExpressiveHeader
 import com.lastwave.app.ui.common.GlassHeaderLayout
 import com.lastwave.app.ui.common.TrackContextMenuSheet
 import com.lastwave.app.ui.common.TrackMenuCapabilities
 import com.lastwave.app.ui.common.TrackMenuTarget
+import com.lastwave.app.ui.common.adaptiveContentWidth
 import com.lastwave.app.ui.common.safeDrawingBottomPadding
 import com.lastwave.app.ui.common.safeHorizontalContentPadding
-import com.lastwave.app.ui.common.adaptiveContentWidth
 import com.lastwave.app.ui.player.LocalMiniPlayerScrollClearance
+import kotlin.math.roundToInt
 
 /**
- * Faithful port of genres.js (§5): bar-chart genre list with a period
- * filter, and a Genre Detail bottom sheet (§5.3) with Start Mix / Discover
- * More actions and an infinite-scrolling, sortable track list reusing the
- * shared track context menu.
+ * Your Genres screen: canonical genre breakdown with true share %,
+ * listening duration, top artists per genre, and an interactive Genre Detail
+ * sheet with sort chips (Most Played / Most Recent / A–Z), Start Mix, and
+ * Discover More.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,59 +100,119 @@ fun GenresScreen(
                 .fillMaxSize()
                 .adaptiveContentWidth(maxWidth = 860.dp),
             header = { headerModifier, headerBackdrop ->
-            ExpressiveHeader(
-                modifier = headerModifier,
-                backdrop = headerBackdrop,
-                title = stringResource(R.string.ge_title),
-                subtitle = stringResource(R.string.ge_sub),
-                onBack = onBack,
-                actions = { PeriodDropdown(state.period, viewModel::setPeriod) },
-            )
+                ExpressiveHeader(
+                    modifier = headerModifier,
+                    backdrop = headerBackdrop,
+                    title = stringResource(R.string.ge_title),
+                    subtitle = stringResource(R.string.ge_sub),
+                    onBack = onBack,
+                    actions = { PeriodDropdown(state.period, viewModel::setPeriod) },
+                )
             },
         ) { headerInset ->
-        Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                when {
+                    state.isLoading -> Box(
+                        Modifier.fillMaxSize().safeHorizontalContentPadding(),
+                        contentAlignment = Alignment.Center,
+                    ) { com.lastwave.app.ui.common.ExpressiveLoadingIndicator() }
 
-            when {
-                state.isLoading -> Box(
-                    Modifier.fillMaxSize().safeHorizontalContentPadding(),
-                    contentAlignment = Alignment.Center,
-                ) { com.lastwave.app.ui.common.ExpressiveLoadingIndicator() }
-                state.stats.isEmpty() -> Box(
-                    Modifier.fillMaxSize().safeHorizontalContentPadding(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(stringResource(R.string.ge_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                else -> LazyColumn(
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = 8.dp + headerInset,
-                        bottom = 24.dp + LocalMiniPlayerScrollClearance.current + safeDrawingBottomPadding(),
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    modifier = Modifier.fillMaxSize().safeHorizontalContentPadding(),
-                ) {
-                    item(key = "genres_caption") {
-                        Text(
-                            text = "Share of your music listening · Tap any genre to explore tracks",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 2.dp),
-                        )
+                    state.error != null && state.stats.isEmpty() -> Box(
+                        Modifier.fillMaxSize().safeHorizontalContentPadding().padding(horizontal = 24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(
+                                text = state.error ?: "Couldn't load genres",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedButton(onClick = viewModel::retry) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Retry")
+                            }
+                        }
                     }
-                    items(state.stats, key = { it.name }) { stat ->
-                        GenreBarRow(
-                            name = stat.name,
-                            sharePercent = stat.sharePercent,
-                            count = stat.count,
-                            onClick = { viewModel.openDetail(stat.name) },
-                            modifier = Modifier.animateItem(),
-                        )
+
+                    state.stats.isEmpty() -> Box(
+                        Modifier.fillMaxSize().safeHorizontalContentPadding().padding(horizontal = 24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                stringResource(R.string.ge_empty),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                "Play music or sync your Spotify, YouTube Music, or Last.fm history to build your genre profile.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    else -> LazyColumn(
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = 8.dp + headerInset,
+                            bottom = 24.dp + LocalMiniPlayerScrollClearance.current + safeDrawingBottomPadding(),
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize().safeHorizontalContentPadding(),
+                    ) {
+                        if (state.error != null) {
+                            item(key = "genres_error") {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Row(
+                                        Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = state.error.orEmpty(),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        androidx.compose.material3.TextButton(onClick = viewModel::dismissError) {
+                                            Text("Dismiss")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        item(key = "genres_summary") {
+                            GenreOverviewCard(stats = state.stats)
+                        }
+
+                        item(key = "genres_caption") {
+                            Text(
+                                text = "Tap any genre to browse your tracks, start a mix, or discover fresh artists",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            )
+                        }
+
+                        itemsIndexed(state.stats, key = { _, stat -> stat.name }) { index, stat ->
+                            GenreBarRow(
+                                rank = index + 1,
+                                stat = stat,
+                                onClick = { viewModel.openDetail(stat.name) },
+                                modifier = Modifier.animateItem(),
+                            )
+                        }
                     }
                 }
             }
-        }
         }
     }
 
@@ -160,11 +225,102 @@ fun GenresScreen(
             onStartMix = { viewModel.startMix(genre) },
             onDiscoverMore = { viewModel.discoverMore(genre) },
             onShowYourTracks = viewModel::showYourTracks,
+            onSelectSort = viewModel::setDetailSort,
             onExploreGenre = { viewModel.exploreGenre(it) },
         )
     }
 }
 
+@Composable
+private fun GenreOverviewCard(stats: List<GenreStat>) {
+    val lead = stats.firstOrNull() ?: return
+    val totalPlays = stats.sumOf { it.count }
+    val totalMs = stats.sumOf { it.listeningMs }
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Leading genre",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = GenreNormalizer.formatDisplayName(lead.name),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "${(lead.sharePercent * 100f).roundToInt().coerceIn(1, 100)}% share",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                GenreStatChip(
+                    label = "Genres",
+                    value = stats.size.toString(),
+                    modifier = Modifier.weight(1f),
+                )
+                GenreStatChip(
+                    label = "Plays",
+                    value = totalPlays.toString(),
+                    modifier = Modifier.weight(1f),
+                )
+                if (totalMs > 60_000L) {
+                    GenreStatChip(
+                        label = "Time",
+                        value = formatGenreDuration(totalMs),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenreStatChip(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        modifier = modifier,
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+    }
+}
 
 @Composable
 private fun PeriodDropdown(period: String, onChange: (String) -> Unit) {
@@ -177,12 +333,12 @@ private fun PeriodDropdown(period: String, onChange: (String) -> Unit) {
             modifier = Modifier.clickable { expanded = true },
         ) {
             Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(label, style = MaterialTheme.typography.labelLarge)
+                Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
             }
         }
-        androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             GENRE_PERIODS.forEach { (value, text) ->
-                androidx.compose.material3.DropdownMenuItem(text = { Text(text) }, onClick = { onChange(value); expanded = false })
+                DropdownMenuItem(text = { Text(text) }, onClick = { onChange(value); expanded = false })
             }
         }
     }
@@ -190,48 +346,88 @@ private fun PeriodDropdown(period: String, onChange: (String) -> Unit) {
 
 @Composable
 private fun GenreBarRow(
-    name: String,
-    sharePercent: Float,
-    count: Long,
+    rank: Int,
+    stat: GenreStat,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val pctInt = (sharePercent * 100f).roundToInt().coerceIn(1, 100)
+    val pctInt = (stat.sharePercent * 100f).roundToInt().coerceIn(1, 100)
     val animated by animateFloatAsState(
-        targetValue = sharePercent.coerceIn(0.04f, 1f),
-        animationSpec = tween(600),
+        targetValue = stat.percentOfTop.coerceIn(0.06f, 1f),
+        animationSpec = tween(550),
         label = "genreBar",
     )
-    Column(modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                name.replaceFirstChar { it.uppercase() },
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = if (count > 0L) "$pctInt% · $count plays" else "$pctInt%",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "#$rank",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (rank <= 3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.width(28.dp),
+                )
+                Text(
+                    text = GenreNormalizer.formatDisplayName(stat.name),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                val metaParts = buildList {
+                    add("$pctInt%")
+                    if (stat.count > 0L) add("${stat.count} plays")
+                    if (stat.listeningMs >= 60_000L) add(formatGenreDuration(stat.listeningMs))
+                }
+                Text(
+                    text = metaParts.joinToString(" · "),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            if (stat.topArtists.isNotEmpty()) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = stat.topArtists.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 28.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
             Box(
                 Modifier
-                    .fillMaxWidth(animated)
-                    .height(10.dp)
+                    .fillMaxWidth()
+                    .height(9.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(MaterialTheme.colorScheme.primary),
-            )
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(animated)
+                        .height(9.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (rank == 1) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.primary.copy(alpha = (0.85f - (rank - 1) * 0.04f).coerceAtLeast(0.45f)),
+                        ),
+                )
+            }
         }
     }
 }
@@ -246,11 +442,13 @@ private fun GenreDetailSheet(
     onStartMix: () -> Unit,
     onDiscoverMore: () -> Unit,
     onShowYourTracks: () -> Unit,
+    onSelectSort: (GenreDetailSort) -> Unit,
     onExploreGenre: (String) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
     var menuTrack by remember { mutableStateOf<GeneratedTrack?>(null) }
     val listState = rememberLazyListState()
+    val displayGenre = remember(genre) { GenreNormalizer.formatDisplayName(GenreNormalizer.primaryGenre(genre)) }
 
     val shouldLoadMore by remember(listState, state.detailTracks.size) {
         derivedStateOf {
@@ -269,27 +467,59 @@ private fun GenreDetailSheet(
                 .adaptiveContentWidth(maxWidth = 640.dp)
                 .align(Alignment.CenterHorizontally),
         ) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
-                Text(genre.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
+                Text(displayGenre, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(
-                    if (state.isDiscoverMode) "Discoveries \u2022 Fresh recommendations" else "Your Tracks \u2022 Based on your scrobbles",
+                    if (state.isDiscoverMode) "Discoveries \u2022 Fresh recommendations" else "Your Tracks \u2022 History & personalized picks",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
-            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                androidx.compose.material3.Button(onClick = onStartMix, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.fr_start_mix))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Button(onClick = onStartMix, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.fr_start_mix), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (state.isDiscoverMode) {
-                    androidx.compose.material3.OutlinedButton(onClick = onShowYourTracks, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.ge_tracks))
+                    OutlinedButton(onClick = onShowYourTracks, modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.ge_tracks), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
-                    androidx.compose.material3.OutlinedButton(onClick = onDiscoverMore, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.ge_discover))
+                    OutlinedButton(onClick = onDiscoverMore, modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.ge_discover), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                }
+            }
+
+            // Sort chips
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 6.dp),
+            ) {
+                item {
+                    FilterChip(
+                        selected = state.detailSort == GenreDetailSort.POPULAR,
+                        onClick = { onSelectSort(GenreDetailSort.POPULAR) },
+                        label = { Text("Most Played") },
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = state.detailSort == GenreDetailSort.NEWEST,
+                        onClick = { onSelectSort(GenreDetailSort.NEWEST) },
+                        label = { Text("Recommended") },
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = state.detailSort == GenreDetailSort.AZ,
+                        onClick = { onSelectSort(GenreDetailSort.AZ) },
+                        label = { Text("A\u2013Z") },
+                    )
                 }
             }
 
@@ -298,7 +528,7 @@ private fun GenreDetailSheet(
                     GenreTrackRow(
                         track = track,
                         allTracks = state.detailTracks,
-                        genreTitle = "${genre.replaceFirstChar { it.uppercase() }}",
+                        genreTitle = displayGenre,
                         onMenu = { menuTrack = track },
                         modifier = Modifier.animateItem(),
                     )
@@ -354,12 +584,43 @@ private fun GenreTrackRow(
             .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ArtworkImage(name = track.name, artist = track.artist, embeddedUrl = track.artworkUrl, fallbackIcon = Icons.Filled.MusicNote, modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)))
+        ArtworkImage(
+            name = track.name,
+            artist = track.artist,
+            embeddedUrl = track.artworkUrl,
+            fallbackIcon = Icons.Filled.MusicNote,
+            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)),
+        )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(track.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(track.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                track.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val pc = track.playcount ?: 0L
+            val subtitle = if (pc > 0L) "${track.artist} · $pc plays" else track.artist
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         com.lastwave.app.ui.common.OverflowMenuButton(onClick = onMenu)
+    }
+}
+
+private fun formatGenreDuration(ms: Long): String {
+    val totalMin = (ms / 60_000L).coerceAtLeast(1L)
+    val hours = totalMin / 60L
+    val mins = totalMin % 60L
+    return when {
+        hours >= 1L && mins > 0L -> "${hours}h ${mins}m"
+        hours >= 1L -> "${hours}h"
+        else -> "${mins}m"
     }
 }

@@ -1291,18 +1291,18 @@ internal suspend fun InnerTubeMusicApi.preWarmPlaybackImpl() {
         runCatching { BotGuardTokenGenerator.preWarm(visitor) }
     }
 
-private const val BOTGUARD_PREWARM_DELAY_MS = 4_000L
-private const val PARALLEL_CLIENT_WAVE_SIZE = 2
-private const val FAST_STREAM_PROBE_TIMEOUT_MS = 2_200L
-private const val FAST_PLAYER_REQUEST_CALL_TIMEOUT_MS = 3_500L
-private const val FAST_SIGNED_IN_CALL_TIMEOUT_MS = 6_000L
-private const val FAST_DIRECT_CLIENT_TIMEOUT_MS = 3_000L
-private const val FAST_DIRECT_PATH_BUDGET_MS = 5_000L
-private const val FAST_SIGNED_IN_CIPHER_CLIENT_BUDGET_MS = 7_500L
-private const val FAST_SIGNED_IN_CIPHER_PATH_BUDGET_MS = 9_500L
-private const val FAST_INNERTUBEX_TIMEOUT_MS = 4_500L
-private const val FAST_SIGNED_IN_INNERTUBEX_TIMEOUT_MS = 8_500L
-private const val FAST_NEWPIPE_TIMEOUT_MS = 5_500L
-private const val FAST_VISITOR_LOOKUP_MS = 1_500L
-private const val FAST_STREAM_RESOLVE_TOTAL_TIMEOUT_MS = 12_000L
+private const val BOTGUARD_PREWARM_DELAY_MS = 1_200L
+private const val PARALLEL_CLIENT_WAVE_SIZE = 3
+private const val FAST_STREAM_PROBE_TIMEOUT_MS = 900L
+private const val FAST_PLAYER_REQUEST_CALL_TIMEOUT_MS = 2_200L
+private const val FAST_SIGNED_IN_CALL_TIMEOUT_MS = 4_500L
+private const val FAST_DIRECT_CLIENT_TIMEOUT_MS = 1_800L
+private const val FAST_DIRECT_PATH_BUDGET_MS = 3_600L
+private const val FAST_SIGNED_IN_CIPHER_CLIENT_BUDGET_MS = 5_500L
+private const val FAST_SIGNED_IN_CIPHER_PATH_BUDGET_MS = 7_500L
+private const val FAST_INNERTUBEX_TIMEOUT_MS = 3_500L
+private const val FAST_SIGNED_IN_INNERTUBEX_TIMEOUT_MS = 6_500L
+private const val FAST_NEWPIPE_TIMEOUT_MS = 4_000L
+private const val FAST_VISITOR_LOOKUP_MS = 500L
+private const val FAST_STREAM_RESOLVE_TOTAL_TIMEOUT_MS = 9_000L
 

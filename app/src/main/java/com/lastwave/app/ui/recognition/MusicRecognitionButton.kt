@@ -108,7 +108,7 @@ fun MusicRecognitionButton(key: String) {
     if (state != RecognitionState.Idle) {
         RecognitionSheet(
             state = state,
-            onRetry = { launchCapture(defaults.first, defaults.second) },
+            onRetry = { launchCapture(pendingHum, pendingSensitivity) },
             onDismiss = viewModel::dismiss,
             onOpenSettings = {
                 context.startActivity(

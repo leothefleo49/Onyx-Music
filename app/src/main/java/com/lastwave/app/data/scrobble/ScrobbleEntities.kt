@@ -33,6 +33,14 @@ object ScrobbleMediaCategory {
 fun normalizeScrobbleTrackKey(artist: String, title: String): String =
     "${artist.trim().lowercase()}|${title.trim().lowercase()}"
 
+/**
+ * Aggressive cross-platform canonical key (strips diacritics, remaster/deluxe
+ * suffixes, featuring tags, "- Topic" / "VEVO", and punctuation) so the same
+ * play logged by Onyx, Last.fm app, Spotify, and YouTube Music always merges cleanly.
+ */
+fun canonicalScrobbleKey(artist: String, title: String): String =
+    com.lastwave.app.data.spotify.mirror.SpotifyTrackNormalizer.canonicalTrackKey(title, artist)
+
 @Entity(
     tableName = "scrobble_events",
     indices = [
@@ -63,6 +71,12 @@ data class ScrobbleEventEntity(
     val listenBrainzSyncStatus: String = ScrobbleSyncStatus.SKIPPED,
     val retryCount: Int = 0,
     val mediaCategory: String = ScrobbleMediaCategory.MUSIC,
+    /** Active audio output route when played (e.g. "Bluetooth · Space One Pro", "USB DAC", "Speaker"). */
+    val outputDevice: String = "",
+    /** True if the user skipped before reaching 85% completion. */
+    val wasSkipped: Boolean = false,
+    /** True if the track played through naturally (or from external history where completion is assumed). */
+    val completed: Boolean = true,
 )
 
 @Entity(tableName = "scrobble_edit_rules")

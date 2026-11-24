@@ -1243,7 +1243,7 @@ class SettingsViewModel @Inject constructor(
     fun exportDiagnostics() {
         launchSettingsAction("export diagnostics") {
             val report = withContext(Dispatchers.IO) { buildDiagnosticsReport() }
-            val filename = "lastwave-diagnostics-${System.currentTimeMillis()}.txt"
+            val filename = "onyx-music-diagnostics-${System.currentTimeMillis()}.txt"
             fileExportHelper.shareFile(filename, report, "text/plain")
             _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_diag_ready)) }
         }
@@ -1251,7 +1251,7 @@ class SettingsViewModel @Inject constructor(
 
     private suspend fun buildDiagnosticsReport(): String = withContext(Dispatchers.IO) {
         val sb = StringBuilder()
-        sb.appendLine("LastWave diagnostics")
+        sb.appendLine("Onyx Music diagnostics")
         sb.appendLine("time=${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
         val versionName = runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -1543,5 +1543,29 @@ class SettingsViewModel @Inject constructor(
 
     fun clearSearch() {
         _searchQuery.value = ""
+    }
+
+    fun setEdgeGlowEdges(edgeMask: Int) {
+        launchSettingsAction("update border glow edges") {
+            settingsPreferences.setEdgeGlowEdges(edgeMask)
+        }
+    }
+
+    fun setEdgeGlowStyle(style: String) {
+        launchSettingsAction("update border glow style") {
+            settingsPreferences.setEdgeGlowStyle(style)
+        }
+    }
+
+    fun setAodDefaultFull(enabled: Boolean) {
+        launchSettingsAction("update default AOD mode") {
+            settingsPreferences.setAodDefaultFull(enabled)
+        }
+    }
+
+    fun setAdvancedModeEnabled(enabled: Boolean) {
+        launchSettingsAction("update settings view mode") {
+            settingsPreferences.setAdvancedModeEnabled(enabled)
+        }
     }
 }

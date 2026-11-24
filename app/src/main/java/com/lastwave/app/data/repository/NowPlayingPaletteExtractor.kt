@@ -36,6 +36,8 @@ class NowPlayingPaletteExtractor @Inject constructor(
         try {
             val request = ImageRequest.Builder(context)
                 .data(artworkUrl)
+                .memoryCacheKey("$artworkUrl#np_palette_128")
+                .size(128)
                 .allowHardware(false) // Palette needs to read pixels from a software bitmap
                 .build()
             val result = context.imageLoader.execute(request)

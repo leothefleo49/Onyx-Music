@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -123,7 +124,7 @@ internal fun CardTextArea(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(CardTokens.textAreaHeight)
+            .heightIn(min = CardTokens.textAreaHeight)
             .padding(horizontal = 2.dp),
         verticalArrangement = Arrangement.Top,
     ) {

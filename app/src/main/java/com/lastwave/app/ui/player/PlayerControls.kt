@@ -417,17 +417,21 @@ internal fun MainControls(state: MusicPlayerState, player: MusicPlayer, isTransl
         // fallback below â€” the "whole white" play button. Gating content on
         // the same active flag closes that mismatch for every path.
         val isPillGlassActive = LocalLiquidGlass.current &&
+            com.lastwave.app.data.local.GlassSurface.FLOATING.id in com.lastwave.app.ui.theme.LocalGlassSurfaces.current &&
             isLiquidGlassBackdropSupported() &&
             LocalLiquidGlassBackdrop.current != null
         LiquidGlassSurface(
-            glassModifier = Modifier.liquidGlassChrome(pillShape, LocalLiquidGlass.current, LiquidGlassPreset.FloatingControls, interactionSource = playInteraction),
+            glassModifier = Modifier.liquidGlassChrome(pillShape, isPillGlassActive, LiquidGlassPreset.FloatingControls, interactionSource = playInteraction),
             onClick = hapticClick(if (state.isPlaying) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn, player::togglePlayPause),
             interactionSource = playInteraction,
             shape = pillShape,
             // Fallback matches the sibling prev/next buttons (14% white veil,
             // never solid white): on the full player's dark scrim the white
             // icon stays readable with or without refraction.
-            color = liquidGlassContainerColor(if (isTranslucent) Color.White.copy(alpha = 0.14f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)),
+            color = liquidGlassContainerColor(
+                if (isTranslucent) Color.White.copy(alpha = 0.14f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                enabled = isPillGlassActive,
+            ),
             contentColor = if (isPillGlassActive) {
                 if (isTranslucent) Color.White else MaterialTheme.colorScheme.primary
             } else if (isTranslucent) Color.White.copy(alpha = 0.94f) else MaterialTheme.colorScheme.onPrimary,

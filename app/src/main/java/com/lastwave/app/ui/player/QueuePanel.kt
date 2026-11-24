@@ -347,6 +347,17 @@ internal fun QueuePanel(
     onUndoQueueSwitch: () -> Unit = {},
     onDismissUndoQueueSwitch: () -> Unit = {},
 ) {
+    val context = LocalContext.current
+    val queuePrefs = remember(context) {
+        context.applicationContext.getSharedPreferences("onyx_queue_prefs", android.content.Context.MODE_PRIVATE)
+    }
+    LaunchedEffect(queuePrefs) {
+        isQueueLockedState = queuePrefs.getBoolean("queue_locked", false)
+    }
+    fun setQueueLocked(locked: Boolean) {
+        isQueueLockedState = locked
+        queuePrefs.edit().putBoolean("queue_locked", locked).apply()
+    }
     val isQueueLocked = isQueueLockedState
     var showQueueOptionsSheet by remember { mutableStateOf(false) }
     var showRecentQueuesSheet by remember { mutableStateOf(false) }
@@ -460,6 +471,8 @@ internal fun QueuePanel(
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     if (isQueueLocked) {
                         Surface(
@@ -1091,7 +1104,7 @@ internal fun QueuePanel(
                 Surface(
                     onClick = {
                         haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                        isQueueLockedState = !isQueueLockedState
+                        setQueueLocked(!isQueueLocked)
                     },
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -1122,7 +1135,7 @@ internal fun QueuePanel(
                         }
                         Switch(
                             checked = isQueueLocked,
-                            onCheckedChange = { isQueueLockedState = it },
+                            onCheckedChange = { setQueueLocked(it) },
                         )
                     }
                 }
@@ -1354,7 +1367,7 @@ internal fun QueuePanel(
             text = {
                 Text(
                     "• Reorder songs: Drag the handle on the right of any song.\n" +
-                        "• Remove a song: Swipe it left or right (tap Undo if accidental).\n" +
+                        "• Remove a song: Swipe it left (tap Undo if accidental).\n" +
                         "• Lock queue: Freezes drag, swipe, and Clear so nothing moves by mistake.\n" +
                         "• Smooth transitions: Blends one song into the next automatically (requires Bit-Perfect mode OFF).\n" +
                         "• Recent queues: Every queue you play is saved with your exact song & timestamp so you can jump back anytime.\n" +

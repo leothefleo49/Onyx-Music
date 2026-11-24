@@ -139,12 +139,22 @@ enum class EdgeGlowMode(val id: String) {
 /** How the ambient edge glow moves while music plays. */
 enum class EdgeGlowMotion(val id: String) {
     BEAT("beat"),
+    FLOW("flow"),
     IDLE("idle"),
     STATIC("static");
 
     companion object {
         fun fromId(id: String?): EdgeGlowMotion = entries.firstOrNull { it.id == id } ?: BEAT
     }
+}
+
+/** Bitmask constants for selecting which screen edges display Lumn border glow / visualizers. */
+object EdgeGlowEdgeMask {
+    const val TOP = 1
+    const val BOTTOM = 2
+    const val LEFT = 4
+    const val RIGHT = 8
+    const val ALL = TOP or BOTTOM or LEFT or RIGHT
 }
 
 /** Headphone spatial rendering: off, fixed stage, or head-tracked. */
@@ -189,8 +199,8 @@ enum class PreviousNavigationMode(val id: String) {
 
 /** How a track reaches the selected streaming quality. Downgrades are always seamless. */
 enum class HiResStart(val id: String, val title: String, val subtitle: String) {
-    FAST("fast", "Fast start", "Start on Opus, then switch to your quality when ready"),
-    DIRECT("direct", "Best quality first", "Wait up to 2.5 s for your quality, then Opus"),
+    FAST("fast", "Fast start", "Gets best quality within 0.25 s if ready, else starts fast and upgrades smoothly once"),
+    DIRECT("direct", "Best quality first", "Wait up to 0.9 s for best quality, then fast fallback"),
     NEVER("never", "Never upgrade", "Keep the stream a song starts with");
 
     companion object {
@@ -425,14 +435,24 @@ data class MiscSettings(
     /** 0.2 .. 2.0; 1.0 = default. */
     val edgeGlowIntensity: Float = 1f,
     /** 0 .. 1: hairline to broad band. */
-    val edgeGlowThickness: Float = 0.38f,
+    val edgeGlowThickness: Float = 0.42f,
     val edgeGlowMotion: EdgeGlowMotion = EdgeGlowMotion.BEAT,
+    /** Bitmask of active screen edges ([EdgeGlowEdgeMask]: TOP=1, BOTTOM=2, LEFT=4, RIGHT=8). */
+    val edgeGlowEdges: Int = EdgeGlowEdgeMask.ALL,
+    /** Visual style shared by Half AOD, Full AOD and player border glow: glow, wave, bars, aurora, off. */
+    val edgeGlowStyle: String = "glow",
     /** Always-on display: show the current lyric line. */
     val aodShowLyrics: Boolean = true,
-    /** AOD edge animation: wave, glow, bars, aurora or off. */
-    val aodVisualizerMode: String = "wave",
+    /** AOD edge animation: glow, wave, bars, aurora or off. */
+    val aodVisualizerMode: String = "glow",
     val aodShowControls: Boolean = true,
     val aodShowArtwork: Boolean = true,
+    /** When false (default), tapping Vibe/AOD enters Half AOD (screen stays awake, free tab/app switching & manual sleep, with 1-tap Full AOD). */
+    val aodDefaultFull: Boolean = false,
+    /** When true, exposes audiophile / power-user controls inline in Settings (basic users stay uncluttered by default). */
+    val advancedModeEnabled: Boolean = false,
+    /** Persisted queue lock state so it survives process death. */
+    val queueLocked: Boolean = false,
     /** Progress-bar colours: follow artwork, or use the two custom colours below. */
     val seekbarMatchTrackColors: Boolean = true,
     val seekbarCustomColor1: String = "#8B5CF6",
@@ -637,10 +657,15 @@ class SettingsPreferences @Inject constructor(
         val EDGE_GLOW_INTENSITY = floatPreferencesKey("lw_edge_glow_intensity")
         val EDGE_GLOW_THICKNESS = floatPreferencesKey("lw_edge_glow_thickness")
         val EDGE_GLOW_MOTION = stringPreferencesKey("lw_edge_glow_motion")
+        val EDGE_GLOW_EDGES = intPreferencesKey("lw_edge_glow_edges")
+        val EDGE_GLOW_STYLE = stringPreferencesKey("lw_edge_glow_style")
         val AOD_SHOW_LYRICS = booleanPreferencesKey("lw_aod_show_lyrics")
         val AOD_VISUALIZER_MODE = stringPreferencesKey("lw_aod_visualizer_mode")
         val AOD_SHOW_CONTROLS = booleanPreferencesKey("lw_aod_show_controls")
         val AOD_SHOW_ARTWORK = booleanPreferencesKey("lw_aod_show_artwork")
+        val AOD_DEFAULT_FULL = booleanPreferencesKey("lw_aod_default_full")
+        val ADVANCED_MODE_ENABLED = booleanPreferencesKey("lw_advanced_mode_enabled")
+        val QUEUE_LOCKED = booleanPreferencesKey("lw_queue_locked")
         val SEEKBAR_MATCH_TRACK_COLORS = booleanPreferencesKey("lw_seekbar_match_track_colors")
         val SEEKBAR_CUSTOM_COLOR_1 = stringPreferencesKey("lw_seekbar_custom_color_1")
         val SEEKBAR_CUSTOM_COLOR_2 = stringPreferencesKey("lw_seekbar_custom_color_2")
@@ -844,12 +869,17 @@ class SettingsPreferences @Inject constructor(
                 edgeGlowColor1 = p.readSafely(Keys.EDGE_GLOW_COLOR_1) ?: "#8B5CF6",
                 edgeGlowColor2 = p.readSafely(Keys.EDGE_GLOW_COLOR_2) ?: "#22D3EE",
                 edgeGlowIntensity = (p.readSafely(Keys.EDGE_GLOW_INTENSITY) ?: 1f).coerceIn(0.2f, 2f),
-                edgeGlowThickness = (p.readSafely(Keys.EDGE_GLOW_THICKNESS) ?: 0.38f).coerceIn(0.05f, 1f),
+                edgeGlowThickness = (p.readSafely(Keys.EDGE_GLOW_THICKNESS) ?: 0.42f).coerceIn(0.05f, 1f),
                 edgeGlowMotion = EdgeGlowMotion.fromId(p.readSafely(Keys.EDGE_GLOW_MOTION)),
+                edgeGlowEdges = (p.readSafely(Keys.EDGE_GLOW_EDGES) ?: EdgeGlowEdgeMask.ALL).let { if (it and EdgeGlowEdgeMask.ALL == 0) EdgeGlowEdgeMask.ALL else it and EdgeGlowEdgeMask.ALL },
+                edgeGlowStyle = p.readSafely(Keys.EDGE_GLOW_STYLE) ?: "glow",
                 aodShowLyrics = p.readSafely(Keys.AOD_SHOW_LYRICS) ?: true,
-                aodVisualizerMode = p.readSafely(Keys.AOD_VISUALIZER_MODE) ?: "wave",
+                aodVisualizerMode = p.readSafely(Keys.AOD_VISUALIZER_MODE) ?: "glow",
                 aodShowControls = p.readSafely(Keys.AOD_SHOW_CONTROLS) ?: true,
                 aodShowArtwork = p.readSafely(Keys.AOD_SHOW_ARTWORK) ?: true,
+                aodDefaultFull = p.readSafely(Keys.AOD_DEFAULT_FULL) ?: false,
+                advancedModeEnabled = p.readSafely(Keys.ADVANCED_MODE_ENABLED) ?: false,
+                queueLocked = p.readSafely(Keys.QUEUE_LOCKED) ?: false,
                 seekbarMatchTrackColors = p.readSafely(Keys.SEEKBAR_MATCH_TRACK_COLORS) ?: true,
                 seekbarCustomColor1 = p.readSafely(Keys.SEEKBAR_CUSTOM_COLOR_1) ?: "#8B5CF6",
                 seekbarCustomColor2 = p.readSafely(Keys.SEEKBAR_CUSTOM_COLOR_2) ?: "#22D3EE",
@@ -1584,6 +1614,15 @@ class SettingsPreferences @Inject constructor(
         dataStore.edit { it[Keys.EDGE_GLOW_MOTION] = motion.id }
     }
 
+    suspend fun setEdgeGlowEdges(edgeMask: Int) {
+        val safe = edgeMask and EdgeGlowEdgeMask.ALL
+        dataStore.edit { it[Keys.EDGE_GLOW_EDGES] = if (safe == 0) EdgeGlowEdgeMask.ALL else safe }
+    }
+
+    suspend fun setEdgeGlowStyle(style: String) {
+        dataStore.edit { it[Keys.EDGE_GLOW_STYLE] = style }
+    }
+
     suspend fun setAodShowLyrics(enabled: Boolean) {
         dataStore.edit { it[Keys.AOD_SHOW_LYRICS] = enabled }
     }
@@ -1598,6 +1637,18 @@ class SettingsPreferences @Inject constructor(
 
     suspend fun setAodShowArtwork(enabled: Boolean) {
         dataStore.edit { it[Keys.AOD_SHOW_ARTWORK] = enabled }
+    }
+
+    suspend fun setAodDefaultFull(enabled: Boolean) {
+        dataStore.edit { it[Keys.AOD_DEFAULT_FULL] = enabled }
+    }
+
+    suspend fun setAdvancedModeEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.ADVANCED_MODE_ENABLED] = enabled }
+    }
+
+    suspend fun setQueueLocked(locked: Boolean) {
+        dataStore.edit { it[Keys.QUEUE_LOCKED] = locked }
     }
 
     suspend fun setSeekbarMatchTrackColors(enabled: Boolean) {

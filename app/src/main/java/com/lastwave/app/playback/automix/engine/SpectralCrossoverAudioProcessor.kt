@@ -7,13 +7,21 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.tan
 
+enum class FilterSweepMode(val label: String) {
+    OFF("Off"),
+    HPF_OUT("HPF Out"),
+    LPF_IN("LPF In"),
+    DUAL_SWEEP("Dual Sweep"),
+}
+
 /**
  * Media3 AudioProcessor bridging real-time PCM audio buffers into the C++20 AutoMix DSP engine,
- * extended with 3-band Linkwitz-Riley-aligned manual DJ EQ swap faders (Low 120 Hz / Mid / High 3.8 kHz)
- * and LUFS contour gain trim.
+ * extended with 3-band Linkwitz-Riley-aligned manual DJ EQ swap faders (Low 120 Hz / Mid / High 3.8 kHz),
+ * 3-band EQ Kill toggles, real-time HPF/LPF filter sweeps, and deck/LUFS gain trim.
  */
 class SpectralCrossoverAudioProcessor : AudioProcessor {
 
@@ -49,16 +57,160 @@ class SpectralCrossoverAudioProcessor : AudioProcessor {
     @Volatile var eqLowSwap: Float = 0.5f
     @Volatile var eqMidSwap: Float = 0.5f
     @Volatile var eqHighSwap: Float = 0.5f
+    @Volatile var killLow: Boolean = false
+    @Volatile var killMid: Boolean = false
+    @Volatile var killHigh: Boolean = false
+    @Volatile var filterSweepMode: FilterSweepMode = FilterSweepMode.DUAL_SWEEP
+    @Volatile var manualGainTrimDb: Float = 0.0f
     @Volatile var lufsGainTrim: Float = 1.0f
     @Volatile var isIncomingDeck: Boolean = false
 
     // Lightweight 1st-order / biquad state per stereo channel for Kotlin 3-band EQ fader shaping
+    private var configuredRateHz: Int = 0
     private var lowCoeff = 0.017f
     private var highCoeff = 0.45f
     private var lowStateL = 0f
     private var lowStateR = 0f
     private var highStateL = 0f
     private var highStateR = 0f
+    private var sweepStateL = 0f
+    private var sweepStateR = 0f
+
+    fun isAudiblyEngaged(): Boolean {
+        if (killLow || killMid || killHigh) return true
+        if (kotlin.math.abs(manualGainTrimDb) > 0.05f) return true
+        if (!isEnabled) return false
+        return blendProgress > 0.001f ||
+            kotlin.math.abs(eqLowSwap - 0.5f) > 0.01f ||
+            kotlin.math.abs(eqMidSwap - 0.5f) > 0.01f ||
+            kotlin.math.abs(eqHighSwap - 0.5f) > 0.01f ||
+            kotlin.math.abs(lufsGainTrim - 1.0f) > 0.005f
+    }
+
+    /**
+     * In-place PCM processing hook invoked directly from [com.lastwave.app.playback.NativeProcessingAudioSink]
+     * so live DJ EQ swaps, 3-band kills, filter sweeps, and deck gain trims execute on BOTH float and
+     * PCM16 audio paths (Media3's DefaultAudioSink drops custom AudioProcessors on float output).
+     */
+    fun processPcmBufferInPlace(
+        pcmBuffer: ByteBuffer,
+        sampleRateHz: Int,
+        channelCount: Int,
+        pcmEncoding: Int,
+    ) {
+        if (channelCount != 2 || !isAudiblyEngaged()) return
+        val sr = sampleRateHz.coerceAtLeast(8_000)
+        if (sr != configuredRateHz) {
+            configuredRateHz = sr
+            lowCoeff = computeOnePoleAlpha(LOW_CROSSOVER_HZ, sr.toFloat())
+            highCoeff = computeOnePoleAlpha(HIGH_CROSSOVER_HZ, sr.toFloat())
+            resetFilterStates()
+        }
+
+        val rawGains = computeBandGains(blendProgress)
+        val lowGain = if (killLow) 0f else rawGains.first
+        val midGain = if (killMid) 0f else rawGains.second
+        val highGain = if (killHigh) 0f else rawGains.third
+        val manualLinear = 10.0.pow(manualGainTrimDb.coerceIn(-12f, 6f) / 20.0).toFloat()
+        val trim = (lufsGainTrim * manualLinear).coerceIn(0.25f, 2.0f)
+
+        val sweepActive = applySpectralSweeps && filterSweepMode != FilterSweepMode.OFF && blendProgress > 0.01f
+        val sweepIsHpf = when (filterSweepMode) {
+            FilterSweepMode.HPF_OUT -> !isIncomingDeck
+            FilterSweepMode.LPF_IN -> false
+            FilterSweepMode.DUAL_SWEEP -> !isIncomingDeck
+            FilterSweepMode.OFF -> false
+        }
+        val sweepAppliesToThisDeck = sweepActive && when (filterSweepMode) {
+            FilterSweepMode.HPF_OUT -> !isIncomingDeck
+            FilterSweepMode.LPF_IN -> isIncomingDeck
+            FilterSweepMode.DUAL_SWEEP -> true
+            FilterSweepMode.OFF -> false
+        }
+        val sweepAlpha = if (sweepAppliesToThisDeck) {
+            val t = blendProgress.coerceIn(0f, 1f)
+            val cutoffHz = if (sweepIsHpf) {
+                // Sweep HPF from 35 Hz up to 2400 Hz on outgoing deck
+                35f * (2400f / 35f).toDouble().pow(t.toDouble()).toFloat()
+            } else {
+                // Sweep LPF from 450 Hz up to 18000 Hz on incoming deck
+                450f * (18000f / 450f).toDouble().pow(t.toDouble()).toFloat()
+            }
+            computeOnePoleAlpha(cutoffHz, sr.toFloat())
+        } else 0f
+
+        val alphaLow = lowCoeff
+        val alphaHigh = highCoeff
+        val startPos = pcmBuffer.position()
+        val remaining = pcmBuffer.remaining()
+
+        if (pcmEncoding == C.ENCODING_PCM_FLOAT) {
+            val numFrames = remaining / 8
+            if (numFrames <= 0) return
+            val dup = pcmBuffer.duplicate().order(pcmBuffer.order())
+            val floats = dup.asFloatBuffer()
+            for (i in 0 until numFrames) {
+                val idx = i * 2
+                val inL = floats.get(idx)
+                val inR = floats.get(idx + 1)
+
+                lowStateL += alphaLow * (inL - lowStateL)
+                lowStateR += alphaLow * (inR - lowStateR)
+                highStateL += alphaHigh * (inL - highStateL)
+                highStateR += alphaHigh * (inR - highStateR)
+
+                var outL = ((lowStateL * lowGain) + ((highStateL - lowStateL) * midGain) + ((inL - highStateL) * highGain)) * trim
+                var outR = ((lowStateR * lowGain) + ((highStateR - lowStateR) * midGain) + ((inR - highStateR) * highGain)) * trim
+
+                if (sweepAppliesToThisDeck) {
+                    sweepStateL += sweepAlpha * (outL - sweepStateL)
+                    sweepStateR += sweepAlpha * (outR - sweepStateR)
+                    if (sweepIsHpf) {
+                        outL -= sweepStateL
+                        outR -= sweepStateR
+                    } else {
+                        outL = sweepStateL
+                        outR = sweepStateR
+                    }
+                }
+                floats.put(idx, outL.coerceIn(-1.0f, 1.0f))
+                floats.put(idx + 1, outR.coerceIn(-1.0f, 1.0f))
+            }
+        } else if (pcmEncoding == C.ENCODING_PCM_16BIT) {
+            val numFrames = remaining / 4
+            if (numFrames <= 0) return
+            val dup = pcmBuffer.duplicate().order(pcmBuffer.order())
+            val shorts = dup.asShortBuffer()
+            for (i in 0 until numFrames) {
+                val idx = i * 2
+                val inL = shorts.get(idx) / 32768f
+                val inR = shorts.get(idx + 1) / 32768f
+
+                lowStateL += alphaLow * (inL - lowStateL)
+                lowStateR += alphaLow * (inR - lowStateR)
+                highStateL += alphaHigh * (inL - highStateL)
+                highStateR += alphaHigh * (inR - highStateR)
+
+                var outL = ((lowStateL * lowGain) + ((highStateL - lowStateL) * midGain) + ((inL - highStateL) * highGain)) * trim
+                var outR = ((lowStateR * lowGain) + ((highStateR - lowStateR) * midGain) + ((inR - highStateR) * highGain)) * trim
+
+                if (sweepAppliesToThisDeck) {
+                    sweepStateL += sweepAlpha * (outL - sweepStateL)
+                    sweepStateR += sweepAlpha * (outR - sweepStateR)
+                    if (sweepIsHpf) {
+                        outL -= sweepStateL
+                        outR -= sweepStateR
+                    } else {
+                        outL = sweepStateL
+                        outR = sweepStateR
+                    }
+                }
+                shorts.put(idx, (outL.coerceIn(-1f, 1f) * 32767f).toInt().toShort())
+                shorts.put(idx + 1, (outR.coerceIn(-1f, 1f) * 32767f).toInt().toShort())
+            }
+        }
+        pcmBuffer.position(startPos)
+    }
 
     fun applyManualDjParams(
         lowSwap: Float,
@@ -272,6 +424,8 @@ class SpectralCrossoverAudioProcessor : AudioProcessor {
         lowStateR = 0f
         highStateL = 0f
         highStateR = 0f
+        sweepStateL = 0f
+        sweepStateR = 0f
     }
 
     override fun queueEndOfStream() {

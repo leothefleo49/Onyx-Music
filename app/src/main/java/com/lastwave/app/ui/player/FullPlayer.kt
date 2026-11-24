@@ -391,6 +391,10 @@ internal fun FullPlayer(
     onToggleYouTubeLike: () -> Unit = {},
     onDragStatusChange: (Boolean) -> Unit = {},
     isOpen: Boolean = true,
+    isExpandSettled: Boolean = true,
+    halfAodActive: Boolean = false,
+    onToggleHalfAod: (() -> Unit)? = null,
+    onEnterFullAod: (() -> Unit)? = null,
     lyricsProviderStatuses: Map<com.lastwave.app.data.local.LyricsProvider, LyricsSyncType> = emptyMap(),
     onProbeLyricsProviders: (() -> Unit)? = null,
     onSelectLyricsProvider: ((com.lastwave.app.data.local.LyricsProvider) -> Unit)? = null,
@@ -570,7 +574,7 @@ internal fun FullPlayer(
     // once per track through the shared Coil loader (normally a cache hit)
     // with Palette; any failure leaves the standard surface gradient.
     val context = LocalContext.current
-    val artworkViewModel: ArtworkViewModel = hiltViewModel()
+    val artworkViewModel: ArtworkViewModel = com.lastwave.app.ui.common.LocalArtworkViewModel.current ?: hiltViewModel()
     val artworkKey = remember(track.title, track.artist) { ArtworkNormalizer.cacheKey(track.title, track.artist) }
     val onlineAmbientUrl by remember(artworkKey) {
         artworkViewModel.resolved.map { it[artworkKey] }.distinctUntilChanged()
@@ -596,6 +600,7 @@ internal fun FullPlayer(
             runCatching {
                 val request = ImageRequest.Builder(context)
                     .data(url)
+                    .memoryCacheKey("$url#ambient_palette_128")
                     .allowHardware(false)
                     .size(128)
                     .build()
@@ -839,23 +844,6 @@ internal fun FullPlayer(
                     )
                 }
             )
-            // Lumn-style ambient border glow: light pooled on the screen edges,
-            // pulsing with the bass envelope. Sits over the artwork and under
-            // every control, and takes no touch input.
-            AmbientEdgeGlow(
-                config = edgeGlow.copy(
-                    color1 = when (edgeGlow.mode) {
-                        com.lastwave.app.data.local.EdgeGlowMode.ART -> ambientColor
-                        else -> edgeGlow.color1
-                    },
-                    color2 = when (edgeGlow.mode) {
-                        com.lastwave.app.data.local.EdgeGlowMode.ART -> ambientCompanion
-                        else -> edgeGlow.color2
-                    },
-                ),
-                isPlaying = state.isPlaying,
-                modifier = Modifier.matchParentSize(),
-            )
             Box(Modifier.matchParentSize().liquidGlassSource(if (fullGlass) playerBackdrop else null)) {
                 // Dynamic ambient lyrics gradient overlay: subtly shifts line-by-line strictly
                 // using the album cover art palette, preserving zero text visibility issues.
@@ -981,7 +969,7 @@ internal fun FullPlayer(
                                 presentationAlpha = { heroAlpha },
                                 onCoverChanged = { canvasCover = it },
                                 onAspectRatioChanged = { canvasAspect = it },
-                                pausedForTransition = shownDismissY > 1f || currentTab != FullPlayerTab.NOW_PLAYING,
+                                pausedForTransition = !isExpandSettled || shownDismissY > 1f || currentTab != FullPlayerTab.NOW_PLAYING,
                                 modifier = Modifier.fillMaxSize().then(lyricsArtBlurModifier),
                             )
                         } else {
@@ -1000,7 +988,7 @@ internal fun FullPlayer(
                                     presentationAlpha = { heroAlpha },
                                     onCoverChanged = { canvasCover = it },
                                     onAspectRatioChanged = { canvasAspect = it },
-                                    pausedForTransition = shownDismissY > 1f || currentTab != FullPlayerTab.NOW_PLAYING,
+                                    pausedForTransition = !isExpandSettled || shownDismissY > 1f || currentTab != FullPlayerTab.NOW_PLAYING,
                                     modifier = Modifier.fillMaxSize().then(lyricsArtBlurModifier),
                                 )
                             }
@@ -1115,6 +1103,28 @@ internal fun FullPlayer(
                     }
                 }
             }
+            // Lumn-style ambient border glow: renders ABOVE the artwork/canvas (so full-bleed
+            // covers never mask it) and BELOW interactive player controls, with zero touch input.
+            if (isExpandSettled) {
+                AmbientEdgeGlow(
+                    config = edgeGlow.copy(
+                        color1 = when (edgeGlow.mode) {
+                            com.lastwave.app.data.local.EdgeGlowMode.ART -> ambientColor
+                            else -> edgeGlow.color1
+                        },
+                        color2 = when (edgeGlow.mode) {
+                            com.lastwave.app.data.local.EdgeGlowMode.ART -> ambientCompanion
+                            else -> edgeGlow.color2
+                        },
+                        color3 = when (edgeGlow.mode) {
+                            com.lastwave.app.data.local.EdgeGlowMode.ART -> ambientDeep
+                            else -> edgeGlow.color3
+                        },
+                    ),
+                    isPlaying = state.isPlaying,
+                    modifier = Modifier.matchParentSize(),
+                )
+            }
             // Bottom inset is applied per tab below, so the queue can run under the gesture pill.
             val showError = state.error != null && !lyricsFullscreen
             val bottomInset = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
@@ -1144,15 +1154,16 @@ internal fun FullPlayer(
                             ),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Box(
+                        Row(
                             Modifier
                                 .fillMaxWidth()
                                 .height(52.dp)
-                                .padding(horizontal = if (isTabletLandscape) 32.dp else 20.dp)
+                                .padding(horizontal = if (isTabletLandscape) 32.dp else 16.dp)
                                 .playerVerticalSwipe(enabled = currentTab == FullPlayerTab.QUEUE),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             // FullPlayer sits on a dark blurred-artwork scrim in both light and
-                            // dark mode, so foreground must use the white overlay palette â€”
+                            // dark mode, so foreground must use the white overlay palette —
                             // never MaterialTheme onSurface (near-black in light mode).
                             LiquidGlassSurface(
                                 onClick = hapticClick {
@@ -1172,9 +1183,7 @@ internal fun FullPlayer(
                                     LocalLiquidGlass.current,
                                     LiquidGlassPreset.FloatingControls,
                                 ),
-                                modifier = Modifier
-                                    .align(Alignment.CenterStart)
-                                    .size(44.dp),
+                                modifier = Modifier.size(44.dp),
                             ) {
                                 Icon(
                                     if (playerLyricsActive || currentTab != FullPlayerTab.NOW_PLAYING) Icons.Filled.ArrowBack else Icons.Filled.ExpandMore,
@@ -1198,8 +1207,8 @@ internal fun FullPlayer(
                             )
                             Column(
                                 Modifier
-                                    .align(Alignment.Center)
-                                    .padding(horizontal = 108.dp)
+                                    .weight(1f)
+                                    .padding(horizontal = 10.dp)
                                     .graphicsLayer { alpha = headerLabelAlpha },
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
@@ -1212,7 +1221,9 @@ internal fun FullPlayer(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = if (isThemeLight) Color(0xFF222226) else Color.White.copy(alpha = 0.95f),
                                     fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.9.sp,
+                                    letterSpacing = 0.8.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
                                     if (currentTab == FullPlayerTab.LYRICS) {
@@ -1227,27 +1238,29 @@ internal fun FullPlayer(
                                 )
                             }
                             Row(
-                                modifier = Modifier.align(Alignment.CenterEnd),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                if (onEnterAod != null) {
+                                val aodClick = onToggleHalfAod ?: onEnterAod
+                                if (aodClick != null) {
                                     LiquidGlassSurface(
-                                        onClick = hapticClick { onEnterAod() },
+                                        onClick = hapticClick { aodClick() },
                                         shape = CircleShape,
-                                        color = liquidGlassContainerColor(if (isThemeLight) Color.Black.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.14f)),
-                                        contentColor = if (isThemeLight) Color(0xFF222226) else Color.White.copy(alpha = 0.94f),
+                                        color = if (halfAodActive) MaterialTheme.colorScheme.primaryContainer
+                                        else liquidGlassContainerColor(if (isThemeLight) Color.Black.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.14f)),
+                                        contentColor = if (halfAodActive) MaterialTheme.colorScheme.onPrimaryContainer
+                                        else (if (isThemeLight) Color(0xFF222226) else Color.White.copy(alpha = 0.94f)),
                                         glassModifier = Modifier.liquidGlassChrome(
                                             CircleShape,
                                             LocalLiquidGlass.current,
                                             LiquidGlassPreset.FloatingControls,
                                         ),
-                                        modifier = Modifier.size(44.dp),
+                                        modifier = Modifier.size(42.dp),
                                     ) {
                                         Icon(
                                             Icons.Filled.AutoAwesome,
-                                            contentDescription = "Always-on display / Vibe mode",
-                                            modifier = Modifier.size(21.dp),
+                                            contentDescription = if (halfAodActive) "Half AOD active" else "Half AOD / Vibe mode",
+                                            modifier = Modifier.size(20.dp),
                                         )
                                     }
                                 }
@@ -1264,12 +1277,12 @@ internal fun FullPlayer(
                                             LocalLiquidGlass.current,
                                             LiquidGlassPreset.FloatingControls,
                                         ),
-                                        modifier = Modifier.size(44.dp),
+                                        modifier = Modifier.size(42.dp),
                                     ) {
                                         Icon(
                                             imageVector = if (isVideoActive) Icons.Filled.SmartDisplay else Icons.Outlined.SmartDisplay,
                                             contentDescription = "Watch video",
-                                            modifier = Modifier.size(22.dp),
+                                            modifier = Modifier.size(21.dp),
                                         )
                                     }
                                 }
@@ -1283,7 +1296,7 @@ internal fun FullPlayer(
                                         LocalLiquidGlass.current,
                                         LiquidGlassPreset.FloatingControls,
                                     ),
-                                    modifier = Modifier.size(44.dp),
+                                    modifier = Modifier.size(42.dp),
                                 ) {
                                     Icon(
                                         Icons.Filled.MoreVert,
@@ -1292,6 +1305,14 @@ internal fun FullPlayer(
                                     )
                                 }
                             }
+                        }
+                        if (halfAodActive && onEnterFullAod != null && onToggleHalfAod != null) {
+                            Spacer(Modifier.height(4.dp))
+                            HalfAodStatusPill(
+                                accentColor = if (edgeGlow.mode == com.lastwave.app.data.local.EdgeGlowMode.ART) ambientColor else edgeGlow.color1,
+                                onEnterFullAod = onEnterFullAod,
+                                onTurnOff = onToggleHalfAod,
+                            )
                         }
                         Spacer(Modifier.height(6.dp))
                     }
@@ -1516,12 +1537,16 @@ internal fun FullPlayer(
                                             .fillMaxWidth()
                                             .weight(1f)
                                             .onGloballyPositioned { coordinates ->
+                                                // Only record root coordinates when the open/close/drag morph
+                                                // is settled — otherwise animating translationY shifts positionInRoot()
+                                                // every frame and triggers layout thrashing + open stutter.
+                                                if (!isExpandSettled || isDismissDragging || shownDismissY > 0.5f) return@onGloballyPositioned
                                                 val rootPos = coordinates.positionInRoot()
                                                 val bottom = rootPos.y + coordinates.size.height
-                                                if (bottom > 0f && bottom != heroBottomPx) {
+                                                if (bottom > 0f && abs(bottom - heroBottomPx) > 1f) {
                                                     heroBottomPx = bottom
                                                 }
-                                                if (rootPos.y != heroTopPx) heroTopPx = rootPos.y
+                                                if (abs(rootPos.y - heroTopPx) > 1f) heroTopPx = rootPos.y
                                             }
                                                             .pointerInput(track.videoId, track.title, isVideoActive, playerLyricsActive, swipeToChangeTrack) {
                                                 // Lyric rows own taps in Player Lyrics: a double tap

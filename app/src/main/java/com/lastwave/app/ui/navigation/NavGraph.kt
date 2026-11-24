@@ -443,6 +443,7 @@ fun LastWaveNavHost(
             PredictiveBackScreen(onBack = { navController.safePopBackStack(backStackEntry) }) {
                 com.lastwave.app.ui.stats.ListeningStatsScreen(
                     onBack = { navController.safePopBackStack(backStackEntry) },
+                    onOpenGenres = { navController.navigate(Screen.Genres.route) },
                 )
             }
         }

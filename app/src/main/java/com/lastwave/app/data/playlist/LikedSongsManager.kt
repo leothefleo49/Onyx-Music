@@ -42,7 +42,11 @@ internal fun GeneratedTrack.likedMarkers(): List<String> =
         val normalizedUrl = url.trim().removePrefix("file://")
         listOfNotNull(normalizedUrl.takeIf { it.isNotBlank() }?.let { "local:$it" })
     } else {
-        listOfNotNull(key, youtubeVideoIdOrNull()?.let { "vid:$it" })
+        val norm = com.lastwave.app.data.spotify.mirror.SpotifyTrackNormalizer
+            .canonicalTrackKey(name, artist)
+            .takeIf { it.isNotBlank() }
+            ?.let { "norm:$it" }
+        listOfNotNull(key, youtubeVideoIdOrNull()?.let { "vid:$it" }, norm)
     }
 
 /** Whether this track is liked according to a heart-state set. */

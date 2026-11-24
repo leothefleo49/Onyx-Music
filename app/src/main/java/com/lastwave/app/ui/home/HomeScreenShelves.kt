@@ -496,6 +496,18 @@ internal fun AlbumRow(
                     )
                 }
             }
+            if (!badge.isNullOrBlank()) {
+                Spacer(Modifier.width(8.dp))
+                Surface(shape = BadgePillShape, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                    Text(
+                        text = "$badge plays",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -536,6 +548,18 @@ internal fun ArtistRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            if (!badge.isNullOrBlank()) {
+                Spacer(Modifier.width(8.dp))
+                Surface(shape = BadgePillShape, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                    Text(
+                        text = "$badge plays",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
             }
         }
     }

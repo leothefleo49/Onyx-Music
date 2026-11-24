@@ -388,13 +388,15 @@ internal fun AudioControlsSheet(
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // 1. Header Row: Clean, premium title without fake jargon or green dots
+            // 1. Header Row: Clean, premium title without squishing
+            var showManualDjStudio by remember { mutableStateOf(false) }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -412,20 +414,25 @@ internal fun AudioControlsSheet(
                             modifier = Modifier.size(20.dp),
                         )
                     }
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Audio & Playback",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = "Volume, seamless transitions & speed",
+                            text = "Volume, DJ mixing, transitions & speed",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                     }
                 }
+                Spacer(Modifier.width(8.dp))
                 IconButton(
                     onClick = onDismiss,
                     modifier = Modifier.size(36.dp),
@@ -437,6 +444,54 @@ internal fun AudioControlsSheet(
                         modifier = Modifier.size(20.dp),
                     )
                 }
+            }
+
+            // Quick launcher into Manual DJ Mix Studio directly from the player
+            Surface(
+                onClick = { showManualDjStudio = true },
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.GraphicEq,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Manual DJ Mix Studio",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "EQ kills, filter sweeps, cue points, BPM match & live deck controls",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+
+            if (showManualDjStudio) {
+                com.lastwave.app.ui.player.automix.ManualDjMixSheet(
+                    onDismiss = { showManualDjStudio = false },
+                    onOpenDeepMixBuilder = {
+                        showManualDjStudio = false
+                        onDismiss()
+                    },
+                )
             }
 
             // 2. In-App Volume Card: Independent playback volume

@@ -8,6 +8,8 @@ import com.lastwave.app.data.local.ScrobblerPreferences
 import com.lastwave.app.data.local.SessionPreferences
 import com.lastwave.app.data.local.awaitLoadedSession
 import com.lastwave.app.data.music.InnerTubeMusicApi
+import com.lastwave.app.data.spotify.SpotifyAuthRepository
+import com.lastwave.app.data.spotify.SpotifyPreferences
 import com.lastwave.app.data.ytmusic.YtMusicAuthManager
 import com.lastwave.app.data.repository.HomeRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -24,6 +26,20 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -57,14 +73,75 @@ class UniversalHistorySyncManager @Inject constructor(
     private val listenBrainzApi: ListenBrainzApi,
     private val innerTubeMusicApi: InnerTubeMusicApi,
     private val ytAuth: YtMusicAuthManager,
+    private val spotifyAuth: SpotifyAuthRepository,
+    private val spotifyPreferences: SpotifyPreferences,
+    private val okHttpClient: OkHttpClient,
     private val sessionPreferences: SessionPreferences,
     private val scrobblerPreferences: ScrobblerPreferences,
     private val externalScope: CoroutineScope,
 ) {
+    private val json = Json { ignoreUnknownKeys = true }
     private val _progress = MutableStateFlow(HistorySyncProgress())
     val progress: StateFlow<HistorySyncProgress> = _progress.asStateFlow()
 
     @Volatile private var activeJob: Job? = null
+    private val autoSyncStarted = AtomicBoolean(false)
+    private val lastAutoSyncAtMs = AtomicLong(0L)
+
+    /**
+     * Starts lightweight automatic background history sync (Spotify recently-played
+     * + YouTube Music history) every 15 minutes while foregrounded, keeping Stats
+     * continuously up to date without manual taps.
+     */
+    fun startAutoSync() {
+        if (!autoSyncStarted.compareAndSet(false, true)) return
+        externalScope.launch(Dispatchers.IO) {
+            delay(8_000L)
+            while (true) {
+                runCatching { runAutoSyncOnce() }
+                delay(AUTO_SYNC_INTERVAL_MS)
+            }
+        }
+    }
+
+    suspend fun runAutoSyncOnce(force: Boolean = false) {
+        val settings = runCatching { scrobblerPreferences.settings.first() }.getOrNull() ?: return
+        if (!force && !settings.autoSyncHistoryEnabled) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastAutoSyncAtMs.get() < AUTO_SYNC_MIN_GAP_MS) return
+        lastAutoSyncAtMs.set(now)
+
+        if (spotifyPreferences.isConnected.first()) {
+            runCatching { syncSpotifyRecentInternal(silent = true) }
+        }
+        if (ytAuth.connection.value.isConnected) {
+            runCatching { syncYouTubeMusicInternal(maxPages = 4, silent = true) }
+        }
+    }
+
+    fun deduplicateHistory() {
+        startSyncJob("Deduplicate") {
+            _progress.value = HistorySyncProgress(
+                isRunning = true,
+                sourceName = "Cleanup",
+                statusText = "Scanning for duplicate plays across sources…",
+            )
+            val removed = scrobbleSyncEngine.deduplicateDatabase()
+            val summary = if (removed > 0) {
+                "Cleaned up $removed duplicate plays"
+            } else {
+                "No duplicate plays found — your history is clean!"
+            }
+            _progress.update {
+                it.copy(
+                    isRunning = false,
+                    statusText = summary,
+                    lastCompletedSummary = summary,
+                    lastError = null,
+                )
+            }
+        }
+    }
 
     fun cancelActiveSync() {
         activeJob?.cancel()
@@ -350,74 +427,125 @@ class UniversalHistorySyncManager @Inject constructor(
     }
 
     /**
-     * Pulls recent YouTube Music listening history directly from the connected YT Music account.
-     * For full multi-year YouTube / YT Music history, users can also drop their Google Takeout
-     * `watch-history.json` or `.zip` into [importFromUri].
+     * Pulls recent Spotify plays automatically via `GET /v1/me/player/recently-played?limit=50`
+     * with a persisted cursor so ongoing multi-device Spotify plays flow into Onyx Stats live.
+     * (Spotify's API returns the last 50 plays; for lifetime history, import Spotify Extended
+     * Streaming History ZIP/JSON via [importFromUri].)
      */
-    fun syncYouTubeMusicHistory() {
-        startSyncJob("YouTube Music") {
-            if (!ytAuth.connection.value.isConnected) {
+    fun syncSpotifyRecentHistory() {
+        startSyncJob("Spotify") {
+            if (!spotifyPreferences.isConnected.first()) {
                 _progress.update {
                     it.copy(
                         isRunning = false,
-                        lastError = "Connect YouTube Music in Settings first (or import Google Takeout JSON/ZIP)",
-                        statusText = "YouTube Music not connected",
+                        lastError = "Connect Spotify in Settings first (or import your Spotify Extended History ZIP)",
+                        statusText = "Spotify not connected",
                     )
                 }
                 return@startSyncJob
             }
+            syncSpotifyRecentInternal(silent = false)
+        }
+    }
+
+    private suspend fun syncSpotifyRecentInternal(silent: Boolean) {
+        if (!silent) {
             _progress.value = HistorySyncProgress(
                 isRunning = true,
-                sourceName = "YouTube Music",
-                statusText = "Reading YouTube Music play history…",
+                sourceName = "Spotify",
+                statusText = "Fetching recent Spotify listening history…",
             )
-            val signals = runCatching {
-                innerTubeMusicApi.fetchTasteSignals(recentLimit = 50, likedLimit = 0, feedLimit = 0)
-            }.getOrNull()
-            val tracks = signals?.recentTracks.orEmpty()
-            if (tracks.isEmpty()) {
+        }
+        val token = spotifyAuth.getPersonalToken()
+        if (token.isNullOrBlank()) {
+            if (!silent) {
                 _progress.update {
                     it.copy(
                         isRunning = false,
-                        statusText = "No recent YouTube Music history returned. For full history, import Google Takeout ZIP/JSON.",
+                        lastError = "Spotify session expired — reconnect in Settings → Spotify",
+                        statusText = "Spotify auth expired",
                     )
                 }
-                return@startSyncJob
             }
-            val nowMs = System.currentTimeMillis()
-            val events = tracks.mapIndexedNotNull { idx, item ->
-                val title = item.title.trim()
-                val artist = item.artist.trim()
-                if (title.isBlank() || artist.isBlank()) return@mapIndexedNotNull null
-                val durMs = (item.durationSeconds?.takeIf { it > 0 }?.times(1000L)) ?: 210_000L
-                val approxTs = nowMs - (idx + 1) * 240_000L
-                val category = MediaCategoryClassifier.classify(
-                    title = title,
-                    artist = artist,
-                    album = item.album.orEmpty(),
-                    sourcePackage = "com.google.android.apps.youtube.music",
-                    sourceAppName = "YouTube Music",
-                    durationMs = durMs,
-                )
-                ScrobbleEventEntity(
-                    trackKey = normalizeScrobbleTrackKey(artist, title),
-                    title = title,
-                    artist = artist,
-                    album = item.album.orEmpty(),
-                    artworkUrl = item.artworkUrl,
-                    durationMs = durMs,
-                    listenedMs = durMs,
-                    startedAtMs = approxTs,
-                    scrobbledAtMs = approxTs,
-                    sourcePackage = "com.google.android.apps.youtube.music",
-                    sourceAppName = "YouTube Music",
-                    lastFmSyncStatus = ScrobbleSyncStatus.SYNCED,
-                    listenBrainzSyncStatus = ScrobbleSyncStatus.SKIPPED,
-                    mediaCategory = category,
-                )
+            return
+        }
+        val clientToken = spotifyAuth.getClientToken()
+        val afterCursor = spotifyPreferences.getLastHistorySyncAfterMs()
+        val url = if (afterCursor > 0L) {
+            "https://api.spotify.com/v1/me/player/recently-played?limit=50&after=$afterCursor"
+        } else {
+            "https://api.spotify.com/v1/me/player/recently-played?limit=50"
+        }
+        val reqBuilder = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $token")
+            .header("Accept", "application/json")
+        if (!clientToken.isNullOrBlank()) {
+            reqBuilder.header("client-token", clientToken)
+        }
+        val bodyText = okHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                if (!silent) {
+                    _progress.update {
+                        it.copy(
+                            isRunning = false,
+                            lastError = "Spotify returned HTTP ${resp.code} — for full lifetime history, import Spotify Extended History ZIP",
+                            statusText = "Spotify history unavailable (HTTP ${resp.code})",
+                        )
+                    }
+                }
+                return
             }
-            val saved = scrobbleSyncEngine.importScrobbleEvents(events, "YouTube Music")
-            val summary = "Synced ${saved.events.size} YouTube Music plays (${saved.skippedCount} already saved)"
+            resp.body?.string().orEmpty()
+        }
+        val root = runCatching { json.parseToJsonElement(bodyText).jsonObject }.getOrNull() ?: return
+        val items = root["items"] as? JsonArray ?: JsonArray(emptyList())
+        var maxPlayedAtMs = afterCursor
+        val events = items.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            val trackObj = obj["track"] as? JsonObject ?: return@mapNotNull null
+            val title = (trackObj["name"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            val artistsArr = trackObj["artists"] as? JsonArray
+            val artist = artistsArr?.mapNotNull {
+                (it as? JsonObject)?.get("name")?.let { n -> (n as? JsonPrimitive)?.contentOrNull?.trim() }
+            }?.filter { it.isNotBlank() }?.joinToString(", ").orEmpty()
+            if (title.isBlank() || artist.isBlank()) return@mapNotNull null
+            val albumObj = trackObj["album"] as? JsonObject
+            val album = (albumObj?.get("name") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            val artUrl = (albumObj?.get("images") as? JsonArray)?.firstOrNull()
+                ?.let { (it as? JsonObject)?.get("url") as? JsonPrimitive }?.contentOrNull
+            val durMs = (trackObj["duration_ms"] as? JsonPrimitive)?.longOrNull ?: 210_000L
+            val playedAtStr = (obj["played_at"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val playedAtMs = ScrobbleImportExport.parseIsoTimestampMs(playedAtStr) ?: return@mapNotNull null
+            if (playedAtMs > maxPlayedAtMs) maxPlayedAtMs = playedAtMs
+            val startedMs = (playedAtMs - durMs).coerceAtLeast(1L)
+            ScrobbleEventEntity(
+                trackKey = normalizeScrobbleTrackKey(artist, title),
+                title = title,
+                artist = artist,
+                album = album,
+                artworkUrl = artUrl,
+                durationMs = durMs,
+                listenedMs = durMs,
+                startedAtMs = startedMs,
+                scrobbledAtMs = startedMs,
+                sourcePackage = "com.spotify.music",
+                sourceAppName = "Spotify",
+                lastFmSyncStatus = ScrobbleSyncStatus.SYNCED,
+                listenBrainzSyncStatus = ScrobbleSyncStatus.SKIPPED,
+                mediaCategory = ScrobbleMediaCategory.MUSIC,
+            )
+        }
+        if (maxPlayedAtMs > afterCursor) {
+            spotifyPreferences.saveLastHistorySyncAfterMs(maxPlayedAtMs)
+        }
+        val saved = scrobbleSyncEngine.importScrobbleEvents(events, "Spotify Live Sync")
+        if (!silent) {
+            val summary = if (saved.events.isNotEmpty()) {
+                "Synced ${saved.events.size} new Spotify plays (${saved.skippedCount} already saved)"
+            } else {
+                "Spotify recent history is up to date (${events.size} checked). For lifetime history, import Spotify Extended History ZIP."
+            }
             _progress.update {
                 it.copy(
                     isRunning = false,
@@ -429,12 +557,160 @@ class UniversalHistorySyncManager @Inject constructor(
                     lastError = null,
                 )
             }
-            if (saved.events.isNotEmpty()) {
-                externalScope.launch(Dispatchers.IO) {
-                    runCatching { scrobbleSyncEngine.backfillMissingGenres(maxArtists = 30) }
+        }
+        if (saved.events.isNotEmpty()) {
+            externalScope.launch(Dispatchers.IO) {
+                runCatching { scrobbleSyncEngine.backfillMissingGenres(maxArtists = 25) }
+            }
+        }
+    }
+
+    /**
+     * Pulls deep YouTube Music listening history directly across ALL continuation pages
+     * of `FEmusic_history` using deterministic calendar-anchored shelf timestamps (never
+     * duplicating on re-sync). For multi-year YouTube/YT Music history beyond InnerTube's
+     * retention window, users can also drop Google Takeout `watch-history.json`/`.html`/`.zip`.
+     */
+    fun syncYouTubeMusicHistory() {
+        startSyncJob("YouTube Music") {
+            if (!ytAuth.connection.value.isConnected) {
+                _progress.update {
+                    it.copy(
+                        isRunning = false,
+                        lastError = "Connect YouTube Music in Settings first (or import Google Takeout ZIP/JSON/HTML)",
+                        statusText = "YouTube Music not connected",
+                    )
+                }
+                return@startSyncJob
+            }
+            syncYouTubeMusicInternal(maxPages = 25, silent = false)
+        }
+    }
+
+    private suspend fun syncYouTubeMusicInternal(maxPages: Int, silent: Boolean) {
+        if (!silent) {
+            _progress.value = HistorySyncProgress(
+                isRunning = true,
+                sourceName = "YouTube Music",
+                statusText = "Reading all available YouTube Music history pages…",
+            )
+        }
+        val entries = innerTubeMusicApi.fetchFullListeningHistory(maxPages = maxPages) { page, count ->
+            if (!silent) {
+                _progress.update {
+                    it.copy(
+                        isRunning = true,
+                        currentPage = page,
+                        fetchedCount = count,
+                        statusText = "YouTube Music: $count tracks read (page $page)…",
+                    )
                 }
             }
         }
+        if (entries.isEmpty()) {
+            if (!silent) {
+                _progress.update {
+                    it.copy(
+                        isRunning = false,
+                        statusText = "No YouTube Music history returned. For full all-time history, import Google Takeout ZIP/JSON/HTML.",
+                    )
+                }
+            }
+            return
+        }
+        val events = entries.mapNotNull { entry ->
+            val item = entry.track
+            val title = item.title.trim()
+            val artist = item.artist.trim()
+            if (title.isBlank() || artist.isBlank()) return@mapNotNull null
+            val durMs = (item.durationSeconds?.takeIf { it > 0 }?.times(1000L)) ?: 210_000L
+            // Deterministic anchor per date shelf + item index so re-syncing NEVER shifts timestamps
+            // or creates duplicate rows!
+            val anchoredTs = anchorTimestampForYtBucket(entry.bucketLabel, entry.indexInBucket)
+            val category = MediaCategoryClassifier.classify(
+                title = title,
+                artist = artist,
+                album = item.album.orEmpty(),
+                sourcePackage = "com.google.android.apps.youtube.music",
+                sourceAppName = "YouTube Music",
+                durationMs = durMs,
+            )
+            ScrobbleEventEntity(
+                trackKey = normalizeScrobbleTrackKey(artist, title),
+                title = title,
+                artist = artist,
+                album = item.album.orEmpty(),
+                artworkUrl = item.artworkUrl,
+                durationMs = durMs,
+                listenedMs = durMs,
+                startedAtMs = anchoredTs,
+                scrobbledAtMs = anchoredTs,
+                sourcePackage = "com.google.android.apps.youtube.music",
+                sourceAppName = "YouTube Music",
+                lastFmSyncStatus = ScrobbleSyncStatus.SYNCED,
+                listenBrainzSyncStatus = ScrobbleSyncStatus.SKIPPED,
+                mediaCategory = category,
+            )
+        }
+        val saved = scrobbleSyncEngine.importScrobbleEvents(events, "YouTube Music")
+        if (!silent) {
+            val summary = "Synced ${saved.events.size} new YouTube Music plays (${saved.skippedCount} already saved)"
+            _progress.update {
+                it.copy(
+                    isRunning = false,
+                    fetchedCount = events.size,
+                    importedCount = saved.events.size,
+                    skippedCount = saved.skippedCount,
+                    statusText = summary,
+                    lastCompletedSummary = summary,
+                    lastError = null,
+                )
+            }
+        }
+        if (saved.events.isNotEmpty()) {
+            externalScope.launch(Dispatchers.IO) {
+                runCatching { scrobbleSyncEngine.backfillMissingGenres(maxArtists = 35) }
+            }
+        }
+    }
+
+    /**
+     * Converts a YouTube Music `FEmusic_history` shelf header ("Today", "Yesterday",
+     * "This week", "Last week", "October 2026", "2025", etc.) into a stable, deterministic
+     * epoch-ms timestamp so repeated syncs map the exact same track/slot to the same instant.
+     */
+    private fun anchorTimestampForYtBucket(bucketLabel: String, indexInBucket: Int): Long {
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 20)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val low = bucketLabel.trim().lowercase(Locale.US)
+        when {
+            low.isBlank() || low == "today" || low == "recent" -> Unit
+            low == "yesterday" -> cal.add(Calendar.DAY_OF_YEAR, -1)
+            low.contains("this week") -> cal.add(Calendar.DAY_OF_YEAR, -3)
+            low.contains("last week") -> cal.add(Calendar.DAY_OF_YEAR, -10)
+            low.contains("this month") -> cal.add(Calendar.DAY_OF_YEAR, -14)
+            low.contains("last month") -> cal.add(Calendar.MONTH, -1)
+            else -> {
+                val parsed = listOf("MMMM yyyy", "MMM yyyy", "yyyy").firstNotNullOfOrNull { pat ->
+                    runCatching { SimpleDateFormat(pat, Locale.US).parse(bucketLabel.trim()) }.getOrNull()
+                }
+                if (parsed != null) {
+                    cal.time = parsed
+                    cal.set(Calendar.DAY_OF_MONTH, 15)
+                    cal.set(Calendar.HOUR_OF_DAY, 18)
+                } else {
+                    cal.add(Calendar.DAY_OF_YEAR, -21)
+                }
+            }
+        }
+        // Space tracks 4 minutes apart backwards inside their deterministic calendar bucket
+        // (capped to never cross into the future).
+        val raw = cal.timeInMillis - (indexInBucket.toLong() + 1L) * 240_000L
+        return raw.coerceAtMost(System.currentTimeMillis() - 60_000L)
     }
 
     /**
@@ -520,5 +796,7 @@ class UniversalHistorySyncManager @Inject constructor(
         private const val LASTFM_PAGE_DELAY_MS = 260L
         private const val MAX_PAGE_RETRIES = 4
         private const val MAX_LB_PAGES = 250
+        private const val AUTO_SYNC_INTERVAL_MS = 15L * 60L * 1000L
+        private const val AUTO_SYNC_MIN_GAP_MS = 5L * 60L * 1000L
     }
 }

@@ -273,22 +273,26 @@ internal fun getTargetSectionIndex(settingId: String?): Int {
     if (settingId == null) return 0
     val entry = SettingsSearchIndex.allEntries.firstOrNull { it.id == settingId } ?: return 0
     return when (entry.parentTab) {
-        SettingsTab.AUDIO -> if (entry.section == "Output & Loudness") 1 else 0
+        SettingsTab.AUDIO -> when (entry.section) {
+            "Output & Loudness" -> 2
+            else -> 0
+        }
         SettingsTab.APPEARANCE -> when (entry.section) {
             "Accent Color" -> 1
-            "Experimental & Features", "Experimental & Player" -> 2
+            "Player, Lyrics & Gestures", "Experimental & Features", "Experimental & Player" -> 2
             "Canvas" -> 3
             else -> 0
         }
         SettingsTab.YOUTUBE -> if (entry.section == "Liked Songs") 1 else 0
         SettingsTab.SPOTIFY -> 0
+        SettingsTab.LAST_FM -> if (entry.section == "Universal Scrobbler & History") 0 else 1
         SettingsTab.LIBRARY -> when (entry.section) {
             "Content" -> 1
             "Imports", "Imports & Addons", "Modules & Addons" -> 2
             else -> 0
         }
-        SettingsTab.DATA_BACKUP -> if (entry.section == "Data Management") 1 else 0
-        SettingsTab.ABOUT -> if (entry.section == "About & Community") 1 else 0
+        SettingsTab.DATA_BACKUP -> if (entry.section == "Data Management") 2 else 1
+        SettingsTab.ABOUT -> if (entry.section == "About & Community" || entry.section == "About & Support") 2 else 0
         else -> 0
     }
 }

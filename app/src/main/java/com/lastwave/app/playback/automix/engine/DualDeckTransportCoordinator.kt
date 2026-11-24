@@ -110,6 +110,46 @@ class DualDeckTransportCoordinator @Inject constructor(
         syncLiveDjToProcessors(_liveDjState.value)
     }
 
+    /** Swaps outgoing/incoming crossover processor roles when decks hand over mid-blend. */
+    fun swapCrossoverDecks() {
+        val oldOut = outgoingCrossoverProcessor
+        val oldIn = incomingCrossoverProcessor
+        outgoingCrossoverProcessor = oldIn?.also { it.isIncomingDeck = false }
+        incomingCrossoverProcessor = oldOut?.also { it.isIncomingDeck = true }
+    }
+
+    fun setEqKills(killLow: Boolean, killMid: Boolean, killHigh: Boolean) {
+        outgoingCrossoverProcessor?.apply {
+            this.killLow = killLow
+            this.killMid = killMid
+            this.killHigh = killHigh
+            if (killLow || killMid || killHigh) isEnabled = true
+        }
+    }
+
+    fun setFilterSweepMode(mode: FilterSweepMode) {
+        val sweepOn = mode != FilterSweepMode.OFF
+        outgoingCrossoverProcessor?.apply {
+            filterSweepMode = mode
+            applySpectralSweeps = sweepOn
+        }
+        incomingCrossoverProcessor?.apply {
+            filterSweepMode = mode
+            applySpectralSweeps = sweepOn
+        }
+    }
+
+    fun setDeckGainTrims(outgoingDb: Float, incomingDb: Float) {
+        outgoingCrossoverProcessor?.apply {
+            manualGainTrimDb = outgoingDb.coerceIn(-12f, 6f)
+            if (kotlin.math.abs(manualGainTrimDb) > 0.05f) isEnabled = true
+        }
+        incomingCrossoverProcessor?.apply {
+            manualGainTrimDb = incomingDb.coerceIn(-12f, 6f)
+            if (kotlin.math.abs(manualGainTrimDb) > 0.05f) isEnabled = true
+        }
+    }
+
     /**
      * Pause / resume coming from the player transport. During a blend both
      * decks are paused and the blend clock stops, so the old song does not

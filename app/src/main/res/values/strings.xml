@@ -1378,7 +1378,7 @@
 
     <!-- Genres -->
     <string name="ge_title">Your Genres</string>
-    <string name="ge_sub">Your Genres</string>
+    <string name="ge_sub">Your taste, at a glance</string>
     <string name="ge_empty">No genre data yet</string>
     <string name="ge_glance">Your taste, at a glance</string>
     <string name="ge_leading_genre">Leading genre</string>

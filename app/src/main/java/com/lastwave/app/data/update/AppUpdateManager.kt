@@ -64,6 +64,7 @@ enum class ApkVariant {
 class AppUpdateManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val okHttpClient: OkHttpClient,
+    private val themeRepository: dagger.Lazy<com.lastwave.app.data.repository.ThemeRepository>,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefs = context.getSharedPreferences("onyx_updates", Context.MODE_PRIVATE)
@@ -323,6 +324,27 @@ class AppUpdateManager @Inject constructor(
                     android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL,
                 ).apply {
                     setAppPackageName(context.packageName)
+                    setAppLabel("Onyx Music")
+                    runCatching {
+                        val tState = themeRepository.get().uiState.value
+                        val p = tState.colorScheme.primary
+                        val op = tState.colorScheme.onPrimary
+                        val pArgb = android.graphics.Color.argb(
+                            (p.alpha * 255f).toInt(), (p.red * 255f).toInt(), (p.green * 255f).toInt(), (p.blue * 255f).toInt(),
+                        )
+                        val opArgb = android.graphics.Color.argb(
+                            (op.alpha * 255f).toInt(), (op.red * 255f).toInt(), (op.green * 255f).toInt(), (op.blue * 255f).toInt(),
+                        )
+                        setAppIcon(
+                            com.lastwave.app.ui.common.renderOnyxLogoBitmap(
+                                context = context,
+                                appIcon = tState.appIcon,
+                                primaryArgb = pArgb,
+                                onPrimaryArgb = opArgb,
+                                sizePx = 192,
+                            ),
+                        )
+                    }
                     if (total > 0L) setSize(total)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         setRequireUserAction(

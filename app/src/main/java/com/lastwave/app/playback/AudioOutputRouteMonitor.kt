@@ -67,7 +67,10 @@ class AudioOutputRouteMonitor @Inject constructor(
     }
 
     fun refresh() {
-        _activeOutput.value = detectCurrentOutput()
+        val next = detectCurrentOutput()
+        if (_activeOutput.value != next) {
+            _activeOutput.value = next
+        }
     }
 
     private fun detectCurrentOutput(): ActiveAudioOutput {
@@ -145,7 +148,7 @@ class AudioOutputRouteMonitor @Inject constructor(
             kind == AudioRouteKind.USB_DAC || kind == AudioRouteKind.WIRED -> 27 // Hi-Res 24/192
             kind == AudioRouteKind.BLUETOOTH && maxRate >= 88_200 -> 27 // LDAC / aptX HD / LHDC Hi-Res
             kind == AudioRouteKind.BLUETOOTH -> 6 // CD Lossless 16/44.1
-            else -> 5 // Built-in speakers: 320 kbps (saves data & battery with zero speaker loss)
+            else -> 6 // Built-in speakers: keep CD Lossless (never cap down to 320k mid-song)
         }
         val recClarityPreset = when (kind) {
             AudioRouteKind.SPEAKER -> 1 // Speaker curve

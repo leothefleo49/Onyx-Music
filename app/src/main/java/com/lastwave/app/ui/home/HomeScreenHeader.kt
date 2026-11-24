@@ -154,6 +154,7 @@ internal fun HeaderRow(
             onClick = onClick,
             shape = BadgePillShape,
             color = if (isViewingFriend) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.weight(1f, fill = false),
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
@@ -164,6 +165,8 @@ internal fun HeaderRow(
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = if (isViewingFriend) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 if (isViewingFriend) {
                     Spacer(Modifier.width(6.dp))
@@ -177,6 +180,7 @@ internal fun HeaderRow(
             }
         }
 
+        Spacer(Modifier.width(8.dp))
         LiveListenTimer(viewModel)
     }
 }

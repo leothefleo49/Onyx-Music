@@ -16,6 +16,6 @@
     <string name="scrobbler_sync_now">Sync Queue</string>
     <string name="scrobbler_pull_loved">Pull Loved</string>
     <string name="scrobbler_add_rule">Add Auto-Fix Rule</string>
-    <string name="scrobbler_save_auto_rule">Save as Pano auto-fix rule</string>
+    <string name="scrobbler_save_auto_rule">Save as auto-fix rule</string>
     <string name="scrobbler_apply_retroactive">Apply to matching past scrobbles</string>
 </resources>

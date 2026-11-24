@@ -51,11 +51,16 @@ class SpotifyPlaylistImporter @Inject constructor(
         .callTimeout(20, TimeUnit.SECONDS)
         .build()
     private val json = Json { ignoreUnknownKeys = true }
-    // Spotify playlist pages are expensive (Pathfinder + N count queries).
-    // Keep a short-lived in-memory cache so reopening the library is instant.
+    // Short live cache (60s) so reopening Library stays instant while staying genuinely live;
+    // callers can pass forceRefresh = true or call invalidateCache() for immediate refresh.
     @Volatile private var userPlaylistsCache: Pair<Long, List<SpotifyUserPlaylist>>? = null
     private val playlistCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, ExternalPlaylistResult>>()
-    private val cacheTtlMs = 10L * 60L * 1000L
+    private val cacheTtlMs = 60L * 1000L
+
+    fun invalidateCache() {
+        userPlaylistsCache = null
+        playlistCache.clear()
+    }
 
     /**
      * Pure parser: Spotify embed HTML in, parsed playlist out. Performs no
@@ -105,7 +110,7 @@ class SpotifyPlaylistImporter @Inject constructor(
      * Downloads playlist metadata and tracks. Uses authenticated Spotify Web API when available,
      * otherwise falls back to public embed page scraping.
      */
-    suspend fun fetchPlaylist(urlOrId: String): ExternalPlaylistResult = withContext(Dispatchers.IO) {
+    suspend fun fetchPlaylist(urlOrId: String, forceRefresh: Boolean = false): ExternalPlaylistResult = withContext(Dispatchers.IO) {
         var input = urlOrId.trim()
         if (input.contains("spotify.link")) {
             val resolveReq = Request.Builder().url(input).head().build()
@@ -118,20 +123,22 @@ class SpotifyPlaylistImporter @Inject constructor(
         val id = ExternalPlaylistLink.extractId(input, ExternalPlaylistSource.SPOTIFY)
             ?: throw IllegalArgumentException("That does not look like a Spotify playlist link.")
 
-        playlistCache[id]?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
-            ?.let { return@withContext it.second }
+        if (!forceRefresh) {
+            playlistCache[id]?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
+                ?.let { return@withContext it.second }
+        }
 
         // First attempt via authenticated Spotify API if personal token is available
         val token = spotifyAuthRepository.getPersonalToken()
         val clientToken = spotifyAuthRepository.getClientToken()
         if (!token.isNullOrBlank()) {
             val apiResult = try {
-                fetchViaPathfinder(id, token, clientToken)
+                fetchViaPathfinder(id, token, clientToken) ?: fetchPlaylistViaWebApi(id, token)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "Pathfinder playlist fetch failed, falling back to embed: ${e.message}")
-                null
+                Log.w(TAG, "Authenticated playlist fetch failed, falling back to Web API / embed: ${e.message}")
+                runCatching { fetchPlaylistViaWebApi(id, token) }.getOrNull()
             }
             if (apiResult != null && apiResult.rows.isNotEmpty()) {
                 playlistCache[id] = System.currentTimeMillis() to apiResult
@@ -167,7 +174,7 @@ class SpotifyPlaylistImporter @Inject constructor(
         var totalCount = Int.MAX_VALUE
         var pages = 0
 
-        while (offset < totalCount && pages < 10) {
+        while (offset < totalCount && pages < 50) {
             pages++
             val variables = """{"uri":"spotify:playlist:$id","offset":$offset,"limit":100,"enableWatchFeedEntrypoint":false}"""
             val body = pathfinderGet("fetchPlaylist", variables, HASH_FETCH_PLAYLIST, token, clientToken)
@@ -285,16 +292,37 @@ class SpotifyPlaylistImporter @Inject constructor(
      * so any playlist missing a summary count is resolved via a lightweight `fetchPlaylist`
      * (`limit=1`) query instead of defaulting to 0.
      */
-    suspend fun fetchUserPlaylists(): List<SpotifyUserPlaylist> = withContext(Dispatchers.IO) {
-        userPlaylistsCache?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
-            ?.let { return@withContext it.second }
+    suspend fun fetchUserPlaylists(forceRefresh: Boolean = false): List<SpotifyUserPlaylist> = withContext(Dispatchers.IO) {
+        if (!forceRefresh) {
+            userPlaylistsCache?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
+                ?.let { return@withContext it.second }
+        }
         val token = spotifyAuthRepository.getPersonalToken() ?: return@withContext emptyList()
         val clientToken = spotifyAuthRepository.getClientToken()
         try {
-            val variables = """{"filters":["Playlists"],"order":null,"textFilter":null,"features":[],"limit":50,"offset":0,"flatten":false,"expandedFolders":[],"folderUri":null,"includeFoldersWhenFlattening":true}"""
-            val body = pathfinderGet("libraryV3", variables, HASH_LIBRARY_V3, token, clientToken)
-                ?: return@withContext emptyList()
-            val playlists = parseUserPlaylists(body)
+            // Paginate Pathfinder libraryV3 beyond 50 playlists, with REST Web API fallback if Pathfinder fails
+            val collected = mutableListOf<SpotifyUserPlaylist>()
+            var offset = 0
+            var pages = 0
+            var pathfinderOk = false
+            while (pages < 10) {
+                pages++
+                val variables = """{"filters":["Playlists"],"order":null,"textFilter":null,"features":[],"limit":50,"offset":$offset,"flatten":false,"expandedFolders":[],"folderUri":null,"includeFoldersWhenFlattening":true}"""
+                val body = pathfinderGet("libraryV3", variables, HASH_LIBRARY_V3, token, clientToken) ?: break
+                val pageList = parseUserPlaylists(body)
+                if (pageList.isEmpty()) break
+                pathfinderOk = true
+                collected += pageList
+                if (pageList.size < 50) break
+                offset += pageList.size
+            }
+
+            val playlists = if (pathfinderOk && collected.isNotEmpty()) {
+                collected.distinctBy { it.id }
+            } else {
+                fetchUserPlaylistsViaWebApi(token)
+            }
+
             if (playlists.none { it.trackCount == null }) {
                 userPlaylistsCache = System.currentTimeMillis() to playlists
                 return@withContext playlists
@@ -320,7 +348,7 @@ class SpotifyPlaylistImporter @Inject constructor(
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
             Log.w(TAG, "Failed to fetch user Spotify playlists: ${e.message}")
-            emptyList()
+            runCatching { fetchUserPlaylistsViaWebApi(token) }.getOrDefault(emptyList())
         }
     }
 
@@ -404,21 +432,46 @@ class SpotifyPlaylistImporter @Inject constructor(
     }
 
     /**
-     * Fetches the user's Spotify Liked Songs collection via Pathfinder.
+     * Fetches the user's Spotify Liked Songs collection (Pathfinder + Web API fallback),
+     * capturing both display metadata and Spotify track IDs for live heart sync.
      */
-    suspend fun fetchLikedSongs(): ExternalPlaylistResult = withContext(Dispatchers.IO) {
-        playlistCache["__liked_songs__"]?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
-            ?.let { return@withContext it.second }
+    suspend fun fetchLikedSongs(forceRefresh: Boolean = false): ExternalPlaylistResult = withContext(Dispatchers.IO) {
+        if (!forceRefresh) {
+            playlistCache["__liked_songs__"]?.takeIf { System.currentTimeMillis() - it.first < cacheTtlMs }
+                ?.let { return@withContext it.second }
+        }
+        val entries = fetchLikedSongsWithIds(forceRefresh = forceRefresh)
+        val rows = entries.map { ExternalTrackRow(title = it.title, artist = it.artist, album = it.album) }
+        ExternalPlaylistResult(
+            source = ExternalPlaylistSource.SPOTIFY,
+            title = "Spotify Liked Songs",
+            author = "Spotify",
+            rows = rows,
+        ).also { result ->
+            if (result.rows.isNotEmpty()) {
+                playlistCache["__liked_songs__"] = System.currentTimeMillis() to result
+            }
+        }
+    }
+
+    data class SpotifyLikedTrackEntry(
+        val spotifyId: String?,
+        val title: String,
+        val artist: String,
+        val album: String? = null,
+    )
+
+    suspend fun fetchLikedSongsWithIds(forceRefresh: Boolean = false): List<SpotifyLikedTrackEntry> = withContext(Dispatchers.IO) {
         val token = spotifyAuthRepository.getPersonalToken()
             ?: throw IllegalStateException("Spotify account is not connected.")
         val clientToken = spotifyAuthRepository.getClientToken()
 
-        val rows = mutableListOf<ExternalTrackRow>()
+        val entries = mutableListOf<SpotifyLikedTrackEntry>()
         var offset = 0
         var totalCount = Int.MAX_VALUE
         var pages = 0
 
-        while (offset < totalCount && pages < 20) {
+        while (offset < totalCount && pages < 60) {
             pages++
             val variables = """{"offset":$offset,"limit":50}"""
             val body = pathfinderGet("fetchLibraryTracks", variables, HASH_FETCH_LIBRARY_TRACKS, token, clientToken)
@@ -434,9 +487,14 @@ class SpotifyPlaylistImporter @Inject constructor(
 
             for (item in items) {
                 val itemObj = item as? JsonObject ?: continue
-                val trackObj = (itemObj["track"] as? JsonObject)?.get("data") as? JsonObject
-                    ?: itemObj["track"] as? JsonObject
+                val trackWrapper = itemObj["track"] as? JsonObject
+                val trackObj = trackWrapper?.get("data") as? JsonObject
+                    ?: trackWrapper
                     ?: continue
+                val uri = (trackWrapper?.get("_uri") as? JsonPrimitive)?.contentOrNull
+                    ?: (trackObj["uri"] as? JsonPrimitive)?.contentOrNull
+                    ?: (trackObj["id"] as? JsonPrimitive)?.contentOrNull
+                val spotifyId = uri?.removePrefix("spotify:track:")?.takeIf { it.isNotBlank() && !it.contains(':') }
                 val name = trackObj["name"]?.jsonPrimitive?.contentOrNull?.clean() ?: continue
                 if (name.isBlank()) continue
                 val artists = trackObj["artists"]?.jsonObject?.get("items")?.jsonArray?.mapNotNull { art ->
@@ -445,7 +503,8 @@ class SpotifyPlaylistImporter @Inject constructor(
                 }?.joinToString(", ").orEmpty()
                 val album = trackObj["albumOfTrack"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull?.clean()
                     ?: (trackObj["album"] as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull?.clean()
-                rows += ExternalTrackRow(
+                entries += SpotifyLikedTrackEntry(
+                    spotifyId = spotifyId,
                     title = name,
                     artist = artists,
                     album = album,
@@ -455,16 +514,142 @@ class SpotifyPlaylistImporter @Inject constructor(
             offset += items.size
         }
 
-        ExternalPlaylistResult(
-            source = ExternalPlaylistSource.SPOTIFY,
-            title = "Spotify Liked Songs",
-            author = "Spotify",
-            rows = rows,
-        ).also { result ->
-            if (result.rows.isNotEmpty()) {
-                playlistCache["__liked_songs__"] = System.currentTimeMillis() to result
-            }
+        if (entries.isNotEmpty()) return@withContext entries
+        // Fallback to standard Spotify Web API /v1/me/tracks if Pathfinder hash rotated
+        fetchLikedSongsViaWebApi(token)
+    }
+
+    /** Two-way Spotify heart sync (save/remove track in Spotify Liked Songs via Web API). */
+    suspend fun setSpotifyTrackLiked(spotifyTrackId: String, liked: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val cleanId = spotifyTrackId.removePrefix("spotify:track:").trim()
+        if (cleanId.isBlank()) return@withContext false
+        val token = spotifyAuthRepository.getPersonalToken() ?: return@withContext false
+        val url = "https://api.spotify.com/v1/me/tracks?ids=${Uri.encode(cleanId)}"
+        val reqBuilder = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $token")
+            .header("Accept", "application/json")
+        val request = if (liked) {
+            reqBuilder.put(okhttp3.RequestBody.create(null, ByteArray(0))).build()
+        } else {
+            reqBuilder.delete().build()
         }
+        runCatching {
+            client.newCall(request).execute().use { resp -> resp.isSuccessful }
+        }.getOrDefault(false)
+    }
+
+    private fun fetchUserPlaylistsViaWebApi(token: String): List<SpotifyUserPlaylist> {
+        val out = mutableListOf<SpotifyUserPlaylist>()
+        var nextUrl: String? = "https://api.spotify.com/v1/me/playlists?limit=50"
+        var pages = 0
+        while (!nextUrl.isNullOrBlank() && pages < 10) {
+            pages++
+            val req = Request.Builder()
+                .url(nextUrl)
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            val body = runCatching {
+                client.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) resp.body?.string() else null
+                }
+            }.getOrNull() ?: break
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: break
+            val items = root["items"]?.jsonArray.orEmpty()
+            for (el in items) {
+                val obj = el as? JsonObject ?: continue
+                val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: continue
+                val name = obj["name"]?.jsonPrimitive?.contentOrNull?.clean() ?: "Spotify Playlist"
+                val desc = obj["description"]?.jsonPrimitive?.contentOrNull
+                val img = obj["images"]?.jsonArray?.firstOrNull()?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
+                val count = obj["tracks"]?.jsonObject?.get("total")?.jsonPrimitive?.intOrNull
+                out += SpotifyUserPlaylist(id = id, name = name, description = desc, artworkUrl = img, trackCount = count)
+            }
+            nextUrl = root["next"]?.jsonPrimitive?.contentOrNull
+        }
+        return out.distinctBy { it.id }
+    }
+
+    private fun fetchPlaylistViaWebApi(id: String, token: String): ExternalPlaylistResult? {
+        val metaReq = Request.Builder()
+            .url("https://api.spotify.com/v1/playlists/$id?fields=name,owner(display_name),images")
+            .header("Authorization", "Bearer $token")
+            .header("Accept", "application/json")
+            .get()
+            .build()
+        val metaBody = runCatching {
+            client.newCall(metaReq).execute().use { resp -> if (resp.isSuccessful) resp.body?.string() else null }
+        }.getOrNull()
+        val metaRoot = metaBody?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
+        val title = metaRoot?.get("name")?.jsonPrimitive?.contentOrNull?.clean() ?: "Spotify Playlist"
+        val author = metaRoot?.get("owner")?.jsonObject?.get("display_name")?.jsonPrimitive?.contentOrNull
+        val artworkUrl = metaRoot?.get("images")?.jsonArray?.firstOrNull()?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
+
+        val rows = mutableListOf<ExternalTrackRow>()
+        var nextUrl: String? = "https://api.spotify.com/v1/playlists/$id/tracks?limit=100"
+        var pages = 0
+        while (!nextUrl.isNullOrBlank() && pages < 50) {
+            pages++
+            val req = Request.Builder()
+                .url(nextUrl)
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            val body = runCatching {
+                client.newCall(req).execute().use { resp -> if (resp.isSuccessful) resp.body?.string() else null }
+            }.getOrNull() ?: break
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: break
+            val items = root["items"]?.jsonArray.orEmpty()
+            for (el in items) {
+                val track = (el as? JsonObject)?.get("track") as? JsonObject ?: continue
+                val name = track["name"]?.jsonPrimitive?.contentOrNull?.clean() ?: continue
+                if (name.isBlank()) continue
+                val artists = track["artists"]?.jsonArray?.mapNotNull {
+                    (it as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull?.clean()
+                }?.joinToString(", ").orEmpty()
+                val album = track["album"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull?.clean()
+                rows += ExternalTrackRow(title = name, artist = artists, album = album)
+            }
+            nextUrl = root["next"]?.jsonPrimitive?.contentOrNull
+        }
+        return if (rows.isEmpty()) null else buildResult(title, author, artworkUrl, rows)
+    }
+
+    private fun fetchLikedSongsViaWebApi(token: String): List<SpotifyLikedTrackEntry> {
+        val entries = mutableListOf<SpotifyLikedTrackEntry>()
+        var nextUrl: String? = "https://api.spotify.com/v1/me/tracks?limit=50"
+        var pages = 0
+        while (!nextUrl.isNullOrBlank() && pages < 60) {
+            pages++
+            val req = Request.Builder()
+                .url(nextUrl)
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            val body = runCatching {
+                client.newCall(req).execute().use { resp -> if (resp.isSuccessful) resp.body?.string() else null }
+            }.getOrNull() ?: break
+            val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: break
+            val items = root["items"]?.jsonArray.orEmpty()
+            if (items.isEmpty()) break
+            for (el in items) {
+                val track = (el as? JsonObject)?.get("track") as? JsonObject ?: continue
+                val id = track["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                val name = track["name"]?.jsonPrimitive?.contentOrNull?.clean() ?: continue
+                if (name.isBlank()) continue
+                val artists = track["artists"]?.jsonArray?.mapNotNull {
+                    (it as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull?.clean()
+                }?.joinToString(", ").orEmpty()
+                val album = track["album"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull?.clean()
+                entries += SpotifyLikedTrackEntry(spotifyId = id, title = name, artist = artists, album = album)
+            }
+            nextUrl = root["next"]?.jsonPrimitive?.contentOrNull
+        }
+        return entries
     }
 
     /**

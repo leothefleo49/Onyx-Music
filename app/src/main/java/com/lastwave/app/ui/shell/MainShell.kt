@@ -207,6 +207,10 @@ class MainShellViewModel @Inject constructor(
     fun markTutorialSeen() {
         viewModelScope.launch { settingsPreferences.setHasSeenTutorial(true) }
     }
+
+    fun setAdvancedModeEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsPreferences.setAdvancedModeEnabled(enabled) }
+    }
 }
 
 @Composable
@@ -327,7 +331,13 @@ fun MainShell(
 
     if (shouldShowTutorial) {
         com.lastwave.app.ui.common.OnyxInteractiveTourDialog(
-            onComplete = { mainShellViewModel.markTutorialSeen() },
+            onComplete = {
+                mainShellViewModel.markTutorialSeen()
+                // Never bombard the user with a second login popup immediately after the welcome tour.
+                promptDismissedThisSession = true
+            },
+            initialAdvancedMode = currentSettings.advancedModeEnabled,
+            onSelectAdvancedMode = mainShellViewModel::setAdvancedModeEnabled,
         )
     }
 
@@ -469,7 +479,7 @@ fun MainShell(
                 ) {
                     when (tabs[page]) {
                         MainTab.FEED -> FeedScreen(
-                            onOpenSettings = { showAccountMenu = true },
+                            onOpenSettings = onOpenSettings,
                             onOpenSearch = onOpenSearch,
                             onOpenDiscover = onOpenDiscover,
                             onOpenGenres = onOpenGenres,
@@ -486,7 +496,7 @@ fun MainShell(
                             feedTapEvents = feedTapEvents,
                         )
                         MainTab.STATS -> HomeScreen(
-                            onOpenSettings = { showAccountMenu = true },
+                            onOpenSettings = onOpenSettings,
                             onOpenSearch = onOpenSearch,
                             onOpenDiscover = onOpenDiscover,
                             onOpenGenres = onOpenGenres,
@@ -499,7 +509,7 @@ fun MainShell(
                             onOpenFeedPlaylist = onOpenFeedPlaylist,
                             onOpenGenerator = onOpenGenerator,
                             onOpenSearch = onOpenSearch,
-                            onOpenSettings = { showAccountMenu = true },
+                            onOpenSettings = onOpenSettings,
                             onOpenFriends = onOpenFriends,
                         )
                     }
@@ -962,7 +972,8 @@ private fun FloatingNavBar(
     onOpenGenerator: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val liquidGlass = LocalLiquidGlass.current
+    val liquidGlass = LocalLiquidGlass.current &&
+        com.lastwave.app.data.local.GlassSurface.NAVIGATION.id in com.lastwave.app.ui.theme.LocalGlassSurfaces.current
     val md3NavBar = LocalMd3NavBar.current
     val glassHoverIndex = remember(liquidGlass) { mutableStateOf<Int?>(null) }
     val glassNavBounds = remember { mutableStateMapOf<Int, Rect>() }
@@ -1187,7 +1198,8 @@ private fun FloatingNavPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val liquidGlass = LocalLiquidGlass.current
+    val liquidGlass = LocalLiquidGlass.current &&
+        com.lastwave.app.data.local.GlassSurface.NAVIGATION.id in com.lastwave.app.ui.theme.LocalGlassSurfaces.current
     Surface(
         onClick = onClick,
         shape = PillShape,
@@ -1503,7 +1515,7 @@ private fun JoinSupportDialog(
                         }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "LastWave Discord",
+                                text = "Onyx Music Community",
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface,

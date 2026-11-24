@@ -83,6 +83,24 @@ class ScrobbleRepository @Inject constructor(
             mediaCategory = mediaCategory,
         ).toLegacyResult()
 
+    suspend fun finalizeScrobblePlayback(
+        artist: String,
+        track: String,
+        startedAtSec: Long,
+        finalListenedMs: Long,
+        durationMs: Long,
+        completedNaturally: Boolean,
+    ) {
+        syncEngine.finalizeScrobblePlayback(
+            artist = artist,
+            track = track,
+            startedAtSec = startedAtSec,
+            finalListenedMs = finalListenedMs,
+            durationMs = durationMs,
+            completedNaturally = completedNaturally,
+        )
+    }
+
     suspend fun loveTrack(artist: String, track: String, eventId: Long? = null): Result =
         syncEngine.setTrackLoved(artist, track, loved = true, eventId = eventId).toLegacyResult()
 

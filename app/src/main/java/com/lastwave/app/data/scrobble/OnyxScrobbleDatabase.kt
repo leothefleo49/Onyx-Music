@@ -119,6 +119,15 @@ interface ScrobbleEventDao {
     @Query("UPDATE scrobble_events SET mediaCategory = :category WHERE id = :id")
     suspend fun updateMediaCategory(id: Long, category: String)
 
+    @Query("UPDATE scrobble_events SET listenedMs = :listenedMs, completed = :completed, wasSkipped = :wasSkipped WHERE id = :id")
+    suspend fun updateFinalListened(id: Long, listenedMs: Long, completed: Boolean, wasSkipped: Boolean)
+
+    @Query("UPDATE scrobble_events SET trackKey = :trackKey, title = :title, artist = :artist, album = :album, genre = :genre WHERE id = :id")
+    suspend fun updateFullMetadata(id: Long, trackKey: String, title: String, artist: String, album: String, genre: String)
+
+    @Query("DELETE FROM scrobble_events WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
     @Query(
         "SELECT * FROM scrobble_events " +
             "WHERE (mediaCategory = 'MUSIC' OR mediaCategory = '') " +
@@ -126,6 +135,9 @@ interface ScrobbleEventDao {
             "ORDER BY scrobbledAtMs DESC",
     )
     suspend fun getMusicInRange(startMs: Long, endMs: Long): List<ScrobbleEventEntity>
+
+    @Query("SELECT * FROM scrobble_events WHERE scrobbledAtMs BETWEEN :minTimeMs AND :maxTimeMs ORDER BY scrobbledAtMs DESC")
+    suspend fun getWindow(minTimeMs: Long, maxTimeMs: Long): List<ScrobbleEventEntity>
 
     @Query("DELETE FROM scrobble_events")
     suspend fun clearAll()
@@ -176,7 +188,7 @@ interface ScrobbleAppFilterDao {
         ScrobbleEditRuleEntity::class,
         ScrobbleAppFilterEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class OnyxScrobbleDatabase : RoomDatabase() {
@@ -195,6 +207,14 @@ abstract class OnyxScrobbleDatabase : RoomDatabase() {
                 )
             }
         }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE scrobble_events ADD COLUMN outputDevice TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE scrobble_events ADD COLUMN wasSkipped INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE scrobble_events ADD COLUMN completed INTEGER NOT NULL DEFAULT 1")
+            }
+        }
     }
 }
 
@@ -211,7 +231,7 @@ object OnyxScrobbleDatabaseModule {
         OnyxScrobbleDatabase::class.java,
         "onyx_scrobble.db",
     )
-        .addMigrations(OnyxScrobbleDatabase.MIGRATION_1_2)
+        .addMigrations(OnyxScrobbleDatabase.MIGRATION_1_2, OnyxScrobbleDatabase.MIGRATION_2_3)
         .fallbackToDestructiveMigrationOnDowngrade()
         .build()
 

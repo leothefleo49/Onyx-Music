@@ -620,7 +620,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
                 Notification.Builder(this, CHANNEL_ID)
             } else {
                 @Suppress("DEPRECATION") Notification.Builder(this)
-            }.setSmallIcon(R.drawable.ic_launcher_logo)
+            }.setSmallIcon(R.drawable.ic_lastwave_logo_mono)
              .setContentTitle(musicPlayer.state.value.current?.title ?: "Onyx Music")
              .setContentText(musicPlayer.state.value.current?.artist ?: "Music player")
              .setOnlyAlertOnce(true)

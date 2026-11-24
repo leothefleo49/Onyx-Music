@@ -360,7 +360,6 @@ internal fun AppIconSelectorCard(
                                     modifier = Modifier
                                         .size(52.dp)
                                         .clip(CircleShape)
-                                        .background(colorResource(icon.backgroundRes))
                                         .then(
                                             if (isSelected) {
                                                 Modifier.border(2.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
@@ -370,11 +369,10 @@ internal fun AppIconSelectorCard(
                                         ),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    Icon(
-                                        painter = painterResource(icon.logoRes),
-                                        contentDescription = stringResource(icon.titleRes),
-                                        tint = Color.Unspecified,
-                                        modifier = Modifier.size(52.dp),
+                                    com.lastwave.app.ui.common.OnyxBrandLogo(
+                                        size = 52.dp,
+                                        shape = CircleShape,
+                                        appIcon = icon,
                                     )
                                 }
                                 Spacer(Modifier.height(6.dp))

@@ -275,21 +275,17 @@ fun FeedScreen(
             when (action) {
                 FeedTapAction.DeselectChipAndRefresh -> {
                     lastFeedTapMillis = now
-                    isFeedTapRefreshing = true
                     viewModel.selectChip(null)
                     listState.animateScrollToItem(0)
-                    viewModel.refresh()
                 }
                 FeedTapAction.ScrollTopAndRefresh -> {
                     lastFeedTapMillis = now
-                    isFeedTapRefreshing = true
                     listState.animateScrollToItem(0)
-                    viewModel.refresh()
                 }
                 FeedTapAction.RefreshOnly -> {
+                    // Never silently wipe visible Home items on an accidental Home-tab tap;
+                    // pull down to refresh intentionally (or tap the "New picks ready" pill).
                     lastFeedTapMillis = now
-                    isFeedTapRefreshing = true
-                    viewModel.refresh()
                 }
                 FeedTapAction.NavigateToFeed,
                 FeedTapAction.Ignore -> { /* ignored */ }
@@ -812,6 +808,44 @@ fun FeedScreen(
                     ),
                     verticalArrangement = Arrangement.Top,
                 ) {
+                    if (state.pendingFreshFeed != null && !state.isChipActive) {
+                        item(key = "pending_fresh_feed_pill", contentType = "banner") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Surface(
+                                    onClick = viewModel::applyPendingFreshFeed,
+                                    shape = RoundedCornerShape(50),
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    tonalElevation = 2.dp,
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Refresh,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Text(
+                                            text = "New Home picks ready · Tap to update",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if (state.isChipActive) {
                         if (state.isChipLoading) {
                             item(key = "chip_loading_skeleton", contentType = "shelf") {

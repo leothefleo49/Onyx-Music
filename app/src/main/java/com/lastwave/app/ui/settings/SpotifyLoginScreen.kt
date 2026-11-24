@@ -217,7 +217,7 @@ fun SpotifyLoginScreen(
         ) {
             ExpressiveHeader(
                 title = "Connect Spotify",
-                subtitle = "Sign in to unlock Spotify Canvas video loops",
+                subtitle = "Live playlist & liked songs sync, Canvas loops, and history",
                 onBack = onBack,
                 actions = {
                     if (isConnected) {

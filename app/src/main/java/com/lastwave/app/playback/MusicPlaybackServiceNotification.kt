@@ -331,7 +331,7 @@ internal fun MusicPlaybackService.buildNotification(state: MusicPlayerState, art
             // so the play action always reads the actual current state.
             val playPauseLabel = if (state.isPlaying) "Pause" else "Play"
             return builder
-                .setSmallIcon(R.drawable.ic_launcher_logo)
+                .setSmallIcon(R.drawable.ic_lastwave_logo_mono)
                 .setContentTitle(state.current?.title ?: "Onyx Music")
                 .setContentText(state.current?.artist ?: "Music player")
                 .setSubText(state.current?.album)
@@ -397,7 +397,7 @@ internal fun MusicPlaybackService.buildNotification(state: MusicPlayerState, art
         }
 
         return builder
-            .setSmallIcon(R.drawable.ic_launcher_logo)
+            .setSmallIcon(R.drawable.ic_lastwave_logo_mono)
             .setContentTitle(state.current?.title ?: "Onyx Music")
             .setContentText(state.current?.artist ?: "Music player")
             .setSubText(state.current?.album)
@@ -586,24 +586,15 @@ internal fun MusicPlaybackService.themedLogoBitmap(
     sizePx: Int,
     palette: NotificationPalette,
 ): Bitmap {
-    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bmp)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = palette.primary
-        style = Paint.Style.FILL
-    }
-    val radius = sizePx * 0.24f
-    canvas.drawRoundRect(RectF(0f, 0f, sizePx.toFloat(), sizePx.toFloat()), radius, radius, paint)
-    runCatching {
-        val drawable = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.ic_lastwave_logo_mono)?.mutate()
-        if (drawable != null) {
-            drawable.setTint(palette.onPrimary)
-            val pad = (sizePx * 0.22f).toInt()
-            drawable.setBounds(pad, pad, sizePx - pad, sizePx - pad)
-            drawable.draw(canvas)
-        }
-    }
-    return bmp
+    val icon = runCatching { themeRepository.uiState.value.appIcon }
+        .getOrDefault(com.lastwave.app.data.local.AppIcon.DEFAULT)
+    return com.lastwave.app.ui.common.renderOnyxLogoBitmap(
+        context = this,
+        appIcon = icon,
+        primaryArgb = palette.primary,
+        onPrimaryArgb = palette.onPrimary,
+        sizePx = sizePx,
+    )
 }
 
 internal data class NotificationPalette(

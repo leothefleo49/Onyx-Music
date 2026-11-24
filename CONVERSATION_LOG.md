@@ -256,3 +256,49 @@ Full audit of all prior Z.ai / ZCode chat messages plus new live issues:
 - **Queue & FullPlayer declutter:** moved Lyrics Sync Offset into the track `⋮` menu; consolidated Queue header actions into a `⋮` Queue Options sheet with a real ON/OFF Smooth Transitions switch.
 - **Stats, Genres & Universal History Sync:** live Now Playing derivation; labeled `"Genres →"` pill + genre chips; true percentage share in `GenresRepository` + Room scrobble integration + multi-source genre backfill; `UniversalHistorySyncManager` for full Last.fm (`artist.displayName`), ListenBrainz, YT Music, and `.zip`/`.json`/`.jsonl`/`.csv` imports; **Music | Videos & Other | All** tabs powered by `MediaCategoryClassifier`.
 - **AOD, Sleep Timer, Unified Settings Header, Dynamic Brand Logo, Help & Audio/Updater:** `AutoAwesome` AOD icon + multi-layer neon Wave/Bars/Aurora/Glow AOD visualizers; custom hours/minutes `SleepTimerDialog`; unified top-right Settings gear across Feed/Stats/Library; dynamic `OnyxBrandLogo` matching selected App Icon; 6-step `OnyxInteractiveTourDialog` + searchable `OnyxHelpCenterSheet`; `AudioOutputRouteMonitor` + Smart Output & Advanced Audio sheet; Android 12+ silent background self-updates; removed third-party support/branding and pointed bug reports & releases to `github.com/leothefleo49/Onyx-Music`.
+
+---
+
+## Session 9 — 2026-11-23 (1.2.6 cross-app history audit, 21-item overhaul, and fast-start / anti-flip-flop audio fix)
+
+### Message 1
+> Look at all past chat data about Onyx Music — requests I asked for and how the AI responded — over all the Onyx chats in any AI app, because I used multiple AI apps for this. Don't look at any AI app chat ever, only the Onyx ones. The point of looking at all the previous prompts isn't just for context — actually improve the app based on the old requests and see if they were actually implemented properly how asked, don't just ignore them. Btw don't look at the code changes it made just look at my messages and it's responses and then look at the current code.
+>
+> And now some new prompts or requests(many may already have been adked too idk) and this should genuinely cover most all of it:              This is for Onyx Music v1.2.5:
+>
+> 1. The AOD / vibe mode stinks right now and the border glow isn't good and is nothing like the app it's supposed to copy and it's just bad.
+> 2. It should be half AOD where you can turn phone off manually and switch tabs but it won't shut down itself, but you should also be able to enable full AOD from there.
+> 3. Spotify syncing should be more live.
+> 4. All my liked songs on Spotify and YT Music should already be hearted within the app.
+> 5. Reorganize and simplify the settings and settings sections to make more sense.
+> 6. The genre and stats stuff still needs lots of improvements.
+> 7. The stats page is like completely impossible to use. Fix that.
+> 8. Friends should be within this Onyx app. I don't know why it says last.fm friends, it's so weird.
+> 9. Maybe add a mode to see if any of your contacts also have the app.
+> 10. Recommendation provider is in Spotify settings — that makes no sense.
+> 11. Lots of parts of the app have squished text because it's not formatted well in a few parts, so the text gets squished ridiculously thin between icons or buttons or something.
+> 12. Make the settings button just open settings instead of quick actions you can get from elsewhere.
+> 13. Make the app clearer how to use it at the beginning and easy to use in general for basic users and advanced users, without either getting overwhelmed in their knowledge and understanding capacity or UI ability to navigate.
+> 14. Some things when I scroll start making the popup tab bounce up and down glitchy like it can't settle in position.
+> 15. Add more manual DJ mixing settings.
+> 16. Better data tracking and scrobbling, and allow to track more stuff.
+> 17. If last.fm tracks Onyx Music too like it does on my phone, make sure that doesn't ruin the tracking and double stuff.
+> 18. Make it so you can import all ever past YT Music and Spotify music manually or automatically too.
+> 19. Make it less stuttery when I open the music player.
+> 20. Make the logo on popups and in phone deep menus and all match the logo color I chose.
+> 21. It updated my home stuff when I didn't refresh, so I couldn't add what I saw on it.
+>
+> Later:
+> FileFlow Player integration or maybe even merging the apps. I'm thinking they should sync and be separate, and the music features in FileFlow that Onyx doesn't have should be added to Onyx. FileFlow needs some overhauling on some stuff too. It should be more for files and videos though.
+
+### Message 2
+> continue. also you might be already fixing this but it keeps changing audio type and quality up and down instead of choosing the best. plus it's taking FOREVER to just play the song. it should either get the best quality within like .25 seconds max or just transition as it improves I guess.
+
+### Delivered in 1.2.6
+- Audited Onyx-only past prompts across AI apps and verified/fixed missed requests (Queue Lock persistence, EQ draft Reset/Rename/Delete, Recognition retry params, Track Overrides polarity/toast, remaining LastWave strings, Nav/Pill glass respect).
+- Overhauled AOD / Vibe Mode with real-time PCM beat-reactive Lumn-style edge glow, defaulting to Half AOD with 1-tap Full AOD toggle; reduced FullPlayer open stutter by deferring heavy backdrop/palette animations until expansion settles; propagated selected App Icon color across popups, Recents, PackageInstaller, and notifications.
+- Rebuilt Stats into a single smooth scroll view with off-main-thread aggregation, fixed Light-theme Wrapped and DateRangePicker UTC shift, upgraded GenreResolver (normalized tags + Deezer/iTunes/Last.fm + persistent cache) and Room-first GenresRepository with sort chips.
+- Upgraded Scrobbler & History Engine (Room v3 schema with outputDevice/skipped/listenedPercent/audioCodec, external Last.fm double-scrobble protection, streaming ZIP & Google Takeout HTML/JSON/CSV import, paginated YT Music & Spotify history sync, 15m auto-sync, Installed App Picker, Ignored Artists).
+- Implemented live 60s Spotify sync + unified auto-hearted Liked Songs across Spotify & YouTube Music, Onyx-native Friends (`@handle`, codes, deep links) + opt-in local-hashed Contacts Discovery, expanded Manual DJ Mix Studio wired into live float/PCM16 DSP, reorganized Settings with Simple/Pro toggle & relocated Recommendation Provider, 3-step Welcome Tour & two-tier Help Center, Settings gear opening Settings directly, ChromeCollapse bounce fix, Home feed background-refresh freeze, and widespread squished-text cleanups.
+- Fixed audio quality flip-flopping (prevented `autoBestAudioOutput` from overriding explicit quality picks or firing swaps on noisy device callbacks, added per-track anti-ping-pong lock) and implemented 0.25s best-quality startup head-start with tightened InnerTube resolution timeouts.
+- FileFlow Player intentionally untouched (marked `"Later"` by user).

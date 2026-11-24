@@ -96,6 +96,43 @@ class ScrobbleSyncEngine @Inject constructor(
     val pendingSyncCount: Flow<Int> = eventDao.observePendingSyncCount()
     val totalScrobbleCount: Flow<Int> = eventDao.observeCount()
 
+    /**
+     * Detects external Android scrobblers (official Last.fm app, Pano Scrobbler,
+     * Simple Last.fm Scrobbler, etc.) that are currently enabled as active
+     * Notification Listeners on this device. When one is active, it already watches
+     * Onyx Music's MediaSession — so Onyx pauses outbound Last.fm pushes by default
+     * to prevent double-scrobbling on Last.fm while keeping local stats 100% intact.
+     */
+    fun detectActiveExternalScrobblers(): List<String> {
+        val enabled = runCatching {
+            androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(context)
+        }.getOrDefault(emptySet())
+        val activeNames = mutableListOf<String>()
+        for ((pkg, label) in KNOWN_EXTERNAL_SCROBBLERS) {
+            if (pkg in enabled) activeNames += label
+        }
+        return activeNames
+    }
+
+    /** Returns installed external scrobbler apps even if listener access isn't visible. */
+    fun detectInstalledExternalScrobblers(): List<String> {
+        val pm = context.packageManager
+        val installed = mutableListOf<String>()
+        for ((pkg, label) in KNOWN_EXTERNAL_SCROBBLERS) {
+            val found = runCatching { pm.getPackageInfo(pkg, 0) }.isSuccess
+            if (found) installed += label
+        }
+        return installed
+    }
+
+    /** True when outbound Last.fm push for Onyx playback should be skipped to prevent doubling. */
+    fun isDoubleScrobbleGuardActive(settings: ScrobblerSettings, sourcePackage: String): Boolean {
+        if (!settings.pushToLastFm) return true
+        if (!settings.avoidExternalScrobblerDuplicates) return false
+        if (sourcePackage != context.packageName) return false
+        return detectActiveExternalScrobblers().isNotEmpty()
+    }
+
     sealed interface RemoteResult {
         data object Success : RemoteResult
         data object NoSessionKey : RemoteResult
@@ -172,6 +209,11 @@ class ScrobbleSyncEngine @Inject constructor(
             }
         }
 
+        if (isDoubleScrobbleGuardActive(settings, sourcePackage)) {
+            lastNowPlayingKey = key
+            return RemoteResult.Success
+        }
+
         val lastFmResult = lastFmSignedCall(
             method = "track.updateNowPlaying",
             extra = buildMap {
@@ -235,27 +277,70 @@ class ScrobbleSyncEngine @Inject constructor(
         }
         val isMusic = ScrobbleMediaCategory.isMusic(resolvedCategory)
 
+        val settings = currentScrobblerSettings()
+        if (edited.artist.trim().lowercase() in settings.blockedArtists) {
+            return@withContext RemoteResult.Success
+        }
+
         val nowMs = System.currentTimeMillis()
         val startedAtMs = if (startedAtSec > 0L) startedAtSec * 1000L else nowMs
+        // Align scrobbledAtMs with startedAtMs (Last.fm / ListenBrainz standard) so
+        // syncing history back from Last.fm NEVER creates a +2min timestamp mismatch duplicate!
+        val canonicalTsMs = startedAtMs
         val trackKey = normalizeScrobbleTrackKey(edited.artist, edited.title)
+        val canonicalKey = canonicalScrobbleKey(edited.artist, edited.title)
 
-        // Deduplicate rapid/mirror scrobbles within +/- 45 seconds
-        val existing = eventDao.findRecentDuplicate(
-            trackKey = trackKey,
-            minTimeMs = nowMs - ScrobbleRulesEngine.DEFAULT_DEDUP_WINDOW_MS,
-            maxTimeMs = nowMs + ScrobbleRulesEngine.DEFAULT_DEDUP_WINDOW_MS,
+        // Deduplicate rapid/mirror/cross-source scrobbles within +/- 5 minutes using canonical keys
+        val nearby = eventDao.getWindow(
+            minTimeMs = canonicalTsMs - CROSS_SOURCE_DEDUP_WINDOW_MS,
+            maxTimeMs = canonicalTsMs + CROSS_SOURCE_DEDUP_WINDOW_MS,
         )
+        val existing = nearby.firstOrNull { prev ->
+            (prev.trackKey == trackKey || canonicalScrobbleKey(prev.artist, prev.title) == canonicalKey) &&
+                kotlin.math.abs(prev.scrobbledAtMs - canonicalTsMs) <= LIVE_DEDUP_WINDOW_MS
+        }
         if (existing != null) {
+            // Merge better duration/listened time if the new report is richer.
+            if (listenedMs > existing.listenedMs) {
+                eventDao.updateFinalListened(existing.id, listenedMs, existing.completed, existing.wasSkipped)
+            }
             return@withContext RemoteResult.Success
         }
 
         val session = sessionPreferences.awaitLoadedSession()
-        val settings = currentScrobblerSettings()
-        val wantsLastFm = isMusic && session.apiKey.isNotBlank() && session.apiSecret.isNotBlank() && session.sessionKey.isNotBlank()
+        val guardBlocksLastFm = isDoubleScrobbleGuardActive(settings, sourcePackage)
+        val wantsLastFm = isMusic &&
+            !guardBlocksLastFm &&
+            session.apiKey.isNotBlank() &&
+            session.apiSecret.isNotBlank() &&
+            session.sessionKey.isNotBlank()
         val wantsListenBrainz = isMusic && settings.listenBrainzEnabled && settings.listenBrainzToken.isNotBlank()
 
         val effectiveDuration = if (durationMs > 0L) durationMs else 210_000L
         val effectiveListened = if (listenedMs > 0L) listenedMs else effectiveDuration
+        val activeOutputLabel = runCatching {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            val outs = am?.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).orEmpty()
+            val bt = outs.firstOrNull {
+                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER
+            }
+            val usb = outs.firstOrNull {
+                it.type == android.media.AudioDeviceInfo.TYPE_USB_DEVICE ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+            }
+            val wired = outs.firstOrNull {
+                it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET
+            }
+            when {
+                usb != null -> usb.productName?.toString()?.takeIf { it.isNotBlank() } ?: "USB DAC"
+                bt != null -> bt.productName?.toString()?.takeIf { it.isNotBlank() } ?: "Bluetooth"
+                wired != null -> "Wired Headphones"
+                else -> "Phone Speaker"
+            }
+        }.getOrDefault("")
 
         val insertedId = eventDao.insert(
             ScrobbleEventEntity(
@@ -268,7 +353,7 @@ class ScrobbleSyncEngine @Inject constructor(
                 durationMs = effectiveDuration,
                 listenedMs = effectiveListened,
                 startedAtMs = startedAtMs,
-                scrobbledAtMs = nowMs,
+                scrobbledAtMs = canonicalTsMs,
                 sourcePackage = sourcePackage,
                 sourceAppName = sourceAppName.ifBlank { DEFAULT_OWN_APP_NAME },
                 isLoved = false,
@@ -276,6 +361,9 @@ class ScrobbleSyncEngine @Inject constructor(
                 listenBrainzSyncStatus = if (wantsListenBrainz) ScrobbleSyncStatus.PENDING else ScrobbleSyncStatus.SKIPPED,
                 retryCount = 0,
                 mediaCategory = resolvedCategory,
+                outputDevice = activeOutputLabel,
+                wasSkipped = false,
+                completed = effectiveListened >= (effectiveDuration * 0.85).toLong(),
             ),
         )
         _scrobbleEvents.tryEmit(Unit)
@@ -637,6 +725,111 @@ class ScrobbleSyncEngine @Inject constructor(
         _scrobbleEvents.tryEmit(Unit)
     }
 
+    suspend fun updateFullScrobbleMetadata(
+        id: Long,
+        title: String,
+        artist: String,
+        album: String,
+        genre: String,
+    ) = withContext(Dispatchers.IO) {
+        val cleanTitle = title.trim()
+        val cleanArtist = artist.trim()
+        if (cleanTitle.isBlank() || cleanArtist.isBlank()) return@withContext
+        eventDao.updateFullMetadata(
+            id = id,
+            trackKey = normalizeScrobbleTrackKey(cleanArtist, cleanTitle),
+            title = cleanTitle,
+            artist = cleanArtist,
+            album = album.trim(),
+            genre = genre.trim(),
+        )
+        _scrobbleEvents.tryEmit(Unit)
+    }
+
+    /**
+     * Updates the final listened duration and completion/skip flags once a
+     * scrobbled track finishes or transitions, fixing the 50%-threshold undercount.
+     */
+    suspend fun finalizeScrobblePlayback(
+        artist: String,
+        track: String,
+        startedAtSec: Long,
+        finalListenedMs: Long,
+        durationMs: Long,
+        completedNaturally: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        if (finalListenedMs <= 0L) return@withContext
+        val rules = runCatching { editRuleDao.getEnabledRules() }.getOrDefault(emptyList())
+        val cleaned = ScrobbleRulesEngine.cleanMetadata(ScrobbleMetadata(track, artist, ""))
+        val edited = ScrobbleRulesEngine.applyRules(cleaned, rules)
+        val canonicalKey = canonicalScrobbleKey(edited.artist, edited.title)
+        val tsMs = startedAtSec * 1000L
+        val match = eventDao.getWindow(tsMs - 90_000L, tsMs + 300_000L)
+            .firstOrNull {
+                it.sourcePackage == context.packageName &&
+                    canonicalScrobbleKey(it.artist, it.title) == canonicalKey
+            } ?: return@withContext
+        val effDur = durationMs.takeIf { it > 0L } ?: match.durationMs
+        val clampedListened = if (effDur > 0L) finalListenedMs.coerceAtMost(effDur + 5_000L) else finalListenedMs
+        val isCompleted = completedNaturally || (effDur > 0L && clampedListened >= (effDur * 0.85).toLong())
+        val wasSkipped = !isCompleted
+        eventDao.updateFinalListened(
+            id = match.id,
+            listenedMs = maxOf(match.listenedMs, clampedListened),
+            completed = isCompleted,
+            wasSkipped = wasSkipped,
+        )
+        _scrobbleEvents.tryEmit(Unit)
+    }
+
+    /**
+     * Scans the entire scrobble database and removes cross-source duplicate plays
+     * (same canonical artist + track within +/- 5 minutes, e.g. Onyx + Last.fm app
+     * + Spotify Extended history), preserving the richest row (artwork, genre, longest
+     * listenedMs, Onyx source preference).
+     * @return number of duplicate rows removed.
+     */
+    suspend fun deduplicateDatabase(): Int = withContext(Dispatchers.IO) {
+        val all = eventDao.getAll().sortedBy { it.scrobbledAtMs }
+        if (all.size < 2) return@withContext 0
+
+        fun richnessScore(e: ScrobbleEventEntity): Int {
+            var s = 0
+            if (e.sourcePackage == context.packageName) s += 4
+            if (!e.artworkUrl.isNullOrBlank()) s += 2
+            if (e.genre.isNotBlank()) s += 2
+            if (e.album.isNotBlank()) s += 1
+            if (e.outputDevice.isNotBlank()) s += 1
+            if (e.listenedMs > 0L) s += 1
+            return s
+        }
+
+        val lastKeptByKey = HashMap<String, ScrobbleEventEntity>()
+        val idsToDelete = mutableListOf<Long>()
+
+        for (ev in all) {
+            val cKey = canonicalScrobbleKey(ev.artist, ev.title)
+            if (cKey.isBlank()) continue
+            val prev = lastKeptByKey[cKey]
+            if (prev != null && kotlin.math.abs(ev.scrobbledAtMs - prev.scrobbledAtMs) <= CROSS_SOURCE_DEDUP_WINDOW_MS) {
+                // Keep the richer row and drop the duplicate
+                if (richnessScore(ev) > richnessScore(prev)) {
+                    idsToDelete += prev.id
+                    lastKeptByKey[cKey] = ev
+                } else {
+                    idsToDelete += ev.id
+                }
+            } else {
+                lastKeptByKey[cKey] = ev
+            }
+        }
+        if (idsToDelete.isNotEmpty()) {
+            idsToDelete.chunked(400).forEach { chunk -> eventDao.deleteByIds(chunk) }
+            _scrobbleEvents.tryEmit(Unit)
+        }
+        idsToDelete.size
+    }
+
     /**
      * Resolves missing genre tags for the user's top untagged music artists in Room
      * via [GenreResolver] (Last.fm top tags + iTunes fallback) so Genre Stats show
@@ -703,22 +896,44 @@ class ScrobbleSyncEngine @Inject constructor(
 
         val rules = runCatching { editRuleDao.getEnabledRules() }.getOrDefault(emptyList())
         val existing = eventDao.getAll()
-        // 15-second bucket prevents collapsing back-to-back plays while deduping re-imports cleanly.
-        val existingKeys = existing.map { "${it.trackKey}|${it.scrobbledAtMs / 15_000L}" }.toHashSet()
+        // Sliding-window canonical deduplication (+/- 5 min across Last.fm startTime,
+        // Onyx live time, Spotify endTime, and YT Music history) — eliminates boundary
+        // splits and cross-source doubling cleanly!
+        val keptTimestampsByKey = HashMap<String, MutableList<Long>>(existing.size / 2 + 16)
+        for (ex in existing) {
+            val cKey = canonicalScrobbleKey(ex.artist, ex.title)
+            if (cKey.isNotBlank()) {
+                val list = keptTimestampsByKey.getOrPut(cKey) { mutableListOf() }
+                list.add(ex.scrobbledAtMs)
+                if (ex.startedAtMs > 0L && kotlin.math.abs(ex.startedAtMs - ex.scrobbledAtMs) > 5_000L) {
+                    list.add(ex.startedAtMs)
+                }
+            }
+        }
 
         val toInsert = mutableListOf<ScrobbleEventEntity>()
         var skippedDupes = 0
         for (rawEvent in events) {
-            val edited = ScrobbleRulesEngine.applyRules(
+            val cleaned = ScrobbleRulesEngine.cleanMetadata(
                 ScrobbleMetadata(rawEvent.title, rawEvent.artist, rawEvent.album),
-                rules,
             )
-            val key = normalizeScrobbleTrackKey(edited.artist, edited.title)
-            val dedupBucket = "$key|${rawEvent.scrobbledAtMs / 15_000L}"
-            if (!existingKeys.add(dedupBucket)) {
+            val edited = ScrobbleRulesEngine.applyRules(cleaned, rules)
+            if (edited.artist.isBlank() || edited.title.isBlank()) {
                 skippedDupes++
                 continue
             }
+            val key = normalizeScrobbleTrackKey(edited.artist, edited.title)
+            val cKey = canonicalScrobbleKey(edited.artist, edited.title)
+            val ts = rawEvent.scrobbledAtMs
+            val existingTimes = keptTimestampsByKey[cKey]
+            val isDuplicate = existingTimes != null && existingTimes.any { prevTs ->
+                kotlin.math.abs(prevTs - ts) <= CROSS_SOURCE_DEDUP_WINDOW_MS
+            }
+            if (isDuplicate) {
+                skippedDupes++
+                continue
+            }
+            keptTimestampsByKey.getOrPut(cKey) { mutableListOf() }.add(ts)
             toInsert += rawEvent.copy(
                 trackKey = key,
                 title = edited.title,
@@ -836,5 +1051,15 @@ class ScrobbleSyncEngine @Inject constructor(
         const val WRITE_SPACING_MS = 700L
         const val MAX_RETRIES = 8
         const val FLUSH_BATCH_SIZE = 50
+        const val LIVE_DEDUP_WINDOW_MS = 90_000L
+        const val CROSS_SOURCE_DEDUP_WINDOW_MS = 300_000L // +/- 5 min handles start vs threshold vs end timestamps
+        val KNOWN_EXTERNAL_SCROBBLERS = listOf(
+            "fm.last.android" to "Last.fm",
+            "com.arn.scrobble" to "Pano Scrobbler",
+            "com.adam.aslfms" to "Simple Last.fm Scrobbler",
+            "com.kawaii.scrobbler" to "Kawaii Scrobbler",
+            "com.simplelastfmscrobbler" to "Simple Scrobbler",
+            "com.peterjosling.scroball" to "Scroball",
+        )
     }
 }

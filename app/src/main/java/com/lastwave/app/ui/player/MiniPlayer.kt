@@ -551,6 +551,7 @@ internal fun MiniPlayer(
                             onClick = onNext,
                             enabled = state.queueSize > 1,
                             modifier = Modifier
+                                .collapseHorizontalSlot(compactProgress)
                                 .padding(start = 8.dp)
                                 .size(44.dp)
                                 .collapseScale(0.85f, compactProgress)
@@ -662,11 +663,12 @@ internal fun MiniPlayer(
                         }
                     }
 
-                    // Skip Next IconButton with an outline stroke
+                    // Skip Next IconButton with an outline stroke (collapses cleanly when docked)
                     IconButton(
                         onClick = onNext,
                         enabled = state.queueSize > 1,
                         modifier = Modifier
+                            .collapseHorizontalSlot(compactProgress)
                             .padding(start = 6.dp)
                             .size(40.dp)
                             .collapseScale(0.9f, compactProgress)

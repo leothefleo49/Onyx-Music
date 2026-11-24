@@ -376,21 +376,21 @@ internal fun AutoMixControlsCard(
     val shape = groupShape(position)
 
     val isInitialAuto = settings.durationMode == com.lastwave.app.playback.automix.api.TransitionDurationMode.AUTO
-    var sliderValue by remember { mutableStateOf(if (isInitialAuto) 11f else settings.targetDurationSeconds.coerceIn(12, 30).toFloat()) }
+    var sliderValue by remember { mutableStateOf(if (isInitialAuto) 3f else settings.targetDurationSeconds.coerceIn(4, 32).toFloat()) }
     var isDragging by remember { mutableStateOf(false) }
     var isExpanded by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(settings.durationMode, settings.targetDurationSeconds) {
         if (!isDragging) {
             sliderValue = if (settings.durationMode == com.lastwave.app.playback.automix.api.TransitionDurationMode.AUTO) {
-                11f
+                3f
             } else {
-                settings.targetDurationSeconds.coerceIn(12, 30).toFloat()
+                settings.targetDurationSeconds.coerceIn(4, 32).toFloat()
             }
         }
     }
 
-    val isAuto = sliderValue.roundToInt() <= 11
+    val isAuto = sliderValue.roundToInt() <= 3
     val displayValue = if (isAuto) "Auto" else "${sliderValue.roundToInt()}s"
     val durationDesc = if (isAuto) {
         "Auto \u2022 Phrase-matched transition"
@@ -464,7 +464,7 @@ internal fun AutoMixControlsCard(
                             }
                             sliderValue = value
 
-                            if (rounded <= 11) {
+                            if (rounded <= 3) {
                                 if (settings.durationMode != com.lastwave.app.playback.automix.api.TransitionDurationMode.AUTO) {
                                     onDurationModeChange(com.lastwave.app.playback.automix.api.TransitionDurationMode.AUTO)
                                 }
@@ -480,8 +480,8 @@ internal fun AutoMixControlsCard(
                         onValueChangeFinished = {
                             isDragging = false
                             val rounded = sliderValue.roundToInt()
-                            if (rounded <= 11) {
-                                sliderValue = 11f
+                            if (rounded <= 3) {
+                                sliderValue = 3f
                                 onDurationModeChange(com.lastwave.app.playback.automix.api.TransitionDurationMode.AUTO)
                             } else {
                                 sliderValue = rounded.toFloat()
@@ -489,8 +489,8 @@ internal fun AutoMixControlsCard(
                                 onSecondsChange(rounded)
                             }
                         },
-                        valueRange = 11f..30f,
-                        steps = 18,
+                        valueRange = 3f..32f,
+                        steps = 28,
                         modifier = Modifier.fillMaxWidth(),
                     )
 
@@ -499,8 +499,8 @@ internal fun AutoMixControlsCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text("Auto", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                        Text("20s", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                        Text("30s", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                        Text("16s", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                        Text("32s", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                     }
                 }
             }
@@ -624,6 +624,8 @@ internal fun MusicHapticsControlsCard(
                                 mode.label,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                         },
                         modifier = Modifier.weight(1f),
@@ -661,6 +663,8 @@ internal fun MusicHapticsControlsCard(
                                 intensity.label,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                         },
                         modifier = Modifier.weight(1f),
@@ -708,6 +712,8 @@ internal fun MusicHapticsControlsCard(
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                         },
                         modifier = Modifier.weight(1f),

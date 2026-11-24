@@ -369,6 +369,7 @@ fun PlaylistScreen(
                             "Search playlists...",
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     },
                     leadingIcon = {
@@ -397,20 +398,21 @@ fun PlaylistScreen(
                 FilledTonalButton(
                     onClick = onOpenGenerator,
                     shape = RoundedCornerShape(16.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     modifier = Modifier.heightIn(min = 52.dp),
                 ) {
                     Icon(
                         Icons.Filled.AutoAwesome,
                         contentDescription = "Generator",
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.primary,
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(5.dp))
                     Text(
-                        "Generator",
+                        "Mix",
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
+                        maxLines = 1,
                     )
                 }
             }
@@ -457,7 +459,9 @@ fun PlaylistScreen(
                 "downloads".contains(searchQuery.trim(), ignoreCase = true)) &&
                 (selectedFilter == PlaylistFilter.ALL || selectedFilter == PlaylistFilter.IMPORTED)
 
-            Box(
+            androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+                isRefreshing = state.isRefreshing,
+                onRefresh = viewModel::refreshLibrary,
                 modifier = Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),

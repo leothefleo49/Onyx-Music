@@ -112,40 +112,67 @@ object ScrobbleImportExport {
 
     /**
      * Reads either a raw `.zip` archive (Spotify / Google Takeout / Pano / stats.fm exports)
-     * or a single `.json` / `.jsonl` / `.csv` stream and auto-detects the source format.
+     * or a single `.json` / `.jsonl` / `.html` / `.csv` stream and auto-detects the source format.
+     * Streams ZIP entries directly without loading the entire archive into RAM (prevents OOM on
+     * multi-year Google Takeout or Spotify Extended History archives).
      */
     fun importFromStream(input: InputStream, fileNameHint: String? = null): ImportResult {
-        val bytes = input.readBytes()
-        if (bytes.isEmpty()) return ImportResult(emptyList(), "Empty", 0)
-        val isZipHeader = bytes.size >= 4 &&
-            bytes[0] == 0x50.toByte() &&
-            bytes[1] == 0x4B.toByte() &&
-            (bytes[2] == 0x03.toByte() || bytes[2] == 0x05.toByte())
+        val buffered = java.io.BufferedInputStream(input, 64 * 1024)
+        buffered.mark(8)
+        val header = ByteArray(4)
+        val read = buffered.read(header)
+        buffered.reset()
+        if (read <= 0) return ImportResult(emptyList(), "Empty", 0)
+        val isZipHeader = read >= 4 &&
+            header[0] == 0x50.toByte() &&
+            header[1] == 0x4B.toByte() &&
+            (header[2] == 0x03.toByte() || header[2] == 0x05.toByte())
         val isZip = isZipHeader || fileNameHint?.endsWith(".zip", ignoreCase = true) == true
         if (isZip) {
-            return importFromZipBytes(bytes)
+            return importFromZipStream(buffered)
         }
-        val text = bytes.toString(Charsets.UTF_8)
+        val text = buffered.bufferedReader(Charsets.UTF_8).readText()
+        if (fileNameHint?.endsWith(".html", ignoreCase = true) == true ||
+            fileNameHint?.endsWith(".htm", ignoreCase = true) == true ||
+            text.trimStart().startsWith("<!DOCTYPE html", ignoreCase = true) ||
+            text.trimStart().startsWith("<html", ignoreCase = true)
+        ) {
+            return parseYouTubeTakeoutHtml(text)
+        }
         return importFromText(text)
     }
 
-    fun importFromZipBytes(bytes: ByteArray): ImportResult {
+    fun importFromZipBytes(bytes: ByteArray): ImportResult =
+        importFromZipStream(ByteArrayInputStream(bytes))
+
+    fun importFromZipStream(stream: InputStream): ImportResult {
         val allEvents = mutableListOf<ScrobbleEventEntity>()
         val formats = linkedSetOf<String>()
         var totalSkipped = 0
-        ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
+        ZipInputStream(stream).use { zis ->
             while (true) {
                 val entry = zis.nextEntry ?: break
                 val name = entry.name
                 val lower = name.lowercase(Locale.ROOT)
+                val baseName = lower.substringAfterLast('/')
+                val isNonHistorySpotifyFile = baseName in NON_HISTORY_SPOTIFY_FILES ||
+                    baseName.startsWith("playlist") && baseName.endsWith(".json")
                 val isSupportedFile = !entry.isDirectory &&
                     !lower.contains("__macosx") &&
-                    !lower.startsWith(".") &&
-                    (lower.endsWith(".json") || lower.endsWith(".jsonl") || lower.endsWith(".csv") || lower.endsWith(".txt"))
+                    !baseName.startsWith(".") &&
+                    !isNonHistorySpotifyFile &&
+                    (lower.endsWith(".json") || lower.endsWith(".jsonl") ||
+                        lower.endsWith(".csv") || lower.endsWith(".txt") ||
+                        lower.endsWith(".html") || lower.endsWith(".htm"))
                 if (isSupportedFile) {
-                    val entryBytes = zis.readBytes()
-                    if (entryBytes.isNotEmpty() && entryBytes.size <= MAX_ZIP_ENTRY_BYTES) {
-                        val parsed = importFromText(entryBytes.toString(Charsets.UTF_8))
+                    val entryBytes = readBoundedEntry(zis, MAX_ZIP_ENTRY_BYTES)
+                    if (entryBytes != null && entryBytes.isNotEmpty()) {
+                        val content = entryBytes.toString(Charsets.UTF_8)
+                        val parsed = if (lower.endsWith(".html") || lower.endsWith(".htm")) {
+                            parseYouTubeTakeoutHtml(content)
+                        } else {
+                            importFromText(content)
+                        }
                         if (parsed.events.isNotEmpty()) {
                             allEvents += parsed.events
                             formats += parsed.formatDetected
@@ -164,10 +191,29 @@ object ScrobbleImportExport {
         return ImportResult(allEvents, label, totalSkipped)
     }
 
+    private fun readBoundedEntry(input: InputStream, maxBytes: Int): ByteArray? {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(32 * 1024)
+        var total = 0
+        while (true) {
+            val n = input.read(buf)
+            if (n <= 0) break
+            total += n
+            if (total > maxBytes) return null
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
     fun importFromText(raw: String): ImportResult {
         val trimmed = raw.trim().removePrefix("\uFEFF")
         if (trimmed.isBlank()) {
             return ImportResult(emptyList(), "Empty", 0)
+        }
+        if (trimmed.startsWith("<!DOCTYPE html", ignoreCase = true) ||
+            trimmed.startsWith("<html", ignoreCase = true)
+        ) {
+            return parseYouTubeTakeoutHtml(trimmed)
         }
         if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             val parsed = runCatching { rawJson.parseToJsonElement(trimmed) }.getOrNull()
@@ -336,16 +382,35 @@ object ScrobbleImportExport {
             val trackArtist = obj.str("master_metadata_album_artist_name").trim()
             val episodeTitle = obj.str("episode_name").trim()
             val episodeShow = obj.str("episode_show_name").trim()
+            val bookTitle = obj.str("audiobook_title").trim()
+            val bookChapter = obj.str("audiobook_chapter_title").trim()
 
             val isPodcast = trackTitle.isBlank() && episodeTitle.isNotBlank() && episodeShow.isNotBlank()
-            val title = if (isPodcast) episodeTitle else trackTitle
-            val artist = if (isPodcast) episodeShow else trackArtist
+            val isAudiobook = trackTitle.isBlank() && !isPodcast && bookTitle.isNotBlank()
+            val title = when {
+                isPodcast -> episodeTitle
+                isAudiobook -> bookChapter.ifBlank { bookTitle }
+                else -> trackTitle
+            }
+            val artist = when {
+                isPodcast -> episodeShow
+                isAudiobook -> bookTitle
+                else -> trackArtist
+            }
             if (title.isBlank() || artist.isBlank()) {
                 skipped++
                 continue
             }
             val tsMs = parseIsoTimestampMs(obj.str("ts")) ?: run { skipped++; continue }
-            val album = if (isPodcast) episodeShow else obj.str("master_metadata_album_album_name").trim()
+            val album = when {
+                isPodcast -> episodeShow
+                isAudiobook -> bookTitle
+                else -> obj.str("master_metadata_album_album_name").trim()
+            }
+            val wasSkipped = obj["skipped"]?.jsonPrimitive?.contentOrNull?.equals("true", ignoreCase = true) == true ||
+                obj.str("reason_end").equals("fwdbtn", ignoreCase = true)
+            val platform = obj.str("platform").trim().take(48)
+            val startedMs = (tsMs - msPlayed).coerceAtLeast(1L)
             results += ScrobbleEventEntity(
                 trackKey = normalizeScrobbleTrackKey(artist, title),
                 title = title,
@@ -353,13 +418,20 @@ object ScrobbleImportExport {
                 album = album,
                 durationMs = msPlayed,
                 listenedMs = msPlayed,
-                startedAtMs = (tsMs - msPlayed).coerceAtLeast(1L),
-                scrobbledAtMs = tsMs,
+                startedAtMs = startedMs,
+                scrobbledAtMs = startedMs,
                 sourcePackage = "com.spotify.music",
                 sourceAppName = "Spotify",
                 lastFmSyncStatus = ScrobbleSyncStatus.SYNCED,
                 listenBrainzSyncStatus = ScrobbleSyncStatus.SKIPPED,
-                mediaCategory = if (isPodcast) ScrobbleMediaCategory.PODCAST else ScrobbleMediaCategory.MUSIC,
+                mediaCategory = when {
+                    isPodcast -> ScrobbleMediaCategory.PODCAST
+                    isAudiobook -> ScrobbleMediaCategory.OTHER
+                    else -> ScrobbleMediaCategory.MUSIC
+                },
+                outputDevice = platform,
+                wasSkipped = wasSkipped,
+                completed = !wasSkipped,
             )
         }
         return ImportResult(results, "Spotify Extended History", skipped)
@@ -416,10 +488,7 @@ object ScrobbleImportExport {
                 skipped++
                 continue
             }
-            val strippedTitle = rawTitle
-                .removePrefix("Watched ")
-                .removePrefix("Listened to ")
-                .trim()
+            val strippedTitle = stripTakeoutPrefix(rawTitle)
             if (strippedTitle.isBlank() || strippedTitle.startsWith("https://")) {
                 skipped++
                 continue
@@ -894,7 +963,125 @@ object ScrobbleImportExport {
         return null
     }
 
-    private const val MAX_ZIP_ENTRY_BYTES = 48 * 1024 * 1024
+    private const val MAX_ZIP_ENTRY_BYTES = 128 * 1024 * 1024
+
+    private val NON_HISTORY_SPOTIFY_FILES = setOf(
+        "yourlibrary.json", "inferences.json", "identity.json", "userdata.json",
+        "payments.json", "marquee.json", "searchqueries.json", "follow.json",
+        "identifiers.json", "readme.txt", "read_me_first.pdf",
+    )
+
+    private val TAKEOUT_PREFIXES = listOf(
+        "Watched ", "Listened to ", "Regardé ", "Écouté ", "Visto ", "Escuchado ",
+        "Angesehen: ", "Angehört: ", "Assistiu a ", "Ouviu ", "Guardato ", "Ascoltato ",
+    )
+
+    private fun stripTakeoutPrefix(raw: String): String {
+        var s = raw.trim()
+        for (p in TAKEOUT_PREFIXES) {
+            if (s.startsWith(p, ignoreCase = true)) {
+                s = s.substring(p.length).trim()
+                break
+            }
+        }
+        return s
+    }
+
+    /**
+     * Parses Google Takeout's default `watch-history.html` export (YouTube & YouTube Music).
+     * Automatically separates Music vs. Videos/Other via [MediaCategoryClassifier].
+     */
+    private fun parseYouTubeTakeoutHtml(html: String): ImportResult {
+        val doc = runCatching { org.jsoup.Jsoup.parse(html) }.getOrNull()
+            ?: return ImportResult(emptyList(), "Google Takeout HTML", 0)
+        val cells = doc.select("div.content-cell.mdl-cell--6-col, div.content-cell")
+        if (cells.isEmpty()) return ImportResult(emptyList(), "Google Takeout HTML", 0)
+
+        val results = mutableListOf<ScrobbleEventEntity>()
+        var skipped = 0
+        for (cell in cells) {
+            val links = cell.select("a")
+            if (links.isEmpty()) continue
+            val titleLink = links[0]
+            val href = titleLink.attr("href")
+            if (!href.contains("youtube.com", ignoreCase = true) && !href.contains("youtu.be", ignoreCase = true)) {
+                continue
+            }
+            val rawTitle = stripTakeoutPrefix(titleLink.text())
+            if (rawTitle.isBlank() || rawTitle.startsWith("https://")) {
+                skipped++
+                continue
+            }
+            val channel = links.getOrNull(1)?.text()?.trim().orEmpty()
+            val isYtMusic = href.contains("music.youtube.com", ignoreCase = true) ||
+                cell.parent()?.text()?.contains("YouTube Music", ignoreCase = true) == true
+            // Extract date line (last text node inside content-cell)
+            val textLines = cell.ownText().split("\n").map { it.trim() }.filter { it.isNotBlank() }
+            val dateCandidate = cell.textNodes().lastOrNull()?.text()?.trim()
+                ?: textLines.lastOrNull().orEmpty()
+            val tsMs = parseTakeoutHtmlDate(dateCandidate) ?: run { skipped++; continue }
+
+            val (parsedArtist, parsedTitle) = splitYouTubeTitleAndArtist(rawTitle, channel)
+            if (parsedTitle.isBlank() || parsedArtist.isBlank()) {
+                skipped++
+                continue
+            }
+            val sourcePkg = if (isYtMusic) "com.google.android.apps.youtube.music" else "com.google.android.youtube"
+            val sourceApp = if (isYtMusic) "YouTube Music" else "YouTube"
+            val category = if (isYtMusic) {
+                ScrobbleMediaCategory.MUSIC
+            } else {
+                MediaCategoryClassifier.classify(
+                    title = rawTitle,
+                    artist = channel.ifBlank { parsedArtist },
+                    sourcePackage = sourcePkg,
+                    sourceAppName = sourceApp,
+                )
+            }
+            val cleaned = ScrobbleRulesEngine.cleanMetadata(ScrobbleMetadata(parsedTitle, parsedArtist))
+            results += ScrobbleEventEntity(
+                trackKey = normalizeScrobbleTrackKey(cleaned.artist, cleaned.title),
+                title = cleaned.title,
+                artist = cleaned.artist,
+                durationMs = 210_000L,
+                listenedMs = 210_000L,
+                startedAtMs = tsMs,
+                scrobbledAtMs = tsMs,
+                sourcePackage = sourcePkg,
+                sourceAppName = sourceApp,
+                lastFmSyncStatus = ScrobbleSyncStatus.SYNCED,
+                listenBrainzSyncStatus = ScrobbleSyncStatus.SKIPPED,
+                mediaCategory = category,
+            )
+        }
+        return ImportResult(results, "Google Takeout (YouTube HTML)", skipped)
+    }
+
+    private fun parseTakeoutHtmlDate(raw: String): Long? {
+        val clean = raw.trim()
+            .replace("\u202F", " ")
+            .replace("\u00A0", " ")
+        if (clean.isBlank()) return null
+        val patterns = listOf(
+            "MMM d, yyyy, h:mm:ss a z",
+            "MMM d, yyyy, h:mm:ss a",
+            "MMM d, yyyy, HH:mm:ss z",
+            "d MMM yyyy, HH:mm:ss z",
+            "d MMM yyyy, HH:mm:ss",
+            "yyyy-MM-dd HH:mm:ss",
+        )
+        for (p in patterns) {
+            val ts = runCatching { SimpleDateFormat(p, Locale.US).parse(clean)?.time }.getOrNull()
+            if (ts != null) return ts
+        }
+        // Strip trailing timezone token like "MST"/"PDT"/"GMT+02:00" as fallback
+        val withoutTz = clean.replace(Regex("""\s+[A-Z]{2,5}([+-]\d{1,2}:?\d{2})?$"""), "").trim()
+        for (p in listOf("MMM d, yyyy, h:mm:ss a", "MMM d, yyyy, HH:mm:ss", "d MMM yyyy, HH:mm:ss")) {
+            val ts = runCatching { SimpleDateFormat(p, Locale.US).parse(withoutTz)?.time }.getOrNull()
+            if (ts != null) return ts
+        }
+        return parseIsoTimestampMs(clean)
+    }
 
     private fun normalizeEpochToMs(value: Long): Long =
         if (value in 1L..9_999_999_999L) value * 1000L else value
@@ -902,6 +1089,14 @@ object ScrobbleImportExport {
     internal fun parseIsoTimestampMs(raw: String): Long? {
         val clean = raw.trim()
         if (clean.isBlank()) return null
+        // java.time.Instant handles arbitrary fractional second precision (e.g. Google Takeout's
+        // 6-digit microseconds like 2024-06-15T14:23:45.123456Z) accurately without millisecond shift.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            runCatching { return java.time.Instant.parse(clean).toEpochMilli() }
+            runCatching { return java.time.OffsetDateTime.parse(clean).toInstant().toEpochMilli() }
+        }
+        // Normalize >3 fractional digits to 3 digits for SimpleDateFormat fallback on API 24-25.
+        val normalized = clean.replace(Regex("""\.(\d{3})\d+"""), ".$1")
         val patterns = listOf(
             "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
             "yyyy-MM-dd'T'HH:mm:ss'Z'",
@@ -912,7 +1107,7 @@ object ScrobbleImportExport {
             val parsed = runCatching {
                 SimpleDateFormat(pattern, Locale.US).apply {
                     timeZone = TimeZone.getTimeZone("UTC")
-                }.parse(clean)?.time
+                }.parse(normalized)?.time
             }.getOrNull()
             if (parsed != null) return parsed
         }

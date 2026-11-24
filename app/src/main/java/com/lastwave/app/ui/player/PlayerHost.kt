@@ -387,17 +387,20 @@ fun PlayerHost(
     // Lyrics shown inline on Now Playing. Kept beside currentTab, not as a tab,
     // so the regular lyrics tab returns to it on back.
     var playerLyrics by rememberSaveable { mutableStateOf(false) }
-    // Only line-synced lyrics need the 60 ms playhead; on Now Playing each
-    // tick redrew the whole full player to move the seek bar under a pixel.
+    var playlistTrack by remember { mutableStateOf<PlayableTrack?>(null) }
+    // Half AOD ("Vibe Awake"): keeps screen awake with Lumn border glow while letting
+    // you manually lock the phone or switch tabs/apps freely, with 1-tap Full AOD.
+    var halfAodActive by rememberSaveable { mutableStateOf(false) }
+    // Full Always-on display overlay (OLED black clock/artwork/live synced lyrics).
+    var aodActive by rememberSaveable { mutableStateOf(false) }
+    // Only line-synced lyrics or Full AOD need the 60 ms playhead.
     val lyricsOpen = expanded &&
         (currentTab == FullPlayerTab.LYRICS || (currentTab == FullPlayerTab.NOW_PLAYING && playerLyrics))
-    DisposableEffect(lyricsOpen) {
-        com.lastwave.app.playback.PlaybackUiDemand.needsHighFrequency = lyricsOpen
+    val needsLivePlayhead = lyricsOpen || aodActive
+    DisposableEffect(needsLivePlayhead) {
+        com.lastwave.app.playback.PlaybackUiDemand.needsHighFrequency = needsLivePlayhead
         onDispose { com.lastwave.app.playback.PlaybackUiDemand.needsHighFrequency = false }
     }
-    var playlistTrack by remember { mutableStateOf<PlayableTrack?>(null) }
-    // Always-on display overlay (full-screen clock/artwork/lyrics).
-    var aodActive by rememberSaveable { mutableStateOf(false) }
     val lyricsState by viewModel.lyricsState.collectAsStateWithLifecycle()
     val undoQueueSwitch by viewModel.undoQueueSwitch.collectAsStateWithLifecycle()
     // Smart-Previous ask: a played user-queued track is waiting on a choice.
@@ -426,15 +429,14 @@ fun PlayerHost(
     }
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val keepLyricsAwake = lyricsOpen && settings.keepLyricsScreenAwake
+    // Single centralized keepScreenOn guard: FLAG_KEEP_SCREEN_ON keeps the phone from
+    // auto-sleeping while STILL allowing manual power-button lock and switching tabs/apps.
+    val keepScreenAwake = halfAodActive || aodActive || keepLyricsAwake
     val currentView = androidx.compose.ui.platform.LocalView.current
-    DisposableEffect(keepLyricsAwake) {
-        if (keepLyricsAwake) {
-            currentView.keepScreenOn = true
-        }
+    DisposableEffect(keepScreenAwake) {
+        currentView.keepScreenOn = keepScreenAwake
         onDispose {
-            if (keepLyricsAwake) {
-                currentView.keepScreenOn = false
-            }
+            currentView.keepScreenOn = false
         }
     }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -533,10 +535,14 @@ fun PlayerHost(
     var isPlayerDragging by remember { mutableStateOf(false) }
     val playerLayerShown by remember { derivedStateOf { playerExpansion.value > 0f } }
     val contentCovered by remember { derivedStateOf { playerExpansion.value >= 1f && !isPlayerDragging } }
+    val isExpandSettled by remember { derivedStateOf { playerExpansion.value >= 0.96f && !isPlayerDragging } }
     val showMiniPlayer by remember { derivedStateOf { playerExpansion.value < 0.45f } }
     val showBottomNav by remember { derivedStateOf { state.current == null || playerExpansion.value < 0.625f } }
     // Mini player rides above the growing card for the first half of the morph.
     val miniOnTop by remember { derivedStateOf { playerExpansion.value > 0f && playerExpansion.value < 0.5f } }
+    // Skip capturing the shell backdrop once the player card is opening so we don't blur
+    // the background feed simultaneously with FullPlayer's own backdrop/shaders.
+    val captureMiniBackdrop by remember { derivedStateOf { miniGlass && playerExpansion.value < 0.25f } }
 
     // Container-transform morph: the full player grows out of the mini player card
     // (PixelMusic-style). Bounds are captured only while the player is at rest so
@@ -601,7 +607,7 @@ fun PlayerHost(
                         }
                     },
             ) {
-                Box(Modifier.fillMaxSize().liquidGlassSource(if (miniGlass) miniBackdrop else null)) {
+                Box(Modifier.fillMaxSize().liquidGlassSource(if (captureMiniBackdrop) miniBackdrop else null)) {
                     // Never expose miniBackdrop inside its own capture subtree — any screen
                     // inside content() that invokes liquidGlassChrome would otherwise trigger
                     // a fatal Kyant drawBackdrop recursive self-capture crash.
@@ -856,7 +862,25 @@ fun PlayerHost(
                                 },
                                 onDragStatusChange = { isPlayerDragging = it },
                                 isOpen = expanded,
-                                onEnterAod = { aodActive = true },
+                                isExpandSettled = isExpandSettled,
+                                halfAodActive = halfAodActive,
+                                onToggleHalfAod = {
+                                    if (halfAodActive) {
+                                        halfAodActive = false
+                                    } else if (settings.aodDefaultFull) {
+                                        aodActive = true
+                                    } else {
+                                        halfAodActive = true
+                                    }
+                                },
+                                onEnterFullAod = { aodActive = true },
+                                onEnterAod = {
+                                    if (settings.aodDefaultFull) {
+                                        aodActive = true
+                                    } else {
+                                        halfAodActive = !halfAodActive
+                                    }
+                                },
                             )
                         }
                     }
@@ -881,28 +905,80 @@ fun PlayerHost(
                 }
             }
             
+            // When Half AOD is active while browsing tabs (player minimized), keep the
+            // Lumn ambient border glow alive around the screen and show a compact pill
+            // to jump into Full AOD or turn Half AOD off.
+            if (halfAodActive && !aodActive && !expanded) {
+                val halfThemePrimary = MaterialTheme.colorScheme.primary
+                val halfThemeSecondary = MaterialTheme.colorScheme.secondary
+                val halfThemeTertiary = MaterialTheme.colorScheme.tertiary
+                val halfGlowMode = if (settings.edgeGlowMode == com.lastwave.app.data.local.EdgeGlowMode.OFF) {
+                    com.lastwave.app.data.local.EdgeGlowMode.ART
+                } else {
+                    settings.edgeGlowMode
+                }
+                val halfStyle = if (settings.edgeGlowStyle == "off") "glow" else settings.edgeGlowStyle
+                AmbientEdgeGlow(
+                    config = EdgeGlowConfig(
+                        enabled = true,
+                        mode = halfGlowMode,
+                        motion = settings.edgeGlowMotion,
+                        style = halfStyle,
+                        edgeMask = settings.edgeGlowEdges,
+                        intensity = settings.edgeGlowIntensity,
+                        thickness = settings.edgeGlowThickness,
+                        color1 = parseHexColor(settings.edgeGlowColor1, halfThemePrimary),
+                        color2 = parseHexColor(settings.edgeGlowColor2, halfThemeSecondary),
+                        color3 = halfThemeTertiary,
+                    ),
+                    isPlaying = playbackState.isPlaying,
+                    modifier = Modifier.fillMaxSize().zIndex(8f),
+                )
+                HalfAodStatusPill(
+                    accentColor = halfThemePrimary,
+                    onEnterFullAod = { aodActive = true },
+                    onTurnOff = { halfAodActive = false },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .zIndex(9f)
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                        .padding(top = 6.dp),
+                )
+            }
+
             if (aodActive) {
                 val aodLyrics = lyricsState
-                val aodGlowFallback = viewModel.player.state.value.current
+                val aodProgress by viewModel.progressState.collectAsStateWithLifecycle()
+                val aodTrack = playbackState.current ?: state.current
+                val aodPrimary = MaterialTheme.colorScheme.primary
+                val aodSecondary = MaterialTheme.colorScheme.secondary
+                val aodTertiary = MaterialTheme.colorScheme.tertiary
                 AlwaysOnDisplayOverlay(
-                    track = aodGlowFallback,
+                    track = aodTrack,
                     isPlaying = playbackState.isPlaying,
                     showLyrics = settings.aodShowLyrics,
                     lines = (aodLyrics as? LyricsUiState.Success)?.lines.orEmpty(),
                     isSynced = (aodLyrics as? LyricsUiState.Success)?.isSynced == true,
                     plainLyrics = (aodLyrics as? LyricsUiState.Success)?.plainLyrics,
-                    positionMs = playbackState.positionMs,
+                    positionMs = aodProgress.positionMs,
                     lyricsOffsetMs = settings.lyricsOffsetMs,
                     glow = EdgeGlowConfig(
                         enabled = true,
                         mode = settings.edgeGlowMode,
                         motion = settings.edgeGlowMotion,
+                        style = settings.aodVisualizerMode,
+                        edgeMask = settings.edgeGlowEdges,
                         intensity = settings.edgeGlowIntensity,
                         thickness = settings.edgeGlowThickness,
-                        color1 = parseHexColor(settings.edgeGlowColor1, MaterialTheme.colorScheme.primary),
-                        color2 = parseHexColor(settings.edgeGlowColor2, MaterialTheme.colorScheme.secondary),
+                        color1 = parseHexColor(settings.edgeGlowColor1, aodPrimary),
+                        color2 = parseHexColor(settings.edgeGlowColor2, aodSecondary),
+                        color3 = aodTertiary,
                     ),
                     onExit = { aodActive = false },
+                    onSwitchToHalfAod = {
+                        aodActive = false
+                        halfAodActive = true
+                    },
                     onPlayPause = viewModel.player::togglePlayPause,
                     onPrevious = viewModel.player::previous,
                     onNext = viewModel.player::next,
@@ -958,6 +1034,10 @@ internal fun ExpandedPlayer(
     onOpenArtist: (String) -> Unit,
     onDragStatusChange: (Boolean) -> Unit = {},
     isOpen: Boolean = true,
+    isExpandSettled: Boolean = true,
+    halfAodActive: Boolean = false,
+    onToggleHalfAod: (() -> Unit)? = null,
+    onEnterFullAod: (() -> Unit)? = null,
     onEnterAod: (() -> Unit)? = null,
 ) {
     val state by viewModel.fullPlayerState.collectAsStateWithLifecycle()
@@ -1029,6 +1109,10 @@ internal fun ExpandedPlayer(
         onToggleYouTubeLike = { currentTrack?.let(viewModel::toggleYouTubeLike) },
         onDragStatusChange = onDragStatusChange,
         isOpen = isOpen,
+        isExpandSettled = isExpandSettled,
+        halfAodActive = halfAodActive,
+        onToggleHalfAod = onToggleHalfAod,
+        onEnterFullAod = onEnterFullAod,
         onSelectLyricsProvider = viewModel::selectLyricsProvider,
         onTryAnotherLyricsSource = viewModel::tryAnotherLyricsSource,
         previewQueues = previewQueues,
@@ -1043,8 +1127,11 @@ internal fun ExpandedPlayer(
         onDismissUndoQueueSwitch = viewModel::dismissQueueSwitchUndo,
         edgeGlow = remember(
             settings.edgeGlowEnabled,
+            halfAodActive,
             settings.edgeGlowMode,
             settings.edgeGlowMotion,
+            settings.edgeGlowStyle,
+            settings.edgeGlowEdges,
             settings.edgeGlowIntensity,
             settings.edgeGlowThickness,
             settings.edgeGlowColor1,
@@ -1052,14 +1139,27 @@ internal fun ExpandedPlayer(
             themePrimary,
             themeSecondary,
         ) {
+            val activeByHalfAod = halfAodActive && settings.edgeGlowStyle != "off"
+            val effectiveMode = if (activeByHalfAod && settings.edgeGlowMode == com.lastwave.app.data.local.EdgeGlowMode.OFF) {
+                com.lastwave.app.data.local.EdgeGlowMode.ART
+            } else {
+                settings.edgeGlowMode
+            }
             EdgeGlowConfig(
-                enabled = settings.edgeGlowEnabled,
-                mode = settings.edgeGlowMode,
+                enabled = settings.edgeGlowEnabled || activeByHalfAod,
+                mode = effectiveMode,
                 motion = settings.edgeGlowMotion,
+                style = if (activeByHalfAod && settings.edgeGlowStyle == "off") "glow" else settings.edgeGlowStyle,
+                edgeMask = settings.edgeGlowEdges,
                 intensity = settings.edgeGlowIntensity,
                 thickness = settings.edgeGlowThickness,
                 color1 = parseHexColor(settings.edgeGlowColor1, themePrimary),
                 color2 = parseHexColor(settings.edgeGlowColor2, themeSecondary),
+                color3 = androidx.compose.ui.graphics.lerp(
+                    parseHexColor(settings.edgeGlowColor1, themePrimary),
+                    parseHexColor(settings.edgeGlowColor2, themeSecondary),
+                    0.5f,
+                ),
             )
         },
         seekbarColorsOverride = remember(
@@ -1132,17 +1232,17 @@ internal fun PlayerArtwork(
 internal fun PlayableTrack.isImportedLocalFile(): Boolean =
     com.lastwave.app.data.generate.LocalAudioFormats.importedPathOrNull(playbackUrl) != null
 
-// -- Player open/close presentation (PixelMusic-style bottom sheet transition) ---
+// -- Player open/close presentation (crisp, zero-stutter spring) ---
 
 internal val PlayerSheetOpenSpec = spring<Float>(
-    dampingRatio = 0.88f,
-    stiffness = 110f,
-    visibilityThreshold = 0.001f,
+    dampingRatio = 0.90f,
+    stiffness = 340f,
+    visibilityThreshold = 0.002f,
 )
 internal val PlayerSheetCloseSpec = spring<Float>(
-    dampingRatio = 0.92f,
-    stiffness = 95f,
-    visibilityThreshold = 0.001f,
+    dampingRatio = 0.94f,
+    stiffness = 320f,
+    visibilityThreshold = 0.002f,
 )
 
 /** Top corner radius of the sliding sheet in collapsed/transit state. */

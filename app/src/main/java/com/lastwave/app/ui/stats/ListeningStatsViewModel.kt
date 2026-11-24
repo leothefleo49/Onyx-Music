@@ -25,12 +25,15 @@ import com.lastwave.app.playback.MediaType
 import com.lastwave.app.playback.MusicPlayer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import com.lastwave.app.data.genre.GenreNormalizer
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -62,6 +65,7 @@ class ListeningStatsViewModel @Inject constructor(
     private var tasteTags: List<String> = emptyList()
     private var downloadedFallbackList: List<DownloadedTrackEntity> = emptyList()
     private var autoGenreBackfillTriggered = false
+    private var recalcJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -140,6 +144,8 @@ class ListeningStatsViewModel @Inject constructor(
     fun syncLastFmNow() = historySyncManager.syncLastFmFullHistory()
     fun syncListenBrainzNow() = historySyncManager.syncListenBrainzFullHistory()
     fun syncYouTubeMusicNow() = historySyncManager.syncYouTubeMusicHistory()
+    fun syncSpotifyRecentNow() = historySyncManager.syncSpotifyRecentHistory()
+    fun deduplicateHistoryNow() = historySyncManager.deduplicateHistory()
     fun importHistoryFromUri(uri: Uri, fileNameHint: String? = null) = historySyncManager.importFromUri(uri, fileNameHint)
     fun cancelHistorySync() = historySyncManager.cancelActiveSync()
     fun dismissSyncBanner() = historySyncManager.clearBanner()
@@ -192,10 +198,11 @@ class ListeningStatsViewModel @Inject constructor(
     }
 
     fun openArtistDetail(artistName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.Default) {
             val clean = artistName.trim()
             if (clean.isBlank()) return@launch
-            val matching = effectiveEvents().filter { it.artist.trim().equals(clean, ignoreCase = true) }
+            val matching = filteredSourcePool(_uiState.value)
+                .filter { it.artist.trim().equals(clean, ignoreCase = true) }
             if (matching.isEmpty()) return@launch
 
             val totalMs = matching.sumOf { effectiveListenMs(it) }
@@ -253,9 +260,9 @@ class ListeningStatsViewModel @Inject constructor(
     }
 
     fun openTrackDetail(title: String, artist: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.Default) {
             val key = normalizeScrobbleTrackKey(artist, title)
-            val matching = effectiveEvents().filter { it.trackKey == key }
+            val matching = filteredSourcePool(_uiState.value).filter { it.trackKey == key }
             if (matching.isEmpty()) return@launch
 
             val totalMs = matching.sumOf { effectiveListenMs(it) }
@@ -327,6 +334,7 @@ class ListeningStatsViewModel @Inject constructor(
         newAlbum: String,
         saveAsAutoRule: Boolean,
         applyRetroactively: Boolean,
+        newGenre: String = event.genre,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             val updated = scrobbleSyncEngine.editScrobbleEvent(
@@ -337,12 +345,21 @@ class ListeningStatsViewModel @Inject constructor(
                 saveAsAutoRule = saveAsAutoRule,
                 applyRetroactively = applyRetroactively,
             )
+            if (newGenre.trim() != event.genre.trim()) {
+                scrobbleSyncEngine.updateFullScrobbleMetadata(
+                    id = event.id,
+                    title = newTitle.trim().ifBlank { event.title },
+                    artist = newArtist.trim().ifBlank { event.artist },
+                    album = newAlbum.trim(),
+                    genre = newGenre.trim(),
+                )
+            }
             _uiState.update {
                 it.copy(
                     statusBanner = if (saveAsAutoRule) {
-                        "Updated $updated scrobble(s) and saved Pano auto-fix rule"
+                        "Updated $updated play(s) and saved auto-fix rule"
                     } else {
-                        "Scrobble updated"
+                        "Play updated"
                     },
                 )
             }
@@ -495,167 +512,191 @@ class ListeningStatsViewModel @Inject constructor(
         }
     }
 
-    private fun recalculate() {
-        val state = _uiState.value
+    private fun filteredSourcePool(state: ListeningStatsUiState): List<ScrobbleEventEntity> {
         val unfilteredPool = effectiveEvents()
-        val musicCount = unfilteredPool.count { ScrobbleMediaCategory.isMusic(it.mediaCategory) }
-        val otherCount = unfilteredPool.size - musicCount
         val fullPool = when (state.selectedMediaTab) {
             MediaCategoryTab.MUSIC -> unfilteredPool.filter { ScrobbleMediaCategory.isMusic(it.mediaCategory) }
             MediaCategoryTab.OTHER -> unfilteredPool.filter { !ScrobbleMediaCategory.isMusic(it.mediaCategory) }
             MediaCategoryTab.ALL -> unfilteredPool
         }
-        val sourceNames = fullPool
-            .map { it.sourceAppName.ifBlank { "Onyx Music" } }
-            .distinct()
-            .sorted()
-        val sourcePool = state.selectedSource?.let { selected ->
+        return state.selectedSource?.let { selected ->
             fullPool.filter { it.sourceAppName.ifBlank { "Onyx Music" } == selected }
         } ?: fullPool
-        val (startMs, endMs) = getWindowBounds(state.selectedRange, state.customRange)
+    }
 
-        val inWindow = if (startMs > 0L || endMs < Long.MAX_VALUE) {
-            sourcePool.filter { it.scrobbledAtMs in startMs..endMs }
-        } else {
-            sourcePool
-        }
+    private fun recalculate() {
+        recalcJob?.cancel()
+        val stateSnapshot = _uiState.value
+        val eventsSnapshot = allEvents
+        recalcJob = viewModelScope.launch(Dispatchers.Default) {
+            val unfilteredPool = effectiveEvents()
+            val musicCount = unfilteredPool.count { ScrobbleMediaCategory.isMusic(it.mediaCategory) }
+            val otherCount = unfilteredPool.size - musicCount
+            val fullPool = when (stateSnapshot.selectedMediaTab) {
+                MediaCategoryTab.MUSIC -> unfilteredPool.filter { ScrobbleMediaCategory.isMusic(it.mediaCategory) }
+                MediaCategoryTab.OTHER -> unfilteredPool.filter { !ScrobbleMediaCategory.isMusic(it.mediaCategory) }
+                MediaCategoryTab.ALL -> unfilteredPool
+            }
+            val sourceNames = fullPool
+                .map { it.sourceAppName.ifBlank { "Onyx Music" } }
+                .distinct()
+                .sorted()
+            val sourcePool = stateSnapshot.selectedSource?.let { selected ->
+                fullPool.filter { it.sourceAppName.ifBlank { "Onyx Music" } == selected }
+            } ?: fullPool
+            val (startMs, endMs) = getWindowBounds(stateSnapshot.selectedRange, stateSnapshot.customRange)
 
-        val totalListeningMs = inWindow.sumOf { effectiveListenMs(it) }
-        val totalPlays = inWindow.size
-        val uniqueTracks = inWindow.map { it.trackKey }.distinct().size
-        val uniqueArtists = inWindow.map { it.artist.trim().lowercase() }.filter { it.isNotBlank() }.distinct().size
-        val uniqueAlbums = inWindow.map { it.album.trim().lowercase() }.filter { it.isNotBlank() }.distinct().size
-        val sources = computeSourceBreakdown(inWindow)
-
-        val streakSummary = ScrobbleRulesEngine.computeStreaks(fullPool.map { it.scrobbledAtMs })
-        val totalListeningLabel = formatHoursMins(totalListeningMs)
-
-        val heroKpis = HeroKpiSummary(
-            totalListeningLabel = totalListeningLabel,
-            totalScrobbles = totalPlays,
-            uniqueTracks = uniqueTracks,
-            uniqueArtists = uniqueArtists,
-            uniqueAlbums = uniqueAlbums,
-            currentStreakDays = streakSummary.currentStreakDays,
-            longestStreakDays = streakSummary.longestStreakDays,
-            activeSourcesCount = sources.size,
-        )
-
-        val (bars, peakName, peakDuration) = computeTimelineBars(
-            events = inWindow,
-            range = state.selectedRange,
-            metric = state.selectedTimelineMetric,
-        )
-        val categoryItems = computeCategoryItems(inWindow, state.selectedCategory)
-        val habits = computeHabits(inWindow, totalListeningMs, totalPlays)
-        val concentration = computeConcentration(inWindow, totalListeningMs)
-        val records = computePersonalRecords(fullPool, streakSummary)
-        val weeklyRhythm = computeWeeklyRhythm(fullPool)
-        val monthComparison = computeMonthComparison(fullPool)
-        val hourlyRhythm = computeHourlyRhythm(inWindow.ifEmpty { fullPool })
-        val matrixHeatmap = computeMatrixHeatmap(inWindow.ifEmpty { fullPool })
-        val activityHeatmap = computeActivityHeatmap(fullPool)
-
-        val avgSessionMins = (habits.avgSessionLabel.filter { it.isDigit() }.toIntOrNull() ?: 15).coerceIn(5, 120)
-        val consistencyScore = (
-            55 +
-                (streakSummary.currentStreakDays * 4).coerceAtMost(24) +
-                (streakSummary.activeDaysLast7 * 3).coerceAtMost(21)
-            ).coerceIn(0, 99)
-        val rating = when {
-            consistencyScore >= 90 -> "Peak Flow"
-            consistencyScore >= 78 -> "Optimal Rhythm"
-            consistencyScore >= 65 -> "Steady Cadence"
-            else -> "Light Rhythm"
-        }
-        val consistency = ConsistencyScoreData(
-            score = if (fullPool.isEmpty()) 0 else consistencyScore,
-            rating = rating,
-            subtitle = if (streakSummary.currentStreakDays > 0) {
-                "${streakSummary.currentStreakDays}-day listening streak active (best ${streakSummary.longestStreakDays}d)"
+            val inWindow = if (startMs > 0L || endMs < Long.MAX_VALUE) {
+                sourcePool.filter { it.scrobbledAtMs in startMs..endMs }
             } else {
-                "Play a track today to start a new streak"
-            },
-            avgSessionMinutes = avgSessionMins,
-            activeDaysThisWeek = streakSummary.activeDaysLast7.coerceIn(0, 7),
-            streakDays = streakSummary.currentStreakDays,
-        )
+                sourcePool
+            }
 
-        val trackCounts = inWindow.groupingBy { it.trackKey }.eachCount()
-        val deepMs = inWindow.filter { (trackCounts[it.trackKey] ?: 1) >= 3 }.sumOf { effectiveListenMs(it) }
-        val discoveryMs = inWindow.filter { (trackCounts[it.trackKey] ?: 1) == 1 }.sumOf { effectiveListenMs(it) }
-        val deepPct = if (totalListeningMs > 0L) ((deepMs.toDouble() / totalListeningMs) * 100).roundToInt().coerceIn(5, 80) else 0
-        val discPct = if (totalListeningMs > 0L) ((discoveryMs.toDouble() / totalListeningMs) * 100).roundToInt().coerceIn(5, 100 - deepPct) else 0
-        val flowPct = if (totalListeningMs > 0L) (100 - deepPct - discPct).coerceAtLeast(0) else 0
+            coroutineContext.ensureActive()
 
-        val stages = ListeningStagesData(
-            deepFocus = ListeningStage(
-                name = "Heavy Rotation",
-                percent = deepPct,
-                durationLabel = formatHoursMins(deepMs),
-                description = "Tracks played 3 or more times in this window",
-            ),
-            flowState = ListeningStage(
-                name = "Steady Rotation",
-                percent = flowPct,
-                durationLabel = formatHoursMins((totalListeningMs - deepMs - discoveryMs).coerceAtLeast(0L)),
-                description = "Tracks revisited across sessions",
-            ),
-            discovery = ListeningStage(
-                name = "Discovery",
-                percent = discPct,
-                durationLabel = formatHoursMins(discoveryMs),
-                description = "First-time plays and one-off listens",
-            ),
-        )
+            val totalListeningMs = inWindow.sumOf { effectiveListenMs(it) }
+            val totalPlays = inWindow.size
+            val uniqueTracks = inWindow.map { it.trackKey }.distinct().size
+            val uniqueArtists = inWindow.map { it.artist.trim().lowercase() }.filter { it.isNotBlank() }.distinct().size
+            val uniqueAlbums = inWindow.map { it.album.trim().lowercase() }.filter { it.isNotBlank() }.distinct().size
+            val sources = computeSourceBreakdown(inWindow)
 
-        val groupedTracks = inWindow.groupBy { it.trackKey }.values
-            .sortedByDescending { list -> list.size * 1_000_000L + list.sumOf { effectiveListenMs(it) } }
-            .take(30)
-        val maxTrackMs = groupedTracks.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
-        val tracksInRange = groupedTracks.mapIndexed { idx, list ->
-            val latest = list.maxByOrNull { it.scrobbledAtMs } ?: list.first()
-            val ms = list.sumOf { effectiveListenMs(it) }
-            RankedTrackItem(
-                rank = idx + 1,
-                title = latest.title.ifBlank { "Unknown Title" },
-                artist = latest.artist.ifBlank { "Unknown Artist" },
-                artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
-                playCount = list.size,
-                durationLabel = formatHoursMins(ms),
-                progress = (ms.toFloat() / maxTrackMs).coerceIn(0.05f, 1f),
-                album = latest.album,
-                sourceSummary = summarizeSources(list),
-            )
-        }
+            val streakSummary = ScrobbleRulesEngine.computeStreaks(sourcePool.map { it.scrobbledAtMs })
+            val totalListeningLabel = formatHoursMins(totalListeningMs)
 
-        _uiState.update {
-            it.copy(
-                isLoading = false,
-                musicScrobbleCount = musicCount,
-                otherScrobbleCount = otherCount,
-                heroKpis = heroKpis,
+            val heroKpis = HeroKpiSummary(
                 totalListeningLabel = totalListeningLabel,
-                totalPlays = totalPlays,
-                sourceBreakdown = sources,
-                availableSources = sourceNames,
-                timelineBars = bars,
-                peakSegmentName = peakName,
-                peakSegmentDuration = peakDuration,
-                categoryItems = categoryItems,
-                habits = habits,
-                concentration = concentration,
-                tracksInRange = tracksInRange,
-                records = records,
-                weeklyRhythm = weeklyRhythm,
-                monthComparison = monthComparison,
-                hourlyRhythm = hourlyRhythm,
-                matrixHeatmap = matrixHeatmap,
-                activityHeatmap = activityHeatmap,
-                consistency = consistency,
-                stages = stages,
-                recentScrobbles = allEvents,
+                totalScrobbles = totalPlays,
+                uniqueTracks = uniqueTracks,
+                uniqueArtists = uniqueArtists,
+                uniqueAlbums = uniqueAlbums,
+                currentStreakDays = streakSummary.currentStreakDays,
+                longestStreakDays = streakSummary.longestStreakDays,
+                activeSourcesCount = sources.size,
             )
+
+            val (bars, peakName, peakDuration) = computeTimelineBars(
+                events = inWindow,
+                range = stateSnapshot.selectedRange,
+                metric = stateSnapshot.selectedTimelineMetric,
+            )
+            val categoryItems = computeCategoryItems(inWindow, stateSnapshot.selectedCategory)
+            val habits = computeHabits(inWindow, totalListeningMs, totalPlays)
+            val concentration = computeConcentration(inWindow, totalListeningMs)
+            val records = computePersonalRecords(sourcePool, streakSummary)
+            val weeklyRhythm = computeWeeklyRhythm(sourcePool)
+            val monthComparison = computeMonthComparison(sourcePool)
+            val hourlyRhythm = computeHourlyRhythm(inWindow.ifEmpty { sourcePool })
+            val matrixHeatmap = computeMatrixHeatmap(inWindow.ifEmpty { sourcePool })
+            val activityHeatmap = computeActivityHeatmap(sourcePool)
+
+            coroutineContext.ensureActive()
+
+            val avgSessionMins = habits.avgSessionMinutes
+            // Honest 0..100 rhythm score based on active days this week (up to 70 pts) + current streak (up to 30 pts)
+            val consistencyScore = if (sourcePool.isEmpty()) {
+                0
+            } else {
+                ((streakSummary.activeDaysLast7.coerceIn(0, 7) * 10) +
+                    (streakSummary.currentStreakDays.coerceAtMost(15) * 2)).coerceIn(0, 100)
+            }
+            val rating = when {
+                consistencyScore >= 85 -> "Peak Flow"
+                consistencyScore >= 65 -> "Steady Rhythm"
+                consistencyScore >= 35 -> "Building Habit"
+                consistencyScore > 0 -> "Light Rhythm"
+                else -> "Just Starting"
+            }
+            val consistency = ConsistencyScoreData(
+                score = consistencyScore,
+                rating = rating,
+                subtitle = if (streakSummary.currentStreakDays > 0) {
+                    "${streakSummary.currentStreakDays}-day listening streak active (best ${streakSummary.longestStreakDays}d)"
+                } else {
+                    "Play a track today to start a new streak"
+                },
+                avgSessionMinutes = avgSessionMins,
+                activeDaysThisWeek = streakSummary.activeDaysLast7.coerceIn(0, 7),
+                streakDays = streakSummary.currentStreakDays,
+            )
+
+            val trackCounts = inWindow.groupingBy { it.trackKey }.eachCount()
+            val deepMs = inWindow.filter { (trackCounts[it.trackKey] ?: 1) >= 3 }.sumOf { effectiveListenMs(it) }
+            val discoveryMs = inWindow.filter { (trackCounts[it.trackKey] ?: 1) == 1 }.sumOf { effectiveListenMs(it) }
+            val steadyMs = (totalListeningMs - deepMs - discoveryMs).coerceAtLeast(0L)
+            val deepPct = if (totalListeningMs > 0L) ((deepMs.toDouble() / totalListeningMs) * 100).roundToInt().coerceIn(0, 100) else 0
+            val discPct = if (totalListeningMs > 0L) ((discoveryMs.toDouble() / totalListeningMs) * 100).roundToInt().coerceIn(0, 100 - deepPct) else 0
+            val flowPct = if (totalListeningMs > 0L) (100 - deepPct - discPct).coerceAtLeast(0) else 0
+
+            val stages = ListeningStagesData(
+                deepFocus = ListeningStage(
+                    name = "Heavy Rotation",
+                    percent = deepPct,
+                    durationLabel = formatHoursMins(deepMs),
+                    description = "Tracks played 3 or more times in this window",
+                ),
+                flowState = ListeningStage(
+                    name = "Steady Rotation",
+                    percent = flowPct,
+                    durationLabel = formatHoursMins(steadyMs),
+                    description = "Tracks revisited across sessions",
+                ),
+                discovery = ListeningStage(
+                    name = "Discovery",
+                    percent = discPct,
+                    durationLabel = formatHoursMins(discoveryMs),
+                    description = "First-time plays and one-off listens",
+                ),
+            )
+
+            val groupedTracks = inWindow.groupBy { it.trackKey }.values
+                .sortedByDescending { list -> list.size * 1_000_000L + list.sumOf { effectiveListenMs(it) } }
+                .take(30)
+            val maxTrackMs = groupedTracks.firstOrNull()?.sumOf { effectiveListenMs(it) }?.coerceAtLeast(1L) ?: 1L
+            val tracksInRange = groupedTracks.mapIndexed { idx, list ->
+                val latest = list.maxByOrNull { it.scrobbledAtMs } ?: list.first()
+                val ms = list.sumOf { effectiveListenMs(it) }
+                RankedTrackItem(
+                    rank = idx + 1,
+                    title = latest.title.ifBlank { "Unknown Title" },
+                    artist = latest.artist.ifBlank { "Unknown Artist" },
+                    artworkUrl = list.firstOrNull { !it.artworkUrl.isNullOrBlank() }?.artworkUrl,
+                    playCount = list.size,
+                    durationLabel = formatHoursMins(ms),
+                    progress = (ms.toFloat() / maxTrackMs).coerceIn(0.05f, 1f),
+                    album = latest.album,
+                    sourceSummary = summarizeSources(list),
+                )
+            }
+
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    musicScrobbleCount = musicCount,
+                    otherScrobbleCount = otherCount,
+                    heroKpis = heroKpis,
+                    totalListeningLabel = totalListeningLabel,
+                    totalPlays = totalPlays,
+                    sourceBreakdown = sources,
+                    availableSources = sourceNames,
+                    timelineBars = bars,
+                    peakSegmentName = peakName,
+                    peakSegmentDuration = peakDuration,
+                    categoryItems = categoryItems,
+                    habits = habits,
+                    concentration = concentration,
+                    tracksInRange = tracksInRange,
+                    records = records,
+                    weeklyRhythm = weeklyRhythm,
+                    monthComparison = monthComparison,
+                    hourlyRhythm = hourlyRhythm,
+                    matrixHeatmap = matrixHeatmap,
+                    activityHeatmap = activityHeatmap,
+                    consistency = consistency,
+                    stages = stages,
+                    recentScrobbles = eventsSnapshot,
+                )
+            }
         }
     }
 
@@ -705,7 +746,13 @@ class ListeningStatsViewModel @Inject constructor(
             return Triple(listOf(TimelineBar(fallbackLabel, 0.08f, "0m", isPeak = false)), "", "0m")
         }
 
-        data class Bucket(val label: String, var totalMs: Long = 0L, var plays: Int = 0, var sessions: Int = 0)
+        data class Bucket(
+            val label: String,
+            var totalMs: Long = 0L,
+            var plays: Int = 0,
+            val timestamps: MutableList<Long> = mutableListOf(),
+            var sessions: Int = 0,
+        )
         val buckets = LinkedHashMap<String, Bucket>()
         val cal = Calendar.getInstance()
 
@@ -722,55 +769,72 @@ class ListeningStatsViewModel @Inject constructor(
                     val b = buckets.getOrPut(label) { Bucket(label) }
                     b.totalMs += effectiveListenMs(ev)
                     b.plays++
+                    b.timestamps += ev.scrobbledAtMs
                 }
             }
             StatsTimeRange.WEEK -> {
+                val keyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
                 val dayFmt = SimpleDateFormat("EEE", Locale.getDefault())
                 val cursor = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -6) }
                 for (i in 0..6) {
+                    val key = keyFmt.format(cursor.time)
                     val label = dayFmt.format(cursor.time)
-                    buckets[label] = Bucket(label)
+                    buckets[key] = Bucket(label)
                     cursor.add(Calendar.DAY_OF_YEAR, 1)
                 }
                 events.forEach { ev ->
                     cal.timeInMillis = ev.scrobbledAtMs
-                    val label = dayFmt.format(cal.time)
-                    val b = buckets.getOrPut(label) { Bucket(label) }
+                    val key = keyFmt.format(cal.time)
+                    val b = buckets[key] ?: return@forEach
                     b.totalMs += effectiveListenMs(ev)
                     b.plays++
+                    b.timestamps += ev.scrobbledAtMs
                 }
             }
             StatsTimeRange.MONTH_TO_DATE, StatsTimeRange.CUSTOM -> {
-                val dayFmt = SimpleDateFormat("MM/dd", Locale.US)
+                val dayKeyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                val monthKeyFmt = SimpleDateFormat("yyyy-MM", Locale.US)
                 val sorted = events.sortedBy { it.scrobbledAtMs }
                 val uniqueDays = sorted.map {
                     cal.timeInMillis = it.scrobbledAtMs
-                    dayFmt.format(cal.time)
+                    dayKeyFmt.format(cal.time)
                 }.distinct()
                 val useMonthly = uniqueDays.size > 45
-                val fmt = if (useMonthly) SimpleDateFormat("MMM yy", Locale.getDefault()) else SimpleDateFormat("dd", Locale.US)
+                val labelFmt = if (useMonthly) {
+                    SimpleDateFormat("MMM yy", Locale.getDefault())
+                } else {
+                    SimpleDateFormat("MMM d", Locale.getDefault())
+                }
                 sorted.forEach { ev ->
                     cal.timeInMillis = ev.scrobbledAtMs
-                    val label = fmt.format(cal.time)
-                    val b = buckets.getOrPut(label) { Bucket(label) }
+                    val key = if (useMonthly) monthKeyFmt.format(cal.time) else dayKeyFmt.format(cal.time)
+                    val label = labelFmt.format(cal.time)
+                    val b = buckets.getOrPut(key) { Bucket(label) }
                     b.totalMs += effectiveListenMs(ev)
                     b.plays++
+                    b.timestamps += ev.scrobbledAtMs
                 }
             }
             StatsTimeRange.YEAR_TO_DATE -> {
+                val monthKeyFmt = SimpleDateFormat("yyyy-MM", Locale.US)
                 val monthFmt = SimpleDateFormat("MMM", Locale.getDefault())
                 val currentMonth = cal.get(Calendar.MONTH)
+                val currentYear = cal.get(Calendar.YEAR)
+                val cursor = Calendar.getInstance().apply {
+                    set(Calendar.YEAR, currentYear)
+                    set(Calendar.DAY_OF_MONTH, 1)
+                }
                 for (m in 0..currentMonth) {
-                    cal.set(Calendar.MONTH, m)
-                    val label = monthFmt.format(cal.time)
-                    buckets[label] = Bucket(label)
+                    cursor.set(Calendar.MONTH, m)
+                    buckets[monthKeyFmt.format(cursor.time)] = Bucket(monthFmt.format(cursor.time))
                 }
                 events.forEach { ev ->
                     cal.timeInMillis = ev.scrobbledAtMs
-                    val label = monthFmt.format(cal.time)
-                    val b = buckets.getOrPut(label) { Bucket(label) }
+                    val key = monthKeyFmt.format(cal.time)
+                    val b = buckets.getOrPut(key) { Bucket(monthFmt.format(cal.time)) }
                     b.totalMs += effectiveListenMs(ev)
                     b.plays++
+                    b.timestamps += ev.scrobbledAtMs
                 }
             }
             StatsTimeRange.ALL_TIME -> {
@@ -780,6 +844,7 @@ class ListeningStatsViewModel @Inject constructor(
                     val b = buckets.getOrPut(label) { Bucket(label) }
                     b.totalMs += effectiveListenMs(ev)
                     b.plays++
+                    b.timestamps += ev.scrobbledAtMs
                 }
             }
         }
@@ -787,7 +852,18 @@ class ListeningStatsViewModel @Inject constructor(
         // Trim excessive buckets to keep bar chart readable
         val rawList = buckets.values.toList()
         val bucketList = if (rawList.size > 14) rawList.takeLast(14) else rawList
-        bucketList.forEach { b -> b.sessions = (b.plays / 4).coerceAtLeast(if (b.plays > 0) 1 else 0) }
+        bucketList.forEach { b ->
+            if (b.timestamps.isEmpty()) {
+                b.sessions = 0
+            } else {
+                val ts = b.timestamps.sorted()
+                var count = 1
+                for (i in 1 until ts.size) {
+                    if (ts[i] - ts[i - 1] > 30 * 60_000L) count++
+                }
+                b.sessions = count
+            }
+        }
 
         fun metricVal(b: Bucket): Float = when (metric) {
             TimelineMetric.LISTENING_TIME -> b.totalMs / 60_000f
@@ -913,24 +989,21 @@ class ListeningStatsViewModel @Inject constructor(
                 if (withGenre.isNotEmpty()) {
                     val buckets = LinkedHashMap<String, MutableList<ScrobbleEventEntity>>()
                     for (ev in withGenre) {
-                        val tags = ev.genre.split(",", ";", "/")
-                            .map { it.trim().lowercase() }
-                            .filter { it.isNotBlank() && it != "music" && it != "seen live" }
-                            .distinct()
-                            .take(2)
+                        val tags = GenreNormalizer.splitAndNormalize(ev.genre, maxTags = 2)
                         for (tag in tags) {
                             buckets.getOrPut(tag) { mutableListOf() }.add(ev)
                         }
                     }
+                    val totalAllTagPlays = buckets.values.sumOf { it.size }.coerceAtLeast(1)
                     val sorted = buckets.entries
                         .sortedByDescending { it.value.size }
                         .take(15)
-                    val totalTagPlays = sorted.sumOf { it.value.size }.coerceAtLeast(1)
+                    val topCount = sorted.firstOrNull()?.value?.size?.coerceAtLeast(1) ?: 1
                     sorted.mapIndexed { idx, (tag, list) ->
                         val ms = list.sumOf { effectiveListenMs(it) }
-                        val share = list.size.toFloat() / totalTagPlays.toFloat()
+                        val share = list.size.toFloat() / totalAllTagPlays.toFloat()
                         val pct = (share * 100f).roundToInt().coerceIn(1, 100)
-                        val display = tag.replaceFirstChar { it.uppercase() }
+                        val display = GenreNormalizer.formatDisplayName(tag)
                         val src = summarizeSources(list)
                         RankedCategoryItem(
                             rank = idx + 1,
@@ -938,8 +1011,9 @@ class ListeningStatsViewModel @Inject constructor(
                             subtitle = "$pct% of music · ${list.size} plays" +
                                 if (src.isNotBlank()) " · $src" else "",
                             durationLabel = formatHoursMins(ms),
-                            progress = share.coerceIn(0.05f, 1f),
+                            progress = (list.size.toFloat() / topCount.toFloat()).coerceIn(0.06f, 1f),
                             playCount = list.size,
+                            artist = tag,
                         )
                     }
                 } else {
@@ -1006,6 +1080,7 @@ class ListeningStatsViewModel @Inject constructor(
             sessionsPerDay = sessionsPerDay,
             mostActiveDay = mostActiveDay,
             peakTimelineSlot = peakSlot,
+            avgSessionMinutes = (avgSessionMs / 60_000L).toInt().coerceAtLeast(0),
         )
     }
 
@@ -1278,14 +1353,16 @@ class ListeningStatsViewModel @Inject constructor(
 
     private fun computeCompactTimeline(events: List<ScrobbleEventEntity>): List<TimelineBar> {
         if (events.isEmpty()) return emptyList()
-        val fmt = SimpleDateFormat("MMM", Locale.getDefault())
+        val keyFmt = SimpleDateFormat("yyyy-MM", Locale.US)
+        val labelFmt = SimpleDateFormat("MMM yy", Locale.getDefault())
         val grouped = events.sortedBy { it.scrobbledAtMs }
-            .groupBy { fmt.format(Date(it.scrobbledAtMs)) }
+            .groupBy { keyFmt.format(Date(it.scrobbledAtMs)) }
             .entries
             .toList()
             .takeLast(8)
         val maxPlays = grouped.maxOfOrNull { it.value.size }?.coerceAtLeast(1) ?: 1
-        return grouped.map { (label, list) ->
+        return grouped.map { (_, list) ->
+            val label = labelFmt.format(Date(list.first().scrobbledAtMs))
             TimelineBar(
                 label = label,
                 value = (list.size.toFloat() / maxPlays).coerceIn(0.08f, 1f),

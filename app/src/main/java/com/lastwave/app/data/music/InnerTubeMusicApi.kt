@@ -813,12 +813,14 @@ class InnerTubeMusicApi @Inject constructor(
         if (!ytAuth.connection.value.isConnected) return@withContext YtMusicTasteSignals()
         kotlinx.coroutines.coroutineScope {
             val recent = async {
+                if (recentLimit <= 0) return@async emptyList()
                 runCatching { parseSongRenderers(browseRoot(YT_HISTORY_BROWSE_ID, authenticated = true)) }
                     .getOrDefault(emptyList())
                     .distinctBy { it.videoId }
                     .take(recentLimit.coerceIn(0, 50))
             }
             val liked = async {
+                if (likedLimit <= 0) return@async emptyList()
                 runCatching {
                     val root = runCatching { browseRoot(YT_LIKED_BROWSE_ID, authenticated = true) }
                         .getOrNull()?.takeIf { parseSongRenderers(it).isNotEmpty() }
@@ -830,6 +832,7 @@ class InnerTubeMusicApi @Inject constructor(
                     .take(likedLimit.coerceIn(0, 50))
             }
             val feed = async {
+                if (feedLimit <= 0) return@async emptyList()
                 runCatching {
                     parseHomeFeedSongs(browseHome(authenticated = true))
                 }
@@ -843,6 +846,89 @@ class InnerTubeMusicApi @Inject constructor(
                 feedTracks = feed.await(),
             )
         }
+    }
+
+    /** A single row from YouTube Music's `FEmusic_history` along with its shelf time-bucket label. */
+    data class YtHistoryEntry(
+        val track: YouTubeMusicTrack,
+        val bucketLabel: String,
+        val indexInBucket: Int,
+    )
+
+    /**
+     * Paginates across ALL available `FEmusic_history` continuation pages (up to [maxPages]),
+     * preserving repeat plays across date shelves ("Today", "Yesterday", "This week",
+     * "October 2026", etc.) so history sync captures deep YT Music history without inventing
+     * shifting timestamps.
+     */
+    suspend fun fetchFullListeningHistory(
+        maxPages: Int = 25,
+        onPageFetched: (page: Int, accumulatedCount: Int) -> Unit = { _, _ -> },
+    ): List<YtHistoryEntry> = withContext(Dispatchers.IO) {
+        if (!ytAuth.connection.value.isConnected) return@withContext emptyList()
+        val results = mutableListOf<YtHistoryEntry>()
+        val bucketCounts = HashMap<String, Int>()
+
+        fun extractFromRoot(root: JsonElement, fallbackBucket: String): String {
+            var lastBucket = fallbackBucket
+            val shelves = mutableListOf<JsonObject>()
+            collectObjects(root, "musicShelfRenderer", shelves)
+            collectObjects(root, "musicShelfContinuation", shelves)
+            if (shelves.isNotEmpty()) {
+                for (shelf in shelves) {
+                    val title = (shelf.obj("title")?.get("runs") as? kotlinx.serialization.json.JsonArray)
+                        ?.mapNotNull { (it as? JsonObject)?.string("text") }
+                        ?.joinToString("")
+                        ?.trim()
+                        .orEmpty()
+                    val bucket = title.ifBlank { lastBucket }
+                    lastBucket = bucket
+                    val songs = parseSongRenderers(shelf)
+                    for (song in songs) {
+                        val idx = bucketCounts[bucket] ?: 0
+                        bucketCounts[bucket] = idx + 1
+                        results += YtHistoryEntry(song, bucket, idx)
+                    }
+                }
+            } else {
+                val songs = parseSongRenderers(root)
+                for (song in songs) {
+                    val idx = bucketCounts[lastBucket] ?: 0
+                    bucketCounts[lastBucket] = idx + 1
+                    results += YtHistoryEntry(song, lastBucket, idx)
+                }
+            }
+            return lastBucket
+        }
+
+        fun nextContinuation(root: JsonElement): String? {
+            val nextConts = mutableListOf<JsonObject>()
+            collectObjects(root, "nextContinuationData", nextConts)
+            val fromNext = nextConts.firstNotNullOfOrNull { it.string("continuation")?.takeIf { t -> t.isNotBlank() } }
+            if (fromNext != null) return fromNext
+            val contCmds = mutableListOf<JsonObject>()
+            collectObjects(root, "continuationCommand", contCmds)
+            return contCmds.firstNotNullOfOrNull { it.string("token")?.takeIf { t -> t.isNotBlank() } }
+        }
+
+        val firstRoot = runCatching { browseRoot(YT_HISTORY_BROWSE_ID, authenticated = true) }.getOrNull()
+            ?: return@withContext emptyList()
+        var currentBucket = extractFromRoot(firstRoot, "Recent")
+        onPageFetched(1, results.size)
+
+        var token = nextContinuation(firstRoot)
+        val seenTokens = hashSetOf<String>()
+        var page = 1
+        while (token != null && page < maxPages && seenTokens.add(token)) {
+            page++
+            val nextRoot = runCatching { browseContinuation(token, authenticated = true) }.getOrNull() ?: break
+            val before = results.size
+            currentBucket = extractFromRoot(nextRoot, currentBucket)
+            onPageFetched(page, results.size)
+            if (results.size == before) break
+            token = nextContinuation(nextRoot)
+        }
+        results
     }
 
     suspend fun fetchNewReleases(): List<YouTubePlaylistSummary> = withContext(Dispatchers.IO) {
@@ -3029,18 +3115,18 @@ class InnerTubeMusicApi @Inject constructor(
         /** Per-client bound for the direct-URL fast path (single POST, no
          *  extras). Relaxed for slow devices: a fast first success still
          *  wins the race, only the worst case waits longer. */
-        const val DIRECT_FAST_CLIENT_TIMEOUT_MS = 4_000L
+        const val DIRECT_FAST_CLIENT_TIMEOUT_MS = 2_000L
         /** Bound for the mandatory visitor-data bootstrap on the fast path.
          *  VISIONOS/ANDROID_VR answer LOGIN_REQUIRED with zero formats when
-         *  visitor data is missing, so a resolve without it burns the whole
-         *  fast-path budget on guaranteed misses. */
-        const val VISITOR_BOOTSTRAP_BUDGET_MS = 3_000L
+         *  visitor data is missing, so keep the inline wait short to avoid
+         *  stalling song start. */
+        const val VISITOR_BOOTSTRAP_BUDGET_MS = 500L
         /** Cooldown before the fast path retries a failed visitor bootstrap. */
         const val VISITOR_BOOTSTRAP_RETRY_COOLDOWN_MS = 60_000L
         /** Bound for a warm PoToken mint on the fast path. The engine is
          *  pre-warmed at startup, so a cache hit lands in milliseconds;
          *  anything slower proceeds without a token. */
-        const val POTOKEN_FAST_BUDGET_MS = 1_000L
+        const val POTOKEN_FAST_BUDGET_MS = 250L
         /** Whole fast path must settle inside this budget before heavier stages run. */
         const val DIRECT_FAST_PATH_BUDGET_MS = 6_000L
         // A signed-in web response may require a cold local JS solver; anonymous clients keep their short budget.

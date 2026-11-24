@@ -1,7 +1,12 @@
 package com.lastwave.app.ui.stats
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import java.util.TimeZone
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -75,10 +80,14 @@ import com.lastwave.app.ui.shell.FloatingNavDefaults
 @Composable
 fun ListeningStatsScreen(
     onBack: () -> Unit,
+    onOpenGenres: () -> Unit = {},
     viewModel: ListeningStatsViewModel = hiltViewModel(),
+    genreExplorer: com.lastwave.app.ui.genres.GenreExplorer = hiltViewModel<com.lastwave.app.ui.home.GenreExplorerBridgeHome>().explorer,
+    artistAlbumNavigator: com.lastwave.app.ui.navigation.ArtistAlbumNavigator = hiltViewModel<com.lastwave.app.ui.home.ArtistAlbumNavBridgeHome>().navigator,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val musicPlayer = LocalMusicPlayer.current
+    val context = LocalContext.current
 
     var showHistorySheet by remember { mutableStateOf(false) }
     var showScrobblerControls by remember { mutableStateOf(false) }
@@ -92,6 +101,11 @@ fun ListeningStatsScreen(
         if (uri != null) {
             viewModel.importHistoryFromUri(uri, uri.lastPathSegment)
         }
+    }
+
+    BackHandler(enabled = showScrobblerControls) {
+        showScrobblerControls = false
+        viewModel.refresh()
     }
 
     if (showScrobblerControls) {
@@ -129,7 +143,7 @@ fun ListeningStatsScreen(
                     }
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        text = stringResource(R.string.stats_hub_title),
+                        text = "Insights",
                         style = MaterialTheme.typography.headlineMedium.copy(fontSize = 22.sp),
                         fontWeight = FontWeight.Black,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -144,10 +158,10 @@ fun ListeningStatsScreen(
                             tint = MaterialTheme.colorScheme.primary,
                         )
                     }
-                    IconButton(onClick = { showHistorySheet = true }) {
+                    IconButton(onClick = { showSyncHubSheet = true }) {
                         Icon(
-                            imageVector = Icons.Filled.History,
-                            contentDescription = stringResource(R.string.stats_open_history_cd),
+                            imageVector = Icons.Filled.CloudSync,
+                            contentDescription = "Sync & Import History",
                             tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }
@@ -157,21 +171,6 @@ fun ListeningStatsScreen(
                             contentDescription = stringResource(R.string.stats_open_scrobbler_cd),
                             tint = MaterialTheme.colorScheme.onSurface,
                         )
-                    }
-                    IconButton(onClick = viewModel::refresh) {
-                        if (uiState.isRefreshing) {
-                            CircularProgressIndicator(
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(20.dp),
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Filled.Refresh,
-                                contentDescription = stringResource(R.string.stats_refresh_cd),
-                                tint = MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
                     }
                 }
             }
@@ -509,6 +508,8 @@ fun ListeningStatsScreen(
                     SourceAppBreakdownCard(
                         title = "Listening by source app",
                         sources = uiState.sourceBreakdown,
+                        selectedSource = uiState.selectedSource,
+                        onSelectSource = viewModel::setSource,
                     )
                 }
             }
@@ -583,10 +584,17 @@ fun ListeningStatsScreen(
                                             CategoryFilter.ARTIST -> ({
                                                 viewModel.openArtistDetail(item.title)
                                             })
-                                            CategoryFilter.ALBUM -> if (item.artist.isNotBlank()) {
-                                                { viewModel.openArtistDetail(item.artist) }
-                                            } else null
-                                            CategoryFilter.GENRE -> null
+                                            CategoryFilter.ALBUM -> ({
+                                                artistAlbumNavigator.openAlbum(
+                                                    title = item.title,
+                                                    artist = item.artist,
+                                                    browseId = "",
+                                                )
+                                            })
+                                            CategoryFilter.GENRE -> ({
+                                                genreExplorer.explore(item.artist.ifBlank { item.title })
+                                                onOpenGenres()
+                                            })
                                         }
                                         RankedCategoryRow(item = item, onClick = clickAction)
                                     }
@@ -788,24 +796,7 @@ fun ListeningStatsScreen(
                 }
             }
 
-            // ── TOP TRACKS IN RANGE (TAPPABLE FOR DEEP DIVE) ──
-            if (uiState.tracksInRange.isNotEmpty()) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = "Most played tracks",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Black,
-                        )
-                        uiState.tracksInRange.forEach { track ->
-                            RankedTrackCard(
-                                track = track,
-                                onClick = { viewModel.openTrackDetail(track.title, track.artist) },
-                            )
-                        }
-                    }
-                }
-            }
+            // Duplicate "Most played tracks" block removed — Top Charts -> Tracks already displays ranked tracks with deep-dive sheets.
         }
     }
 
@@ -815,7 +806,9 @@ fun ListeningStatsScreen(
             onDismiss = { showHistorySheet = false },
             onToggleLove = viewModel::toggleLoveForEvent,
             onDelete = viewModel::deleteScrobble,
-            onEdit = viewModel::editScrobble,
+            onEdit = { ev, title, artist, album, saveRule, retro ->
+                viewModel.editScrobble(ev, title, artist, album, saveRule, retro)
+            },
             onPlayTrack = { ev ->
                 musicPlayer.playQueue(
                     tracks = listOf(
@@ -831,6 +824,9 @@ fun ListeningStatsScreen(
                 )
             },
             onChangeCategory = viewModel::changeScrobbleCategory,
+            onEditGenre = { ev, genre ->
+                viewModel.editScrobble(ev, ev.title, ev.artist, ev.album, false, false, newGenre = genre)
+            },
         )
     }
 
@@ -843,35 +839,33 @@ fun ListeningStatsScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp)
                     .padding(bottom = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "Sync & Import Listening History",
+                    text = "Sync & Import All Past History",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "Pull your full history from connected accounts or drop an export file (.zip, .json, .jsonl, or .csv) from Spotify, YouTube / YT Music Takeout, SoundCloud, stats.fm, Pano Scrobbler, Last.fm, ListenBrainz, or Apple Music.",
+                    text = "Auto-sync your connected Spotify, YouTube Music, Last.fm, or ListenBrainz accounts — or import full lifetime history exports (.zip, .json, .html, .jsonl, .csv) from Spotify Extended History & Google Takeout.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                androidx.compose.material3.Button(
-                    onClick = {
-                        viewModel.syncLastFmNow()
-                        showSyncHubSheet = false
-                    },
-                    enabled = !uiState.syncProgress.isRunning,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Filled.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Sync All Past Last.fm History")
-                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    androidx.compose.material3.FilledTonalButton(
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            viewModel.syncSpotifyRecentNow()
+                            showSyncHubSheet = false
+                        },
+                        enabled = !uiState.syncProgress.isRunning,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Spotify Sync", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    androidx.compose.material3.Button(
                         onClick = {
                             viewModel.syncYouTubeMusicNow()
                             showSyncHubSheet = false
@@ -879,7 +873,22 @@ fun ListeningStatsScreen(
                         enabled = !uiState.syncProgress.isRunning,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("YouTube Music")
+                        Text("YT Music Sync", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    androidx.compose.material3.FilledTonalButton(
+                        onClick = {
+                            viewModel.syncLastFmNow()
+                            showSyncHubSheet = false
+                        },
+                        enabled = !uiState.syncProgress.isRunning,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Last.fm Full", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     androidx.compose.material3.FilledTonalButton(
                         onClick = {
@@ -889,14 +898,14 @@ fun ListeningStatsScreen(
                         enabled = !uiState.syncProgress.isRunning,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("ListenBrainz")
+                        Text("ListenBrainz", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 androidx.compose.material3.FilledTonalButton(
                     onClick = {
                         showSyncHubSheet = false
                         importFileLauncher.launch(
-                            arrayOf("application/zip", "application/json", "text/csv", "text/plain", "*/*"),
+                            arrayOf("application/zip", "application/json", "text/html", "text/csv", "text/plain", "*/*"),
                         )
                     },
                     enabled = !uiState.syncProgress.isRunning,
@@ -904,16 +913,55 @@ fun ListeningStatsScreen(
                 ) {
                     Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Import Export File / ZIP (Spotify, Takeout, SoundCloud, stats.fm, Pano…)")
+                    Text("Import Lifetime Export (Spotify ZIP / Takeout HTML+JSON / CSV)")
                 }
-                TextButton(
-                    onClick = {
-                        showSyncHubSheet = false
-                        showScrobblerControls = true
-                    },
-                    modifier = Modifier.align(Alignment.End),
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Open Scrobbler & App Filter Settings")
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.spotify.com/account/privacy/")))
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Get Spotify Export", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://takeout.google.com/")))
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Get YT Takeout", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = {
+                            viewModel.deduplicateHistoryNow()
+                            showSyncHubSheet = false
+                        },
+                        enabled = !uiState.syncProgress.isRunning,
+                    ) {
+                        Text("Clean Up Duplicates")
+                    }
+                    TextButton(
+                        onClick = {
+                            showSyncHubSheet = false
+                            showScrobblerControls = true
+                        },
+                    ) {
+                        Text("Scrobbler Settings")
+                    }
                 }
             }
         }
@@ -962,8 +1010,11 @@ fun ListeningStatsScreen(
                         val s = pickerState.selectedStartDateMillis
                         val e = pickerState.selectedEndDateMillis ?: s
                         if (s != null && e != null) {
-                            // Extend end date to 23:59:59.999
-                            viewModel.setCustomRange(s, e + 86_399_999L)
+                            // Material3 DateRangePicker returns UTC midnight; adjust into local timezone midnight..23:59:59.999
+                            val tz = TimeZone.getDefault()
+                            val localStart = s - tz.getOffset(s)
+                            val localEnd = e - tz.getOffset(e) + 86_399_999L
+                            viewModel.setCustomRange(localStart, localEnd)
                         }
                         showCustomDatePicker = false
                     },

@@ -34,7 +34,7 @@ import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.offset
 import androidx.compose.ui.util.lerp
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -50,10 +50,10 @@ internal class ScrollCollapseTracker(private val thresholdPx: Float) {
     /**
      * [consumedY] is what the list (and anything nested in it) scrolled, negative towards
      * the list end. [availableY] is what nobody consumed: positive means the list is
-     * already at its top, which always expands.
+     * already at its top, which always expands (ignoring sub-pixel overscroll noise).
      */
     fun onScroll(consumedY: Float, availableY: Float): Boolean {
-        if (availableY > 0f) return reset()
+        if (availableY > 2f) return reset()
         if (consumedY == 0f) return collapsed
         if (travel * consumedY < 0f) travel = 0f
         travel += consumedY
@@ -81,12 +81,26 @@ internal class ChromeCollapseState(thresholdPx: Float) {
     internal val animatable = Animatable(0f)
     internal var collapsed by mutableStateOf(false)
         private set
+    private var lastFlipMs = 0L
 
     val progress: () -> Float = { animatable.value }
 
     val connection = object : NestedScrollConnection {
         override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-            collapsed = tracker.onScroll(consumed.y, available.y)
+            // Only respond to active user drag input — ignore fling tails & overscroll
+            // settle bounces (NestedScrollSource.SideEffect) which caused the docked tab
+            // to rapidly bounce up and down unable to settle.
+            if (source != NestedScrollSource.UserInput) return Offset.Zero
+            val prev = collapsed
+            val next = tracker.onScroll(consumed.y, available.y)
+            if (next != prev) {
+                val now = android.os.SystemClock.uptimeMillis()
+                // Debounce rapid back-and-forth flips unless clearly pulled to top
+                if (now - lastFlipMs >= 260L || (available.y > 12f && !next)) {
+                    collapsed = next
+                    lastFlipMs = now
+                }
+            }
             return Offset.Zero
         }
     }
@@ -109,7 +123,7 @@ private val ChromeCollapseSpec = spring<Float>(
 /** [enabled] is false off the main tabs; the chrome then snaps back to expanded. */
 @Composable
 internal fun rememberChromeCollapseState(enabled: Boolean): ChromeCollapseState {
-    val thresholdPx = with(LocalDensity.current) { 28.dp.toPx() }
+    val thresholdPx = with(LocalDensity.current) { 40.dp.toPx() }
     val state = remember { ChromeCollapseState(thresholdPx) }
     LaunchedEffect(state, enabled) {
         state.expand()
@@ -117,9 +131,8 @@ internal fun rememberChromeCollapseState(enabled: Boolean): ChromeCollapseState 
             state.animatable.snapTo(0f)
             return@LaunchedEffect
         }
-        snapshotFlow { state.collapsed }.collect { collapsed ->
-            // A new animateTo preempts the running one and starts from its velocity.
-            launch { state.animatable.animateTo(if (collapsed) 1f else 0f, ChromeCollapseSpec) }
+        snapshotFlow { state.collapsed }.collectLatest { collapsed ->
+            state.animatable.animateTo(if (collapsed) 1f else 0f, ChromeCollapseSpec)
         }
     }
     return state
@@ -222,5 +235,26 @@ internal fun Modifier.collapseVerticalPadding(expanded: Dp, compact: Dp, progres
         val placeable = measurable.measure(constraints.offset(vertical = -2 * pad))
         layout(placeable.width, constraints.constrainHeight(placeable.height + 2 * pad)) {
             placeable.place(0, pad)
+        }
+    }
+
+/**
+ * Smoothly shrinks a trailing button's horizontal slot to 0px as the MiniPlayer docks
+ * beside the compact nav pill, preventing track titles from getting crushed thin.
+ */
+internal fun Modifier.collapseHorizontalSlot(progress: () -> Float): Modifier =
+    layout { measurable, constraints ->
+        val p = progress().coerceIn(0f, 1f)
+        val factor = (1f - p * 1.4f).coerceIn(0f, 1f)
+        val placeable = measurable.measure(constraints)
+        val width = (placeable.width * factor).roundToInt()
+        layout(width, placeable.height) {
+            if (factor > 0.05f) {
+                placeable.placeWithLayer(0, 0) {
+                    alpha = factor
+                    scaleX = lerp(0.75f, 1f, factor)
+                    scaleY = scaleX
+                }
+            }
         }
     }

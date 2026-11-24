@@ -3,6 +3,7 @@ package com.lastwave.app.data.playlist
 import com.lastwave.app.data.generate.LocalAudioFormats
 import com.lastwave.app.data.generate.youtubeVideoIdOrNull
 import com.lastwave.app.data.localmusic.LocalOfflineRepository
+import com.lastwave.app.data.spotify.SpotifyLikedSongsSync
 import com.lastwave.app.data.ytmusic.YtMusicAuthManager
 import com.lastwave.app.playback.PlayableTrack
 import com.lastwave.app.playback.isLocalTrack
@@ -16,33 +17,39 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 
 /**
- * Coordinates local heart state and optional YouTube Music account likes:
+ * Coordinates local heart state, YouTube Music Liked Songs, and Spotify Liked Songs:
  *
  * - Device-local files (no YouTube id) persist into [LocalOfflineRepository],
  *   isolated from online Liked Songs, Spotify, Last.fm, and YouTube sync.
  * - Online/streaming tracks persist into the local Liked Songs playlist via
- *   [LikedSongsManager].
- * - Both player controls use this same desired state; account sync follows it.
+ *   [LikedSongsManager] and merge with live-synced [SpotifyLikedSongsSync] markers
+ *   so every track liked on YouTube Music OR Spotify appears hearted immediately.
  */
 @Singleton
 class TrackLikeController @Inject constructor(
     private val likedSongsManager: LikedSongsManager,
     private val localOfflineRepository: LocalOfflineRepository,
     private val ytAuth: YtMusicAuthManager,
+    private val spotifyLikedSongsSync: SpotifyLikedSongsSync,
     applicationScope: CoroutineScope,
 ) {
     val youTubeConnection = ytAuth.connection
 
     val likedTrackKeys: StateFlow<Set<String>> = combine(
         likedSongsManager.likedTrackKeys,
+        spotifyLikedSongsSync.likedTrackMarkers,
         localOfflineRepository.likedUrls,
-    ) { onlineKeys, offlineUrls ->
-        if (offlineUrls.isEmpty()) onlineKeys
-        else onlineKeys + offlineUrls.map { "local:$it" }
+    ) { onlineKeys, spotifyKeys, offlineUrls ->
+        val merged = HashSet<String>(onlineKeys.size + spotifyKeys.size + offlineUrls.size)
+        merged.addAll(onlineKeys)
+        merged.addAll(spotifyKeys)
+        for (u in offlineUrls) merged.add("local:$u")
+        merged
     }.stateIn(
         scope = applicationScope,
         started = SharingStarted.Eagerly,
         initialValue = likedSongsManager.likedTrackKeys.value +
+            spotifyLikedSongsSync.likedTrackMarkers.value +
             localOfflineRepository.likedUrls.value.map { "local:$it" },
     )
 
@@ -54,13 +61,17 @@ class TrackLikeController @Inject constructor(
             track.toGeneratedTrack().isLikedIn(likedKeys)
         }
 
-    /** Flips the local heart. Returns the new state; throws when storage could not be updated. */
+    /** Flips the heart across Onyx, YouTube Music, and Spotify. */
     suspend fun toggle(track: PlayableTrack): Boolean {
         val localUrl = deviceLocalUrl(track)
         if (localUrl != null) {
             return localOfflineRepository.toggleLike(localUrl)
         }
-        return likedSongsManager.toggle(track.toGeneratedTrack())
+        val currentlyLiked = isLiked(track)
+        val desired = !currentlyLiked
+        val result = likedSongsManager.setLiked(track.toGeneratedTrack(), desired)
+        spotifyLikedSongsSync.onLocalLikeChanged(track.title, track.artist, result)
+        return result
     }
 
     /** Idempotent local like for artwork double-tap: it never unlikes. */
@@ -70,7 +81,9 @@ class TrackLikeController @Inject constructor(
             localOfflineRepository.setLiked(localUrl, true)
             return true
         }
-        return likedSongsManager.like(track.toGeneratedTrack())
+        val result = likedSongsManager.like(track.toGeneratedTrack())
+        spotifyLikedSongsSync.onLocalLikeChanged(track.title, track.artist, true)
+        return result
     }
 
     /** Idempotent media rating / explicit like command. */
@@ -80,7 +93,9 @@ class TrackLikeController @Inject constructor(
             localOfflineRepository.setLiked(localUrl, liked)
             return liked
         }
-        return likedSongsManager.setLiked(track.toGeneratedTrack(), liked)
+        val result = likedSongsManager.setLiked(track.toGeneratedTrack(), liked)
+        spotifyLikedSongsSync.onLocalLikeChanged(track.title, track.artist, result)
+        return result
     }
 
     fun canUseYouTubeLike(track: PlayableTrack?): Boolean =

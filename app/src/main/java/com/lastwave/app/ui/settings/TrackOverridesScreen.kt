@@ -49,6 +49,14 @@ fun TrackOverridesScreen(
     viewModel: TrackOverridesViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val toast by viewModel.toast.collectAsStateWithLifecycle()
+
+    androidx.compose.runtime.LaunchedEffect(toast) {
+        if (toast != null) {
+            kotlinx.coroutines.delay(2_200L)
+            viewModel.dismissToast()
+        }
+    }
 
     Dialog(
         onDismissRequest = onBack,
@@ -58,6 +66,7 @@ fun TrackOverridesScreen(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
         ) {
+            Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
@@ -118,6 +127,25 @@ fun TrackOverridesScreen(
                     }
                 }
             }
+            toast?.let { msg ->
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                    tonalElevation = 4.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                ) {
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    )
+                }
+            }
+            }
         }
     }
 }
@@ -153,11 +181,11 @@ private fun OverrideCard(
                     Icon(Icons.Filled.Delete, contentDescription = "Remove override", tint = MaterialTheme.colorScheme.error)
                 }
             }
-            OverrideToggle("Video", !override.videoDisabled) {
-                onChange(override.copy(videoDisabled = !it))
+            OverrideToggle("Disable video", override.videoDisabled) {
+                onChange(override.copy(videoDisabled = it))
             }
-            OverrideToggle("Canvas", !override.canvasDisabled) {
-                onChange(override.copy(canvasDisabled = !it))
+            OverrideToggle("Disable Canvas", override.canvasDisabled) {
+                onChange(override.copy(canvasDisabled = it))
             }
             OverrideToggle("Reduce motion", override.animationsDisabled) {
                 onChange(override.copy(animationsDisabled = it))

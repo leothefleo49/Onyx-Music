@@ -209,6 +209,11 @@ class MusicPlayer @Inject constructor(
     val hapticsController: com.lastwave.app.playback.haptics.MusicHapticsController
         get() = musicHapticsController
 
+    internal val primaryCrossoverProcessor =
+        com.lastwave.app.playback.automix.engine.SpectralCrossoverAudioProcessor()
+    internal val secondaryCrossoverProcessor =
+        com.lastwave.app.playback.automix.engine.SpectralCrossoverAudioProcessor()
+
     internal val appContext = context.applicationContext
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
     /**
@@ -306,7 +311,17 @@ class MusicPlayer @Inject constructor(
     @Volatile internal var latestPlaybackSettings = MiscSettings()
     private data class AdaptiveQualityTarget(val network: Network, val profile: Int, val quality: Int)
     @Volatile private var adaptiveTargetQuality: AdaptiveQualityTarget? = null
-    private val adaptiveController = AdaptiveQualityController()
+    private val adaptiveController = AdaptiveQualityController(
+        cooldownMs = 45_000L,
+        pressureHoldMs = 5_000L,
+        lowBufferMs = 4_000L,
+        healthyHoldMs = 30_000L,
+        repeatStallWindowMs = 120_000L,
+    )
+    /** Tracks already downshifted once due to real stall — never ping-pong them back up/down mid-song. */
+    private val qualityDownshiftedMediaIds = ConcurrentHashMap.newKeySet<String>()
+    /** Tracks already upgraded once to a better stream — avoid repeated mid-song codec hops. */
+    private val qualityUpgradedMediaIds = ConcurrentHashMap.newKeySet<String>()
     private data class MeasuredBandwidth(val network: Network?, val kbps: Int, val atMs: Long)
     @Volatile private var measuredBandwidth: MeasuredBandwidth? = null
 
@@ -1906,6 +1921,11 @@ class MusicPlayer @Inject constructor(
                     loudness = LoudnessStage(loudnessPrefs.settings, loudnessAlbumKey),
                 ).also { createdSink ->
                     createdSink.hapticsAnalyzer = musicHapticsController.createAnalyzer().also(hapticTaps::add)
+                    createdSink.djCrossoverProcessor = if (handleAudioFocus) {
+                        primaryCrossoverProcessor
+                    } else {
+                        secondaryCrossoverProcessor
+                    }
                     createdSink.onConfiguredFormat = { rateHz, _, _ ->
                         // The crossfade standby arms early and configures its
                         // sink while the OUTGOING track is still the live one.
@@ -2270,17 +2290,24 @@ class MusicPlayer @Inject constructor(
     init {
         zeroVolumePlaybackObserver.register()
         applicationScope.launch {
+            var lastOutputTier: Int? = null
             outputRouteMonitor.activeOutput.collect { output ->
                 val settings = latestPlaybackSettings
                 if (settings.autoBestAudioOutput) {
                     if (settings.clarityPreset != output.recommendedClarityPreset) {
                         runCatching { settingsPreferences.setClarityPreset(output.recommendedClarityPreset) }
                     }
+                    val tierChanged = lastOutputTier != null && lastOutputTier != output.recommendedQualityTier
+                    lastOutputTier = output.recommendedQualityTier
                     onMain {
-                        resetAdaptiveQuality()
-                        considerAdaptiveNetworkQuality(networkMonitor.activeRoute.value, routeChanged = true)
+                        if (tierChanged && isAdaptive(settings, networkMonitor.activeRoute.value)) {
+                            resetAdaptiveQuality()
+                            considerAdaptiveNetworkQuality(networkMonitor.activeRoute.value, routeChanged = true)
+                        }
                         updateSignalPath()
                     }
+                } else {
+                    lastOutputTier = output.recommendedQualityTier
                 }
             }
         }
@@ -2290,7 +2317,9 @@ class MusicPlayer @Inject constructor(
             }
         }
         val autoMixCoord = autoMixCoordinator.get()
+        autoMixCoord.attachCrossoverProcessors(primaryCrossoverProcessor, secondaryCrossoverProcessor)
         autoMixCoord.onPerformDeckSwap = { outgoing, incoming ->
+            autoMixCoord.swapCrossoverDecks()
             // Carry the exact play order across. Walking only from the
             // incoming song onward produced a partial order that failed the
             // size check, so the new deck kept its own random shuffle and
@@ -6862,11 +6891,22 @@ class MusicPlayer @Inject constructor(
         // A loader resolving a future queue item must never replace the active track's upgrade.
         val canPromote = claimPlayback && _state.value.current?.mediaIdKey() == track.mediaIdKey()
         val preparedProvider = prepared?.takeIf { it.youtubeCandidate == null }
+        if (preparedProvider != null && !preparedProvider.isExpired() &&
+            isStreamAllowedForQuality(preparedProvider, requestedQuality, miscSnapshot)
+        ) {
+            if (claimPlayback) {
+                PlaybackStartupLog.sourceSelected(
+                    "prepared-provider",
+                    "tier=${streamQualityTier(preparedProvider)} codec=${preparedProvider.audioCodec} kbps=${preparedProvider.bitrateKbps} requested=$requestedQuality",
+                )
+            }
+            return@coroutineScope preparedProvider
+        }
         val addonMatched = AddonTrackMatched()
-        val provider = if (wantProvider && (preparedProvider != null || !losslessMusicApi.isCoolingDown)) {
+        val provider = if (wantProvider && !losslessMusicApi.isCoolingDown) {
             val resolveScope = if (canPromote) applicationScope else this
             resolveScope.async(Dispatchers.IO + addonMatched, start = CoroutineStart.LAZY) {
-                preparedProvider ?: try {
+                try {
                     resolveLosslessTrackAudioStream(
                         track = track,
                         misc = miscSnapshot,
@@ -6885,10 +6925,11 @@ class MusicPlayer @Inject constructor(
             }
         } else null
 
-        // "Best quality first" waits for the addon, with YouTube resolving
-        // alongside from 0:00: 5 s, or 8 s if by then the addon has found the
-        // song and is still fetching its stream. An addon that answers
-        // nothing (none enabled, no match) hands over to YouTube at once.
+        // Give best-quality provider a crisp 250ms head-start in Fast Start mode
+        // (up to 450-900ms in Best Quality First). If best quality answers within
+        // that window, play it immediately at 0:00; otherwise start the fastest
+        // playable stream right now and let activeUpgradeDeferred smoothly promote
+        // upward ONCE when best quality finishes resolving.
         val startDirect = miscSnapshot.hiResStart == HiResStart.DIRECT
         val startedAtMs = SystemClock.elapsedRealtime()
         suspend fun awaitProviderUntil(deadlineMs: Long): ResolvedStream? =
@@ -6898,11 +6939,11 @@ class MusicPlayer @Inject constructor(
         } else {
             STARTUP_PROVIDER_PROBE_MS
         }
-        suspend fun awaitProvider(): ResolvedStream? = try {
-            if (!startDirect) {
-                awaitProviderUntil(startedAtMs + STARTUP_PROVIDER_RESOLVE_MS)
-            } else {
-                awaitProviderUntil(startedAtMs + BEST_QUALITY_WAIT_MS)
+        suspend fun awaitProvider(headStartOnly: Boolean = false): ResolvedStream? = try {
+            when {
+                headStartOnly -> awaitProviderUntil(startedAtMs + BEST_QUALITY_HEADSTART_MS)
+                !startDirect -> awaitProviderUntil(startedAtMs + STARTUP_PROVIDER_RESOLVE_MS)
+                else -> awaitProviderUntil(startedAtMs + BEST_QUALITY_WAIT_MS)
                     ?: if (addonMatched.matched) awaitProviderUntil(startedAtMs + BEST_QUALITY_RESOLVING_WAIT_MS) else null
             }
         } catch (error: CancellationException) {
@@ -6946,30 +6987,32 @@ class MusicPlayer @Inject constructor(
         }
         // DASH/DRM cannot be byte-probed; it needs a full player prepare.
         fun isManifest(stream: ResolvedStream) = !stream.mimeType.startsWith("audio/") || stream.segmentedDrm != null
-        suspend fun playableProvider(acceptManifest: Boolean): ResolvedStream? = awaitProvider()?.takeIf {
-            isStreamAllowedForQuality(it, requestedQuality, miscSnapshot) &&
-                (if (isManifest(it)) acceptManifest else (it === preparedProvider && !it.isExpired()) || isProviderReadyForStartup(it, probeTimeoutMs()))
-        }
-        // Whichever source is playable first starts. Waiting on the provider
-        // first cost 5 s per song whenever it answered slowly or with an error;
-        // the upgrade job promotes to the chosen tier once that is playable.
+        suspend fun playableProvider(acceptManifest: Boolean, headStartOnly: Boolean = false): ResolvedStream? =
+            awaitProvider(headStartOnly = headStartOnly)?.takeIf {
+                isStreamAllowedForQuality(it, requestedQuality, miscSnapshot) &&
+                    (if (isManifest(it)) acceptManifest else isProviderReadyForStartup(it, probeTimeoutMs()))
+            }
+        // 1) Try local download or best-quality provider within the crisp head-start
+        //    window (250ms in Fast Start; 450-900ms in Best Quality First).
+        // 2) If not ready by then, immediately race fallback vs provider so audio
+        //    starts with zero artificial delay, and upgrades once seamlessly.
         try {
-            ((if (startDirect) {
-                racePlaybackCandidates(
-                    first = { localDownload() },
-                    second = { playableProvider(acceptManifest = true) },
-                )
-            } else {
-                null
-            }) ?: racePlaybackCandidates(
+            (racePlaybackCandidates(
+                first = { localDownload() },
+                second = {
+                    if (provider != null) {
+                        playableProvider(acceptManifest = true, headStartOnly = !startDirect)
+                    } else null
+                },
+            ) ?: racePlaybackCandidates(
                 first = { fallback.await().getOrNull() },
                 second = {
                     racePlaybackCandidates(
                         first = { localDownload() },
-                        second = { playableProvider(acceptManifest = false) },
+                        second = { playableProvider(acceptManifest = false, headStartOnly = false) },
                     )
                 },
-            ) ?: playableProvider(acceptManifest = true)
+            ) ?: playableProvider(acceptManifest = true, headStartOnly = false)
                 ?: fallback.await().getOrThrow()).also { winner ->
                 if (claimPlayback) {
                     val name = when {
@@ -6996,16 +7039,15 @@ class MusicPlayer @Inject constructor(
         if (misc.autoSourcePriority == com.lastwave.app.data.local.AutoSourcePriority.LOCAL_YT) {
             return LosslessMusicApi.QUALITY_YOUTUBE
         }
-        val baseWifi = if (misc.wifiStreamingQuality == com.lastwave.app.data.local.CELLULAR_QUALITY_AUTO || misc.autoBestAudioOutput) {
+        // Honor explicit user quality picks — ONLY derive Wi-Fi tier from output route
+        // when the user selected Auto, so Auto-Best Output never downgrades or bounces
+        // an explicit Hi-Res / CD Lossless choice down to 320 kbps on phone speakers.
+        val baseWifi = if (misc.wifiStreamingQuality == com.lastwave.app.data.local.CELLULAR_QUALITY_AUTO) {
             outputRouteMonitor.activeOutput.value.recommendedQualityTier
         } else {
             misc.wifiStreamingQuality
         }
-        val baseCellular = if (misc.autoBestAudioOutput && misc.cellularStreamingQuality != com.lastwave.app.data.local.CELLULAR_QUALITY_AUTO) {
-            minOf(misc.cellularStreamingQuality, outputRouteMonitor.activeOutput.value.recommendedQualityTier)
-        } else {
-            misc.cellularStreamingQuality
-        }
+        val baseCellular = misc.cellularStreamingQuality
         return effectiveLosslessQuality(
             misc,
             StreamingQualityPolicy.profileFor(baseWifi, baseCellular, route.isCellular),
@@ -7032,6 +7074,8 @@ class MusicPlayer @Inject constructor(
     private fun resetAdaptiveQuality() {
         adaptiveTargetQuality = null
         adaptiveController.reset()
+        qualityDownshiftedMediaIds.clear()
+        qualityUpgradedMediaIds.clear()
     }
 
     @MainThread
@@ -7111,14 +7155,16 @@ class MusicPlayer @Inject constructor(
         // must not re-run the provider search on every tick or cooldown.
         fun attempted(quality: Int) = activeUpgradeMediaId == item.mediaId && activeUpgradeTargetQuality == quality
         // A lossy stream below the target (started on the fallback, or the
-        // setting or route was raised) is promoted mid-song. Adaptive off, the
-        // target is the profile. A lossless stream is already the provider's
-        // best for this track, so it is left alone.
+        // setting or route was raised) is promoted mid-song ONCE. Never bounce
+        // a track that was already upgraded or already downshifted for stalls.
         if (!attempted(requestedQuality) && !currentStream.isLossless &&
+            item.mediaId !in qualityUpgradedMediaIds &&
+            item.mediaId !in qualityDownshiftedMediaIds &&
             track.mediaIdKey() !in losslessBypassMediaIds &&
             !isSpatialAudioCodec(currentStream.audioCodec) &&
             StreamingQualityPolicy.rank(currentTier) < StreamingQualityPolicy.rank(requestedQuality)
         ) {
+            qualityUpgradedMediaIds += item.mediaId
             requestQuality(requestedQuality)
             return
         }
@@ -7139,7 +7185,20 @@ class MusicPlayer @Inject constructor(
             ),
         )
         if (decision !is AdaptiveQualityController.Decision.Switch) return
-        if (!decision.downshift && (activeUpgradeJob?.isActive == true || attempted(decision.quality))) return
+        // Prevent ping-ponging up and down on the same track: once a track has
+        // stepped down to stop a stall, keep it smooth until the next song.
+        if (!decision.downshift && (
+                item.mediaId in qualityDownshiftedMediaIds ||
+                item.mediaId in qualityUpgradedMediaIds ||
+                activeUpgradeJob?.isActive == true ||
+                attempted(decision.quality)
+            )
+        ) return
+        if (decision.downshift) {
+            qualityDownshiftedMediaIds += item.mediaId
+        } else {
+            qualityUpgradedMediaIds += item.mediaId
+        }
         adaptiveTargetQuality = AdaptiveQualityTarget(network, profile, decision.quality)
         if (decision.downshift) enforceProfileOnUpcoming()
         requestQuality(decision.quality)
@@ -8392,6 +8451,10 @@ class MusicPlayer @Inject constructor(
                     }
 
                     // Update quality pill and signal path quality teller immediately
+                    if (!aboveLimit) {
+                        qualityUpgradedMediaIds += updatedMediaItem.mediaId
+                        qualityUpgradedMediaIds += track.mediaIdKey()
+                    }
                     publishResolvedQuality(swapCandidate, expectedMediaId = track.mediaIdKey())
                     cacheCurrentTrackStream(swapCandidate)
                     applyDacRoutingFor(dacRateFor(swapCandidate), swapCandidate.audioCodec)
@@ -9691,12 +9754,14 @@ class MusicPlayer @Inject constructor(
         /** Signal-path report + stream-health sampling cadence while playing. */
         const val SIGNAL_PATH_TICK_MS = 1_000L
         const val MAX_PLAYBACK_RETRIES = 3
-        const val STARTUP_PROVIDER_RESOLVE_MS = 2_500L
-        const val STARTUP_PROVIDER_PROBE_MS = 1_000L
-        /** "Best quality first": bounded <=2.5s budget before Opus plays immediately. */
-        const val BEST_QUALITY_WAIT_MS = 2_000L
+        /** Fast Start head-start for best-quality lossless before racing instant fallback (0.25s). */
+        const val BEST_QUALITY_HEADSTART_MS = 250L
+        const val STARTUP_PROVIDER_RESOLVE_MS = 1_500L
+        const val STARTUP_PROVIDER_PROBE_MS = 350L
+        /** "Best quality first": crisp bounded wait before fast fallback plays immediately. */
+        const val BEST_QUALITY_WAIT_MS = 450L
         /** ...stretched to this, probe included, if the addon has found the song by then. */
-        const val BEST_QUALITY_RESOLVING_WAIT_MS = 2_500L
+        const val BEST_QUALITY_RESOLVING_WAIT_MS = 900L
         const val STARTUP_PROBE_BYTES = 4 * 1024L
         /** Fallback resolve kept alive after a provider wins, for instant failover. */
         const val STARTUP_FALLBACK_KEEPALIVE_MS = 15_000L

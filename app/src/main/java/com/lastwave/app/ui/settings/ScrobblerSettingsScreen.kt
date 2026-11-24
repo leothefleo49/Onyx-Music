@@ -1,9 +1,11 @@
 package com.lastwave.app.ui.settings
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -120,12 +122,15 @@ data class ScrobblerSettingsUiState(
     val settings: ScrobblerSettings = ScrobblerSettings(),
     val notificationAccessGranted: Boolean = false,
     val serviceConnected: Boolean = false,
+    val activeExternalScrobblers: List<String> = emptyList(),
+    val installedExternalScrobblers: List<String> = emptyList(),
     val lastFmUsername: String = "",
     val hasLastFmSessionKey: Boolean = false,
     val totalLocalScrobbles: Int = 0,
     val pendingSyncCount: Int = 0,
     val rules: List<ScrobbleEditRuleEntity> = emptyList(),
     val externalApps: List<ExternalAppToggleItem> = emptyList(),
+    val installedPickerApps: List<ExternalAppToggleItem> = emptyList(),
     val isBusy: Boolean = false,
     val statusMessage: String? = null,
     val syncProgress: HistorySyncProgress = HistorySyncProgress(),
@@ -184,13 +189,78 @@ class ScrobblerSettingsViewModel @Inject constructor(
 
     fun refreshPermissionStatus() {
         val granted = OnyxNotificationScrobblerService.isNotificationAccessGranted(context)
+        val activeScrobblers = syncEngine.detectActiveExternalScrobblers()
+        val installedScrobblers = syncEngine.detectInstalledExternalScrobblers()
         _uiState.update {
             it.copy(
                 notificationAccessGranted = granted,
                 serviceConnected = OnyxNotificationScrobblerService.isConnectedFlag,
+                activeExternalScrobblers = activeScrobblers,
+                installedExternalScrobblers = installedScrobblers,
             )
         }
     }
+
+    fun loadInstalledAppsForPicker() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val pm = context.packageManager
+            val existing = _uiState.value.externalApps.map { it.packageName }.toSet()
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val resolved = runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.queryIntentActivities(intent, 0)
+                }
+            }.getOrDefault(emptyList())
+            val items = resolved
+                .mapNotNull { info ->
+                    val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
+                    if (pkg == context.packageName || pkg in existing) return@mapNotNull null
+                    val label = runCatching { info.loadLabel(pm).toString() }.getOrNull().orEmpty().ifBlank { pkg }
+                    ExternalAppToggleItem(
+                        packageName = pkg,
+                        appName = label,
+                        isInstalled = true,
+                        isAllowed = false,
+                    )
+                }
+                .distinctBy { it.packageName }
+                .sortedBy { it.appName.lowercase() }
+            _uiState.update { it.copy(installedPickerApps = items) }
+        }
+    }
+
+    fun setPushToLastFm(enabled: Boolean) {
+        viewModelScope.launch { scrobblerPreferences.setPushToLastFm(enabled) }
+    }
+
+    fun setAvoidExternalDuplicates(enabled: Boolean) {
+        viewModelScope.launch { scrobblerPreferences.setAvoidExternalScrobblerDuplicates(enabled) }
+    }
+
+    fun setAutoSyncHistory(enabled: Boolean) {
+        viewModelScope.launch { scrobblerPreferences.setAutoSyncHistoryEnabled(enabled) }
+    }
+
+    fun addBlockedArtist(artist: String) {
+        val clean = artist.trim()
+        if (clean.isBlank()) return
+        viewModelScope.launch {
+            scrobblerPreferences.addBlockedArtist(clean)
+            _uiState.update { it.copy(statusMessage = "Blocked \"$clean\" from tracking") }
+        }
+    }
+
+    fun removeBlockedArtist(artist: String) {
+        viewModelScope.launch {
+            scrobblerPreferences.removeBlockedArtist(artist)
+        }
+    }
+
+    fun syncSpotifyRecentHistoryNow() = historySyncManager.syncSpotifyRecentHistory()
+    fun deduplicateHistoryNow() = historySyncManager.deduplicateHistory()
 
     private fun rebuildAppList(
         settings: ScrobblerSettings,
@@ -439,6 +509,8 @@ fun ScrobblerSettingsScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    BackHandler(onBack = onBack)
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -450,6 +522,8 @@ fun ScrobblerSettingsScreen(
     }
 
     var showAddRuleDialog by remember { mutableStateOf(false) }
+    var showAddAppPicker by remember { mutableStateOf(false) }
+    var blockedArtistInput by remember { mutableStateOf("") }
     var lbTokenInput by remember(uiState.settings.listenBrainzToken) {
         mutableStateOf(uiState.settings.listenBrainzToken)
     }
@@ -615,7 +689,71 @@ fun ScrobblerSettingsScreen(
                 }
             }
 
-            // 2. Core Scrobbler Behavior & Threshold Slider
+            // 2. Last.fm Double-Scrobble Guard & Tracking Controls
+            item {
+                val activeList = uiState.activeExternalScrobblers
+                val installedList = uiState.installedExternalScrobblers
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = if (activeList.isNotEmpty() && uiState.settings.avoidExternalScrobblerDuplicates) {
+                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = "Double-Scrobble Protection",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        val detectorSummary = when {
+                            activeList.isNotEmpty() ->
+                                "Detected active on this phone: ${activeList.joinToString(", ")}. Onyx keeps full local stats and pauses duplicate Last.fm pushes so plays are never counted twice."
+                            installedList.isNotEmpty() ->
+                                "Installed on this phone: ${installedList.joinToString(", ")}. Protection stays ready if you enable them."
+                            else ->
+                                "No external Last.fm scrobbler app detected. Onyx safely manages local tracking and Last.fm sync."
+                        }
+                        Text(
+                            text = detectorSummary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        ToggleSettingRow(
+                            title = "Prevent Last.fm double-scrobbles",
+                            subtitle = "Pause outbound Last.fm pushes for Onyx plays whenever the Last.fm app or another scrobbler is active",
+                            checked = uiState.settings.avoidExternalScrobblerDuplicates,
+                            onCheckedChange = viewModel::setAvoidExternalDuplicates,
+                        )
+                        ToggleSettingRow(
+                            title = "Push plays to Last.fm",
+                            subtitle = "Turn off to track locally in Onyx only (for example, if you let the Last.fm app handle all Last.fm pushes)",
+                            checked = uiState.settings.pushToLastFm,
+                            onCheckedChange = viewModel::setPushToLastFm,
+                        )
+                        ToggleSettingRow(
+                            title = "Auto-sync Spotify & YT Music history",
+                            subtitle = "Periodically pull new plays from connected accounts into your Onyx timeline",
+                            checked = uiState.settings.autoSyncHistoryEnabled,
+                            onCheckedChange = viewModel::setAutoSyncHistory,
+                        )
+                        OutlinedButton(
+                            onClick = viewModel::deduplicateHistoryNow,
+                            enabled = !uiState.syncProgress.isRunning,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Clean Up Duplicate Plays Now")
+                        }
+                    }
+                }
+            }
+
+            // 3. Core Scrobbler Behavior & Threshold Slider
             item {
                 Surface(
                     shape = RoundedCornerShape(24.dp),
@@ -798,16 +936,32 @@ fun ScrobblerSettingsScreen(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text(
-                            text = "External Music Apps",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = "Onyx Music playback is tracked internally. Toggle external players below.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Tracked Media Apps",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "Onyx Music is tracked automatically. Enable other music, podcast, or video apps below.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    viewModel.loadInstalledAppsForPicker()
+                                    showAddAppPicker = true
+                                },
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = "Add installed app")
+                            }
+                        }
                         uiState.externalApps.forEach { app ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -863,7 +1017,7 @@ fun ScrobblerSettingsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Pano Auto-Edit Rules",
+                                    text = "Auto-Edit Tag Rules",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                 )
@@ -1008,20 +1162,24 @@ fun ScrobblerSettingsScreen(
                         }
 
                         // Direct cloud account history pulls
-                        Button(
-                            onClick = viewModel::syncLastFmHistoryNow,
-                            enabled = !sync.isRunning && uiState.lastFmUsername.isNotBlank(),
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            Icon(Icons.Filled.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                if (uiState.lastFmUsername.isNotBlank()) {
-                                    "Sync All Past Last.fm History"
-                                } else {
-                                    "Connect Last.fm to Sync Full History"
-                                },
-                            )
+                            Button(
+                                onClick = viewModel::syncSpotifyRecentHistoryNow,
+                                modifier = Modifier.weight(1f),
+                                enabled = !sync.isRunning,
+                            ) {
+                                Text("Spotify Sync", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Button(
+                                onClick = viewModel::syncYouTubeMusicHistoryNow,
+                                modifier = Modifier.weight(1f),
+                                enabled = !sync.isRunning,
+                            ) {
+                                Text("YT Music Sync", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
 
                         Row(
@@ -1029,11 +1187,11 @@ fun ScrobblerSettingsScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             FilledTonalButton(
-                                onClick = viewModel::syncYouTubeMusicHistoryNow,
+                                onClick = viewModel::syncLastFmHistoryNow,
+                                enabled = !sync.isRunning && uiState.lastFmUsername.isNotBlank(),
                                 modifier = Modifier.weight(1f),
-                                enabled = !sync.isRunning,
                             ) {
-                                Text("YT Music Sync", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("Last.fm Full", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             FilledTonalButton(
                                 onClick = viewModel::syncListenBrainzHistoryNow,
@@ -1051,6 +1209,7 @@ fun ScrobblerSettingsScreen(
                                     arrayOf(
                                         "application/zip",
                                         "application/json",
+                                        "text/html",
                                         "text/csv",
                                         "text/plain",
                                         "*/*",
@@ -1062,7 +1221,33 @@ fun ScrobblerSettingsScreen(
                         ) {
                             Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("Import Spotify / YouTube / SoundCloud / stats.fm / Pano (.zip/.json/.csv)")
+                            Text("Import Lifetime Export (Spotify ZIP / Takeout HTML+JSON / CSV)")
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.spotify.com/account/privacy/")))
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("Spotify Export", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://takeout.google.com/")))
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("YT Takeout", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
 
                         Row(
@@ -1091,7 +1276,124 @@ fun ScrobblerSettingsScreen(
                     }
                 }
             }
+
+            // 7. Blocked Artists (excluded from tracking & scrobbling)
+            item {
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            text = "Ignored Artists",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "Skip tracking specific artists (for example, sleep sounds or white noise).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedTextField(
+                                value = blockedArtistInput,
+                                onValueChange = { blockedArtistInput = it },
+                                label = { Text("Artist name") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                            FilledTonalButton(
+                                onClick = {
+                                    viewModel.addBlockedArtist(blockedArtistInput)
+                                    blockedArtistInput = ""
+                                },
+                                enabled = blockedArtistInput.isNotBlank(),
+                            ) {
+                                Text("Add")
+                            }
+                        }
+                        uiState.settings.blockedArtists.sorted().forEach { artist ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = artist,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                IconButton(onClick = { viewModel.removeBlockedArtist(artist) }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Remove ignored artist")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    if (showAddAppPicker) {
+        var appQuery by remember { mutableStateOf("") }
+        val filteredApps = remember(uiState.installedPickerApps, appQuery) {
+            val q = appQuery.trim().lowercase()
+            if (q.isEmpty()) uiState.installedPickerApps
+            else uiState.installedPickerApps.filter {
+                it.appName.lowercase().contains(q) || it.packageName.lowercase().contains(q)
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { showAddAppPicker = false },
+            title = { Text("Add app to track") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = appQuery,
+                        onValueChange = { appQuery = it },
+                        label = { Text("Search installed apps") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    LazyColumn(modifier = Modifier.height(280.dp)) {
+                        items(filteredApps.size) { index ->
+                            val app = filteredApps[index]
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(app.appName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(app.packageName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        viewModel.setExternalAppAllowed(app, true)
+                                        showAddAppPicker = false
+                                    },
+                                ) {
+                                    Text("Track")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAddAppPicker = false }) { Text("Done") }
+            },
+        )
     }
 
     if (showAddRuleDialog) {

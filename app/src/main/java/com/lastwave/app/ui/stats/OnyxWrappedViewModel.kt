@@ -90,7 +90,10 @@ class OnyxWrappedViewModel @Inject constructor(
                 set(Calendar.DAY_OF_MONTH, 1)
             }.timeInMillis
         }
-        val inYear = events.filter { it.scrobbledAtMs in start until end }
+        val inYear = events.filter {
+            com.lastwave.app.data.scrobble.ScrobbleMediaCategory.isMusic(it.mediaCategory) &&
+                it.scrobbledAtMs in start until end
+        }
         if (inYear.isEmpty()) {
             return OnyxWrappedUiState(year = year, range = range, isLoading = false, hasData = false)
         }

@@ -161,14 +161,14 @@ fun HomeUiState.visibleRows(): List<HomeRow> {
         HomeSortMode.TOP_ALBUMS -> {
             val rows = mutableListOf<HomeRow>()
             topAlbums.forEach { a ->
-                rows += HomeRow.Album(a, badge = null)
+                rows += HomeRow.Album(a, badge = playCountBadge(a.playCount.toInt()))
             }
             rows
         }
         HomeSortMode.TOP_ARTISTS -> {
             val rows = mutableListOf<HomeRow>()
             topArtists.forEach { a ->
-                rows += HomeRow.Artist(a, badge = null)
+                rows += HomeRow.Artist(a, badge = playCountBadge(a.playCount.toInt()))
             }
             rows
         }
@@ -1089,6 +1089,12 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun changeScrobbleCategory(event: com.lastwave.app.data.scrobble.ScrobbleEventEntity, newCategory: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            scrobbleSyncEngine.updateScrobbleCategory(event.id, newCategory)
+        }
+    }
+
     fun editScrobbleEvent(
         event: com.lastwave.app.data.scrobble.ScrobbleEventEntity,
         newTitle: String,
@@ -1096,6 +1102,7 @@ class HomeViewModel @Inject constructor(
         newAlbum: String,
         saveAsAutoRule: Boolean,
         applyRetroactively: Boolean,
+        newGenre: String = event.genre,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             scrobbleSyncEngine.editScrobbleEvent(
@@ -1106,6 +1113,15 @@ class HomeViewModel @Inject constructor(
                 saveAsAutoRule = saveAsAutoRule,
                 applyRetroactively = applyRetroactively,
             )
+            if (newGenre.trim() != event.genre.trim()) {
+                scrobbleSyncEngine.updateFullScrobbleMetadata(
+                    id = event.id,
+                    title = newTitle.trim().ifBlank { event.title },
+                    artist = newArtist.trim().ifBlank { event.artist },
+                    album = newAlbum.trim(),
+                    genre = newGenre.trim(),
+                )
+            }
         }
     }
 }

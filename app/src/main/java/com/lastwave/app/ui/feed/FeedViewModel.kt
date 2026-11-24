@@ -56,6 +56,7 @@ data class FeedUiState(
     val avatarUrl: String? = null,
     val feedData: FeedData = FeedData(),
     val lastCompletedFeed: FeedData? = null,
+    val pendingFreshFeed: FeedData? = null,
     val freshPagedShelfTitles: Set<String> = emptySet(),
     val selectedChip: HomeChip? = null,
     val isChipLoading: Boolean = false,
@@ -260,13 +261,29 @@ class FeedViewModel @Inject constructor(
 
     fun onVisible() {
         if (feedJob?.isActive == true || _uiState.value.isLoading) return
-        // ON_START fires on every return from a pushed screen (artist, album,
-        // playlist...). Reloading the whole feed each time kept the tabs in
-        // a near-constant loading state and hammered the network — only
-        // refresh when there's nothing yet or the data is stale.
+        // Never auto-replace a visible Home feed when returning from another screen or
+        // after a timer — users lose tracks they were about to play or add. Only load
+        // automatically if the Home screen is currently empty.
         val hasContent = _uiState.value.feedData.hasContent
-        val stale = System.currentTimeMillis() - lastLoadedMillis > STALE_AFTER_MILLIS
-        if (!hasContent || stale) refresh()
+        if (!hasContent) loadFeed()
+    }
+
+    fun applyPendingFreshFeed() {
+        val pending = _uiState.value.pendingFreshFeed ?: return
+        _uiState.update {
+            it.copy(
+                feedData = pending,
+                lastCompletedFeed = pending,
+                pendingFreshFeed = null,
+                pagedShelves = emptyList(),
+                freshPagedShelfTitles = emptySet(),
+                defaultContinuationToken = pending.homeContinuationToken,
+            )
+        }
+    }
+
+    fun dismissPendingFreshFeed() {
+        _uiState.update { it.copy(pendingFreshFeed = null) }
     }
 
     fun playInfiniteRadio() {
@@ -293,6 +310,7 @@ class FeedViewModel @Inject constructor(
                     isFeedUpdating = true,
                     isRefreshing = refreshing,
                     isRefreshIndicatorVisible = refreshing,
+                    pendingFreshFeed = if (refreshing) null else it.pendingFreshFeed,
                     error = null,
                     selectedChip = if (refreshing) null else it.selectedChip,
                     isChipLoading = if (refreshing) false else it.isChipLoading,
@@ -311,15 +329,26 @@ class FeedViewModel @Inject constructor(
                     if (ytAuth.connection.value == connection &&
                         sessionPreferences.session.value.username.takeIf(String::isNotBlank) == username
                     ) {
-                        _uiState.update {
-                            val (visible, pages) = retainFeedSections(it.feedData, it.pagedShelves, update)
-                            it.copy(
-                                feedData = visible,
-                                pagedShelves = pages,
-                                defaultContinuationToken = it.continuationAfterUpdate(visible.homeContinuationToken ?: it.defaultContinuationToken),
-                                isLoading = false,
-                                isRefreshIndicatorVisible = false,
-                            )
+                        _uiState.update { current ->
+                            // If this is a background cold-start sync (!refreshing) and the user is
+                            // already looking at cached Home content, do NOT swap out their visible
+                            // items mid-browse — stage the fresh data until they manually update.
+                            if (!refreshing && current.feedData.hasContent) {
+                                current.copy(
+                                    pendingFreshFeed = if (update.hasContent) update else current.pendingFreshFeed,
+                                    isLoading = false,
+                                    isRefreshIndicatorVisible = false,
+                                )
+                            } else {
+                                val (visible, pages) = retainFeedSections(current.feedData, current.pagedShelves, update)
+                                current.copy(
+                                    feedData = visible,
+                                    pagedShelves = pages,
+                                    defaultContinuationToken = current.continuationAfterUpdate(visible.homeContinuationToken ?: current.defaultContinuationToken),
+                                    isLoading = false,
+                                    isRefreshIndicatorVisible = false,
+                                )
+                            }
                         }
                     }
                 }
@@ -327,20 +356,35 @@ class FeedViewModel @Inject constructor(
                 if (ytAuth.connection.value != connection ||
                     sessionPreferences.session.value.username.takeIf(String::isNotBlank) != username
                 ) return@launch
-                _uiState.update {
-                    val (visible, pages) = retainFeedSections(it.feedData, it.pagedShelves, data)
-                    it.copy(
-                        isLoading = false,
-                        isFeedUpdating = false,
-                        isRefreshing = false,
-                        isRefreshIndicatorVisible = false,
-                        feedData = visible,
-                        pagedShelves = pages,
-                        lastCompletedFeed = data,
-                        freshPagedShelfTitles = emptySet(),
-                        defaultContinuationToken = it.continuationAfterUpdate(data.homeContinuationToken),
-                        error = null,
-                    )
+                _uiState.update { current ->
+                    if (!refreshing && current.feedData.hasContent) {
+                        val changed = data.hasContent &&
+                            (data.quickPicks.firstOrNull()?.videoId != current.feedData.quickPicks.firstOrNull()?.videoId ||
+                                data.nativeShelves.firstOrNull()?.title != current.feedData.nativeShelves.firstOrNull()?.title)
+                        current.copy(
+                            isLoading = false,
+                            isFeedUpdating = false,
+                            isRefreshing = false,
+                            isRefreshIndicatorVisible = false,
+                            pendingFreshFeed = if (changed) data else null,
+                            error = null,
+                        )
+                    } else {
+                        val (visible, pages) = retainFeedSections(current.feedData, current.pagedShelves, data)
+                        current.copy(
+                            isLoading = false,
+                            isFeedUpdating = false,
+                            isRefreshing = false,
+                            isRefreshIndicatorVisible = false,
+                            feedData = visible,
+                            pagedShelves = pages,
+                            lastCompletedFeed = data,
+                            pendingFreshFeed = null,
+                            freshPagedShelfTitles = emptySet(),
+                            defaultContinuationToken = current.continuationAfterUpdate(data.homeContinuationToken),
+                            error = null,
+                        )
+                    }
                 }
                 lastLoadedMillis = System.currentTimeMillis()
                 val stats = runCatching { homeRepository.fetchStats().getOrNull() }.getOrNull()

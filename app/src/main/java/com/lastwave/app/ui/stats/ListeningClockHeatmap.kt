@@ -262,7 +262,7 @@ fun ListeningClockCard(
 }
 
 private enum class HeatmapViewMode(val label: String) {
-    WEEK_HOUR_MATRIX("7x24 Matrix"),
+    WEEK_HOUR_MATRIX("Matrix"),
     CALENDAR_12W("12 Weeks"),
 }
 
@@ -281,9 +281,11 @@ fun ListeningActivityHeatmapCard(
     var selectedCalendarDay by remember(calendarDays) { mutableStateOf<HeatmapDay?>(null) }
 
     val primary = MaterialTheme.colorScheme.primary
+    val highlightStroke = MaterialTheme.colorScheme.onSurface
     val emptyCell = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val dayNames = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    val calendarDayNames = listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
     Surface(
         shape = RoundedCornerShape(24.dp),
@@ -302,17 +304,20 @@ fun ListeningActivityHeatmapCard(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
                     )
                     Text(
                         text = if (mode == HeatmapViewMode.WEEK_HOUR_MATRIX) {
-                            "Listening intensity by weekday and hour"
+                            "Listening by weekday & hour"
                         } else {
-                            "Daily activity over the past 12 weeks"
+                            "Daily activity (12 weeks)"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = labelColor,
+                        maxLines = 1,
                     )
                 }
+                Spacer(Modifier.width(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     HeatmapViewMode.entries.forEach { entry ->
                         val active = mode == entry
@@ -334,6 +339,7 @@ fun ListeningActivityHeatmapCard(
                                 } else {
                                     labelColor
                                 },
+                                maxLines = 1,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             )
                         }
@@ -357,7 +363,7 @@ fun ListeningActivityHeatmapCard(
                     ) {
                         dayNames.forEach { d ->
                             Box(
-                                modifier = Modifier.height(14.dp),
+                                modifier = Modifier.height(16.dp),
                                 contentAlignment = Alignment.CenterStart,
                             ) {
                                 Text(
@@ -372,7 +378,7 @@ fun ListeningActivityHeatmapCard(
                     Canvas(
                         modifier = Modifier
                             .weight(1f)
-                            .height(122.dp)
+                            .height(136.dp)
                             .pointerInput(cellLookup) {
                                 detectTapGestures { offset ->
                                     val col = ((offset.x / size.width) * 24f).toInt().coerceIn(0, 23)
@@ -400,12 +406,26 @@ fun ListeningActivityHeatmapCard(
                                     3 -> primary.copy(alpha = 0.80f)
                                     else -> primary
                                 }
+                                val topLeft = Offset(c * (cellW + gapX), r * (cellH + gapY))
+                                val cellSize = Size(cellW, cellH)
                                 drawRoundRect(
                                     color = color,
-                                    topLeft = Offset(c * (cellW + gapX), r * (cellH + gapY)),
-                                    size = Size(cellW, cellH),
+                                    topLeft = topLeft,
+                                    size = cellSize,
                                     cornerRadius = radius,
                                 )
+                                if (selectedMatrixCell != null &&
+                                    selectedMatrixCell?.dayOfWeek == r &&
+                                    selectedMatrixCell?.hour == c
+                                ) {
+                                    drawRoundRect(
+                                        color = highlightStroke,
+                                        topLeft = topLeft,
+                                        size = cellSize,
+                                        cornerRadius = radius,
+                                        style = Stroke(width = 1.8.dp.toPx()),
+                                    )
+                                }
                             }
                         }
                     }
@@ -445,42 +465,79 @@ fun ListeningActivityHeatmapCard(
                 val byWeekDay = remember(calendarDays) {
                     calendarDays.associateBy { it.weekIndex to it.dayOfWeek }
                 }
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(126.dp)
-                        .pointerInput(byWeekDay) {
-                            detectTapGestures { offset ->
-                                val week = ((offset.x / size.width) * 12f).toInt().coerceIn(0, 11)
-                                val dow = ((offset.y / size.height) * 7f).toInt().coerceIn(0, 6)
-                                selectedCalendarDay = byWeekDay[week to dow]
-                            }
-                        },
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
                 ) {
-                    val weeks = 12
-                    val days = 7
-                    val gap = 4.dp.toPx()
-                    val cellW = (size.width - gap * (weeks - 1)) / weeks
-                    val cellH = (size.height - gap * (days - 1)) / days
-                    val radius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
-
-                    for (w in 0 until weeks) {
-                        for (d in 0 until days) {
-                            val day = byWeekDay[w to d]
-                            val intensity = day?.intensity ?: 0
-                            val color = when (intensity) {
-                                0 -> emptyCell
-                                1 -> primary.copy(alpha = 0.30f)
-                                2 -> primary.copy(alpha = 0.55f)
-                                3 -> primary.copy(alpha = 0.80f)
-                                else -> primary
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.width(32.dp),
+                    ) {
+                        calendarDayNames.forEach { d ->
+                            Box(
+                                modifier = Modifier.height(17.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                Text(
+                                    text = d,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = labelColor,
+                                )
                             }
-                            drawRoundRect(
-                                color = color,
-                                topLeft = Offset(w * (cellW + gap), d * (cellH + gap)),
-                                size = Size(cellW, cellH),
-                                cornerRadius = radius,
-                            )
+                        }
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Canvas(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(143.dp)
+                            .pointerInput(byWeekDay) {
+                                detectTapGestures { offset ->
+                                    val week = ((offset.x / size.width) * 12f).toInt().coerceIn(0, 11)
+                                    val dow = ((offset.y / size.height) * 7f).toInt().coerceIn(0, 6)
+                                    selectedCalendarDay = byWeekDay[week to dow]
+                                }
+                            },
+                    ) {
+                        val weeks = 12
+                        val days = 7
+                        val gap = 4.dp.toPx()
+                        val cellW = (size.width - gap * (weeks - 1)) / weeks
+                        val cellH = (size.height - gap * (days - 1)) / days
+                        val radius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+
+                        for (w in 0 until weeks) {
+                            for (d in 0 until days) {
+                                val day = byWeekDay[w to d]
+                                val intensity = day?.intensity ?: 0
+                                val color = when (intensity) {
+                                    0 -> emptyCell
+                                    1 -> primary.copy(alpha = 0.30f)
+                                    2 -> primary.copy(alpha = 0.55f)
+                                    3 -> primary.copy(alpha = 0.80f)
+                                    else -> primary
+                                }
+                                val topLeft = Offset(w * (cellW + gap), d * (cellH + gap))
+                                val cellSize = Size(cellW, cellH)
+                                drawRoundRect(
+                                    color = color,
+                                    topLeft = topLeft,
+                                    size = cellSize,
+                                    cornerRadius = radius,
+                                )
+                                if (selectedCalendarDay != null &&
+                                    selectedCalendarDay?.weekIndex == w &&
+                                    selectedCalendarDay?.dayOfWeek == d
+                                ) {
+                                    drawRoundRect(
+                                        color = highlightStroke,
+                                        topLeft = topLeft,
+                                        size = cellSize,
+                                        cornerRadius = radius,
+                                        style = Stroke(width = 1.8.dp.toPx()),
+                                    )
+                                }
+                            }
                         }
                     }
                 }

@@ -172,6 +172,13 @@ class NativeProcessingAudioSink(
     private var spatialRoutedSource: ByteBuffer? = null
     private var spatialRouted: ByteBuffer? = null
 
+    /** Live AutoMix / Manual DJ 3-band crossover & filter sweep DSP attached per deck. */
+    var djCrossoverProcessor: com.lastwave.app.playback.automix.engine.SpectralCrossoverAudioProcessor? = null
+    private var djCopySource: ByteBuffer? = null
+    private var djCopy: ByteBuffer? = null
+    private var djRoutedSource: ByteBuffer? = null
+    private var djRouted: ByteBuffer? = null
+
     /**
      * Music-haptics analyser. Fed here, before any routing, because this is the
      * one place every decoded buffer passes through with its presentation time
@@ -684,11 +691,12 @@ class NativeProcessingAudioSink(
                 buffer
             }
         }
-        // Spatial stage last, so it hears the EQ'd signal. It rewrites float
-        // stereo samples in place and passes everything else straight through.
+        // Spatial stage, then live AutoMix / Manual DJ 3-band EQ & filter sweep DSP.
         val spatialized = maybeApplySpatial(routed)
-        val consumed = handleRoutedBuffer(spatialized, presentationTimeUs, encodedAccessUnitCount)
+        val djProcessed = maybeApplyDjCrossover(spatialized)
+        val consumed = handleRoutedBuffer(djProcessed, presentationTimeUs, encodedAccessUnitCount)
         // Each copy holds source[position, limit): mirror how far it got.
+        if (djProcessed !== spatialized) spatialized.position(spatialized.limit() - djProcessed.remaining())
         if (spatialized !== routed) routed.position(routed.limit() - spatialized.remaining())
         if (routed !== buffer) buffer.position(buffer.limit() - routed.remaining())
         // Decoder buffers are recycled objects: once consumed, the next
@@ -699,10 +707,46 @@ class NativeProcessingAudioSink(
             spatialCopySource = null
             spatialRoutedSource = null
             spatialRouted = null
+            djCopySource = null
+            djRoutedSource = null
+            djRouted = null
             hapticsBuffer = null
             skipCheckedBuffer = null
         }
         return consumed
+    }
+
+    private fun maybeApplyDjCrossover(source: ByteBuffer): ByteBuffer {
+        if (bitPerfectRequested || usbExclusive) return source
+        val dj = djCrossoverProcessor ?: return source
+        if (!dj.isAudiblyEngaged()) return source
+        val format = configuredFormat ?: return source
+        val isFloat = format.pcmEncoding == C.ENCODING_PCM_FLOAT
+        val isPcm16 = format.pcmEncoding == C.ENCODING_PCM_16BIT
+        if (format.sampleMimeType != MimeTypes.AUDIO_RAW ||
+            (!isFloat && !isPcm16) ||
+            format.channelCount != 2
+        ) {
+            return source
+        }
+        if (djRoutedSource === source && djRouted != null) return djRouted!!
+        val target = if (source.isReadOnly) {
+            val needed = source.remaining()
+            val copy = djCopy?.takeIf { it.capacity() >= needed }
+                ?: ByteBuffer.allocateDirect(needed).also { djCopy = it }
+            copy.clear()
+            copy.order(source.order())
+            copy.put(source.duplicate())
+            copy.flip()
+            djCopySource = source
+            copy
+        } else {
+            source
+        }
+        dj.processPcmBufferInPlace(target, format.sampleRate, format.channelCount, format.pcmEncoding)
+        djRoutedSource = source
+        djRouted = target
+        return target
     }
 
     /**

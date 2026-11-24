@@ -34,6 +34,13 @@ interface HapticPulseListener {
      * The beat-synced background follows this.
      */
     fun onBassLevel(level: Float, leadTimeMs: Long) {}
+
+    /**
+     * Every 10 ms window: 8 logarithmic frequency bands (65 Hz .. 8.8 kHz), each
+     * auto-gain normalised to 0..1, timed to when the audio becomes audible.
+     * Drives the Lumn ambient edge glow, smooth edge curves, and edge EQ bars.
+     */
+    fun onSpectrumBands(bands: FloatArray, leadTimeMs: Long) {}
 }
 
 /**
@@ -80,6 +87,21 @@ class MusicHapticsAnalyzer(
     private var bassPeak = 0.05f
     private var vocalPeak = 0.05f
 
+    // 8-band real-time logarithmic bandpass bank (65 Hz .. 8.8 kHz) for Lumn edge visualizers.
+    private val bandB0 = FloatArray(SPECTRUM_BANDS)
+    private val bandB2 = FloatArray(SPECTRUM_BANDS)
+    private val bandA1 = FloatArray(SPECTRUM_BANDS)
+    private val bandA2 = FloatArray(SPECTRUM_BANDS)
+    private val bandX1 = FloatArray(SPECTRUM_BANDS)
+    private val bandX2 = FloatArray(SPECTRUM_BANDS)
+    private val bandY1 = FloatArray(SPECTRUM_BANDS)
+    private val bandY2 = FloatArray(SPECTRUM_BANDS)
+    private val bandAccum = FloatArray(SPECTRUM_BANDS)
+    private val bandEnv = FloatArray(SPECTRUM_BANDS)
+    private val bandPeak = FloatArray(SPECTRUM_BANDS) { 0.04f }
+    private val bandOut = FloatArray(SPECTRUM_BANDS)
+    private var bandMaxActive = SPECTRUM_BANDS
+
     private var analysisWindowFrames = 480
     private var windowCount = 0
     private var windowBassAccum = 0f
@@ -119,6 +141,13 @@ class MusicHapticsAnalyzer(
             val bpY = bpB0 * mono + bpB1 * bpX1 + bpB2 * bpX2 - bpA1 * bpY1 - bpA2 * bpY2
             bpX2 = bpX1; bpX1 = mono; bpY2 = bpY1; bpY1 = bpY
 
+            for (b in 0 until bandMaxActive) {
+                val y = bandB0[b] * mono + bandB2[b] * bandX2[b] - bandA1[b] * bandY1[b] - bandA2[b] * bandY2[b]
+                bandX2[b] = bandX1[b]; bandX1[b] = mono
+                bandY2[b] = bandY1[b]; bandY1[b] = y
+                bandAccum[b] += y * y
+            }
+
             windowBassAccum += lpY * lpY
             windowVocalAccum += bpY * bpY
             windowCount += DECIMATION
@@ -131,6 +160,15 @@ class MusicHapticsAnalyzer(
                 val vocalRms = sqrt(windowVocalAccum / samples)
                 windowBassAccum = 0f
                 windowVocalAccum = 0f
+                for (b in 0 until SPECTRUM_BANDS) {
+                    val rms = if (b < bandMaxActive) sqrt(bandAccum[b] / samples) else 0f
+                    bandAccum[b] = 0f
+                    val prev = bandEnv[b]
+                    val next = if (rms > prev) prev * 0.38f + rms * 0.62f else prev * 0.80f + rms * 0.20f
+                    bandEnv[b] = next
+                    bandPeak[b] = max(next, bandPeak[b] * BAND_PEAK_DECAY).coerceAtLeast(MIN_PEAK)
+                    bandOut[b] = if (next > 0.0025f) (next / bandPeak[b]).coerceIn(0f, 1f) else 0f
+                }
                 windowCount = 0
                 evaluate(bassRms, vocalRms) {
                     leadTimeMs(presentationTimeUs, frameIndex, positionUs, playbackSpeed)
@@ -239,7 +277,10 @@ class MusicHapticsAnalyzer(
         val bassRatio = fastBassEnv / max(slowBassEnv, 0.004f)
         // The bass level itself, not its rise above the average: that rise fell back
         // within ~100 ms, so hits barely moved the background next to Lyra.
-        lead()?.let { pulseListener.onBassLevel(if (fastBassEnv > 0.006f) normBass else 0f, it) }
+        lead()?.let { leadMs ->
+            pulseListener.onBassLevel(if (fastBassEnv > 0.006f) normBass else 0f, leadMs)
+            pulseListener.onSpectrumBands(bandOut.copyOf(), leadMs)
+        }
         val vocalRatio = fastVocalEnv / max(slowVocalEnv, 0.004f)
 
         // Relative (gain-independent) onset tests plus a small absolute floor
@@ -284,11 +325,30 @@ class MusicHapticsAnalyzer(
         bpB2 = -alphaBp / a0Bp
         bpA1 = (-2f * cosBp) / a0Bp
         bpA2 = (1f - alphaBp) / a0Bp
+
+        val nyquistLimit = rate * 0.44f
+        var active = 0
+        for (b in 0 until SPECTRUM_BANDS) {
+            val fc = BAND_CENTERS_HZ[b]
+            if (fc >= nyquistLimit) break
+            active = b + 1
+            val w0 = (2.0 * PI * fc / rate).toFloat()
+            val cosW = cos(w0)
+            val alpha = sin(w0) / (2f * BAND_Q[b])
+            val a0 = 1f + alpha
+            bandB0[b] = alpha / a0
+            bandB2[b] = -alpha / a0
+            bandA1[b] = (-2f * cosW) / a0
+            bandA2[b] = (1f - alpha) / a0
+        }
+        bandMaxActive = active.coerceAtLeast(1)
     }
 
     private fun resetState() {
         lpX1 = 0f; lpX2 = 0f; lpY1 = 0f; lpY2 = 0f
         bpX1 = 0f; bpX2 = 0f; bpY1 = 0f; bpY2 = 0f
+        bandX1.fill(0f); bandX2.fill(0f); bandY1.fill(0f); bandY2.fill(0f)
+        bandAccum.fill(0f); bandEnv.fill(0f); bandOut.fill(0f)
         fastBassEnv = 0f; slowBassEnv = 0.01f
         fastVocalEnv = 0f; slowVocalEnv = 0.01f
         windowBassAccum = 0f; windowVocalAccum = 0f; windowCount = 0
@@ -298,6 +358,10 @@ class MusicHapticsAnalyzer(
 
     private companion object {
         const val DECIMATION = 2
+        const val SPECTRUM_BANDS = 8
+        val BAND_CENTERS_HZ = floatArrayOf(65f, 140f, 290f, 620f, 1250f, 2500f, 4900f, 8800f)
+        val BAND_Q = floatArrayOf(1.2f, 1.4f, 1.5f, 1.6f, 1.6f, 1.7f, 1.8f, 1.8f)
+        const val BAND_PEAK_DECAY = 0.9975f
         // Tablets buffer ~2.7 s of PCM ahead of the speaker; 1.5 s dropped every pulse.
         const val MAX_LEAD_MS = 5_000L
         /** A pulse this late still lands within the motor's own spin-up time. */

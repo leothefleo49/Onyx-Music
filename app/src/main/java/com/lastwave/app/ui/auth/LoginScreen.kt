@@ -106,14 +106,10 @@ fun LoginScreen(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Box(Modifier.padding(bottom = 12.dp), contentAlignment = Alignment.Center) {
-                    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                        Icon(
-                            imageVector = Icons.Filled.MusicNote,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(16.dp).size(32.dp),
-                        )
-                    }
+                    com.lastwave.app.ui.common.OnyxBrandLogo(
+                        size = 64.dp,
+                        shape = RoundedCornerShape(22.dp),
+                    )
                 }
                 Text(stringResource(R.string.set_about_title), style = MaterialTheme.typography.headlineMedium)
                 Text(

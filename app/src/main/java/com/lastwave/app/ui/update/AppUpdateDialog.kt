@@ -104,9 +104,9 @@ private fun AppUpdateDialog(
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    com.lastwave.app.ui.common.OnyxBrandLogo(size = 42.dp, shape = RoundedCornerShape(12.dp))
                     Spacer(Modifier.width(12.dp))
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text("Update arrived", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(
                             buildString {

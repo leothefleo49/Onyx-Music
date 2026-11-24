@@ -986,7 +986,10 @@ fun PlaylistDetailScreen(
                         enter = fadeIn() + scaleIn(initialScale = 0.9f),
                         exit = fadeOut() + scaleOut(targetScale = 0.9f),
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             Box(modifier = Modifier.size(32.dp)) {
                                 PlaylistCover(
                                     playlist = playlist,
@@ -994,15 +997,14 @@ fun PlaylistDetailScreen(
                                     cornerRadius = 8.dp,
                                 )
                             }
-                            Spacer(Modifier.width(10.dp))
-                            // Removed LocationOn icon
-                            Spacer(Modifier.width(6.dp))
+                            Spacer(Modifier.width(8.dp))
                             Text(
                                 text = playlist.title,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
                             )
                         }
                     }

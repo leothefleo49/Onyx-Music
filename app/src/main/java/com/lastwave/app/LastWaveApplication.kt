@@ -40,7 +40,9 @@ class LastWaveApplication : Application(), ImageLoaderFactory {
     @Inject lateinit var innerTubeMusicApi: dagger.Lazy<com.lastwave.app.data.music.InnerTubeMusicApi>
     @Inject lateinit var ytMusicSyncManager: dagger.Lazy<com.lastwave.app.data.ytmusic.YtMusicSyncManager>
     @Inject lateinit var ytMusicHistorySyncManager: dagger.Lazy<com.lastwave.app.data.ytmusic.YtMusicHistorySyncManager>
+    @Inject lateinit var universalHistorySyncManager: dagger.Lazy<com.lastwave.app.data.scrobble.UniversalHistorySyncManager>
     @Inject lateinit var likedSongsManager: dagger.Lazy<com.lastwave.app.data.playlist.LikedSongsManager>
+    @Inject lateinit var spotifyLikedSongsSync: dagger.Lazy<com.lastwave.app.data.spotify.SpotifyLikedSongsSync>
     @Inject lateinit var trackDownloadManager: dagger.Lazy<com.lastwave.app.data.download.TrackDownloadManager>
     @Inject lateinit var discordPresenceManager: dagger.Lazy<com.lastwave.app.presence.DiscordPresenceManager>
     @Inject lateinit var appLocaleManager: dagger.Lazy<com.lastwave.app.util.AppLocaleManager>
@@ -117,6 +119,8 @@ class LastWaveApplication : Application(), ImageLoaderFactory {
             }
             runCatching { likedSongsManager.get().start() }
                 .onFailure { com.lastwave.app.diagnostics.AppLog.e("LastWaveStartup", "Liked Songs startup disabled", it) }
+            runCatching { spotifyLikedSongsSync.get().start() }
+                .onFailure { com.lastwave.app.diagnostics.AppLog.e("LastWaveStartup", "Spotify live sync startup disabled", it) }
         }
         // YouTube Music playlist sync heartbeat (no-ops until an account is
         // connected AND sync is enabled in Settings).
@@ -132,6 +136,8 @@ class LastWaveApplication : Application(), ImageLoaderFactory {
             delay(OPTIONAL_STARTUP_DELAY_MS)
             runCatching { ytMusicHistorySyncManager.get().start() }
                 .onFailure { com.lastwave.app.diagnostics.AppLog.e("LastWaveStartup", "YT history sync startup disabled", it) }
+            runCatching { universalHistorySyncManager.get().startAutoSync() }
+                .onFailure { com.lastwave.app.diagnostics.AppLog.e("LastWaveStartup", "Universal history auto-sync disabled", it) }
         }
         // Reconcile public download directory & MediaStore with local database
         // asynchronously on startup so offline playback works immediately.

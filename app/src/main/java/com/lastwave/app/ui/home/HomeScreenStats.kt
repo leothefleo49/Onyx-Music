@@ -331,106 +331,105 @@ internal fun StatsCard(
     modifier: Modifier = Modifier,
     headlineLabel: String = "Scrobbles",
     topGenres: List<String> = emptyList(),
+    onSelectGenre: (String) -> Unit = { onOpenGenres() },
 ) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { visible = true }
-
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(animationSpec = tween(400)) + expandVertically(animationSpec = tween(400)),
-        modifier = modifier,
+    Surface(
+        shape = ExpressiveHeroShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp,
+        modifier = modifier.fillMaxWidth(),
     ) {
-        Surface(
-            shape = ExpressiveHeroShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 2.dp,
-            shadowElevation = 4.dp,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
-                Surface(
-                    shape = HeroInnerShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.fillMaxWidth(),
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Surface(
+                shape = HeroInnerShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                    Column(
+                        horizontalAlignment = Alignment.Start,
+                        modifier = Modifier.weight(1f),
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.Start,
-                            modifier = Modifier.weight(1f),
+                        Text(
+                            formatCount(rememberAnimatedCount(scrobbles)),
+                            style = MaterialTheme.typography.displaySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            headlineLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                            maxLines = 1,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Surface(
+                        onClick = onOpenGenres,
+                        shape = ExpressivePillShape,
+                        color = MaterialTheme.colorScheme.primary,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Text(
-                                formatCount(rememberAnimatedCount(scrobbles)),
-                                style = MaterialTheme.typography.displaySmall,
+                                text = "Genres",
+                                style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                maxLines = 1,
                             )
-                            Text(
-                                headlineLabel,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = stringResource(R.string.home_view_genres_cd),
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(16.dp),
                             )
-                        }
-                        Surface(
-                            onClick = onOpenGenres,
-                            shape = ExpressivePillShape,
-                            color = MaterialTheme.colorScheme.primary,
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Text(
-                                    text = "Genres",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                )
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowForward,
-                                    contentDescription = stringResource(R.string.home_view_genres_cd),
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            }
                         }
                     }
                 }
+            }
 
-                Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatPill("Tracks", trackCount, Modifier.weight(1f))
-                    StatPill("Artists", artistCount, Modifier.weight(1f))
-                    StatPill("Albums", albumCount, Modifier.weight(1f))
-                }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatPill("Tracks", trackCount, Modifier.weight(1f))
+                StatPill("Artists", artistCount, Modifier.weight(1f))
+                StatPill("Albums", albumCount, Modifier.weight(1f))
+            }
 
-                if (topGenres.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        items(topGenres.take(4)) { tag ->
-                            Surface(
-                                onClick = onOpenGenres,
-                                shape = RoundedCornerShape(50),
-                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
-                            ) {
-                                Text(
-                                    text = tag.replaceFirstChar { it.uppercase() },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                )
-                            }
+            if (topGenres.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    items(topGenres.take(6)) { tag ->
+                        val display = com.lastwave.app.data.genre.GenreNormalizer.formatDisplayName(tag)
+                            .ifBlank { tag.replaceFirstChar { it.uppercase() } }
+                        Surface(
+                            onClick = { onSelectGenre(tag) },
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        ) {
+                            Text(
+                                text = display,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                            )
                         }
                     }
                 }
@@ -441,14 +440,11 @@ internal fun StatsCard(
 
 @Composable
 private fun rememberAnimatedCount(target: Long): Long {
-    val animated = remember { Animatable(0f) }
+    val animated = remember { Animatable(target.toFloat()) }
     LaunchedEffect(target) {
         animated.animateTo(
             targetValue = target.toFloat(),
-            animationSpec = spring(
-                dampingRatio = Spring.DampingRatioMediumBouncy,
-                stiffness = Spring.StiffnessVeryLow,
-            ),
+            animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing),
         )
     }
     return animated.value.toLong()
@@ -459,19 +455,25 @@ internal fun StatPill(label: String, value: Long, modifier: Modifier = Modifier)
     Surface(
         modifier = modifier,
         shape = StatPillShape,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
     ) {
-        Column(Modifier.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            Modifier.padding(horizontal = 6.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(
                 formatCount(rememberAnimatedCount(value)),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 label,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
             )
         }
     }

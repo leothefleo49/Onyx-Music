@@ -199,7 +199,7 @@ fun SearchScreen(
                     .windowInsetsPadding(
                         WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
                     )
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = 10.dp)
                     .padding(top = 6.dp, bottom = 10.dp),
             ) {
                 // Top Search Input Row
@@ -208,7 +208,7 @@ fun SearchScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     HeaderActionIcon(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack)
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(6.dp))
 
                     val pillBg = MaterialTheme.colorScheme.surfaceContainerHighest
 
@@ -246,7 +246,7 @@ fun SearchScreen(
                                     .fillMaxSize()
                                     .clip(CircleShape)
                                     .background(pillBg)
-                                    .padding(horizontal = 14.dp),
+                                    .padding(horizontal = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Icon(
@@ -258,13 +258,13 @@ fun SearchScreen(
                                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.70f)
                                     },
                                     modifier = Modifier
-                                        .size(20.dp)
+                                        .size(19.dp)
                                         .clickable(enabled = state.query.isNotBlank()) {
                                             focusManager.clearFocus()
                                             viewModel.searchNow()
                                         },
                                 )
-                                Spacer(Modifier.width(10.dp))
+                                Spacer(Modifier.width(6.dp))
                                 Box(
                                     modifier = Modifier.weight(1f),
                                     contentAlignment = Alignment.CenterStart,
@@ -330,7 +330,7 @@ fun SearchScreen(
                                 ).show()
                             }
                         },
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(40.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Mic,

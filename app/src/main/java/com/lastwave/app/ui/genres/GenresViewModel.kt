@@ -54,6 +54,7 @@ class GenresViewModel @Inject constructor(
     val uiState: StateFlow<GenresUiState> = _uiState.asStateFlow()
     private var detailJob: Job? = null
     private var statsJob: Job? = null
+    private var rawDetailTracks: List<GeneratedTrack> = emptyList()
 
     init {
         loadGenres()
@@ -72,6 +73,8 @@ class GenresViewModel @Inject constructor(
         _uiState.update { it.copy(period = period) }
         loadGenres()
     }
+
+    fun retry() = loadGenres()
 
     private fun loadGenres() {
         statsJob?.cancel()
@@ -106,18 +109,29 @@ class GenresViewModel @Inject constructor(
 
     fun closeDetail() {
         detailJob?.cancel()
+        rawDetailTracks = emptyList()
         _uiState.update { it.copy(detailGenre = null, detailTracks = emptyList(), isDiscoverMode = false, detailLoading = false) }
     }
 
     fun setDetailSort(sort: GenreDetailSort) {
         if (sort == _uiState.value.detailSort) return
-        _uiState.update { it.copy(detailSort = sort) }
-        if (sort == GenreDetailSort.AZ) {
-            _uiState.update { it.copy(detailTracks = it.detailTracks.sortedBy { t -> t.name.lowercase() }) }
+        _uiState.update {
+            it.copy(
+                detailSort = sort,
+                detailTracks = applyDetailSort(rawDetailTracks, sort),
+            )
         }
     }
 
+    private fun applyDetailSort(tracks: List<GeneratedTrack>, sort: GenreDetailSort): List<GeneratedTrack> =
+        when (sort) {
+            GenreDetailSort.POPULAR -> tracks.sortedByDescending { it.playcount }
+            GenreDetailSort.NEWEST -> tracks
+            GenreDetailSort.AZ -> tracks.sortedBy { it.name.lowercase() }
+        }
+
     fun showYourTracks() {
+        rawDetailTracks = emptyList()
         _uiState.update {
             it.copy(
                 isDiscoverMode = false,
@@ -143,8 +157,9 @@ class GenresViewModel @Inject constructor(
                 // Repository fallbacks may swallow cancellation; a replaced sheet must never receive this result.
                 coroutineContext.ensureActive()
                 _uiState.update { s ->
-                    val merged = if (reset) fetched else s.detailTracks + fetched
-                    val ordered = if (s.detailSort == GenreDetailSort.AZ) merged.sortedBy { it.name.lowercase() } else merged
+                    val merged = if (reset) fetched else rawDetailTracks + fetched
+                    rawDetailTracks = merged
+                    val ordered = applyDetailSort(merged, s.detailSort)
                     s.copy(detailTracks = ordered, detailLoading = false, detailPage = page + 1, detailHasMore = fetched.isNotEmpty())
                 }
             } catch (e: Exception) {
@@ -202,8 +217,10 @@ class GenresViewModel @Inject constructor(
                 val fresh = genresRepository.discoverMore(genre)
                 coroutineContext.ensureActive()
                 _uiState.update { s ->
+                    val nextTracks = fresh.ifEmpty { s.detailTracks }
+                    rawDetailTracks = nextTracks
                     s.copy(
-                        detailTracks = fresh.ifEmpty { s.detailTracks },
+                        detailTracks = applyDetailSort(nextTracks, s.detailSort),
                         detailLoading = false,
                         detailHasMore = false,
                     )

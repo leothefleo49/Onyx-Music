@@ -501,7 +501,10 @@ internal fun EqualizerSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Box(
                         modifier = Modifier
                             .size(44.dp)
@@ -516,18 +519,21 @@ internal fun EqualizerSheet(
                             modifier = Modifier.size(24.dp),
                         )
                     }
-                    Spacer(Modifier.width(14.dp))
-                    Column {
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             "Equalizer",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             "15-band hardware acoustic tuning",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -535,7 +541,10 @@ internal fun EqualizerSheet(
                 TextButton(
                     onClick = {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.ContextClick)
-                        onPickPreset(EqualizerPresets.FLAT.name)
+                        val flat = FloatArray(EQ_BAND_FREQS_HZ.size) { 0f }
+                        gains = flat
+                        draftName = EqualizerPresets.FLAT.name
+                        onPreviewAll(flat)
                     },
                     enabled = eq.enabled,
                 ) {
@@ -714,7 +723,7 @@ internal fun EqualizerSheet(
                     },
                 )
             }
-            if (eq.isUserPreset(eq.presetName)) {
+            if (eq.isUserPreset(draftName)) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Text(
                         "Changes are a preview until you tap Save",
@@ -722,8 +731,8 @@ internal fun EqualizerSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
-                    androidx.compose.material3.TextButton(onClick = { nameDialogFor = eq.presetName }) { Text("Rename") }
-                    androidx.compose.material3.TextButton(onClick = { deleteConfirmFor = eq.presetName }) {
+                    androidx.compose.material3.TextButton(onClick = { nameDialogFor = draftName }) { Text("Rename") }
+                    androidx.compose.material3.TextButton(onClick = { deleteConfirmFor = draftName }) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
                     }
                 }
